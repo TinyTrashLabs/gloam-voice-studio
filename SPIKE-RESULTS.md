@@ -19,10 +19,12 @@ RTF convention throughout: audio_seconds / wall_seconds (realtime multiple — H
 
 | Backend | Swift load | Swift RTF | Python RTF | Swift/Python speed |
 |---|---|---|---|---|
-| chatterbox-turbo | 0.3s | 2.36x | 2.23x | 1.06× (Swift faster) |
-| fish-s2-pro | 2.1s | 0.20x | 0.25x | 0.79× |
+| chatterbox-turbo | 0.6s | 2.51x | 2.23x | 1.13× (Swift faster) |
+| fish-s2-pro | 2.2s | 0.19x | 0.25x | 0.76× |
 
-Python timings are server-side wall times from `say` (chatterbox-turbo L2: 6.70s audio / 3.01s wall; fish L2: 6.27s audio / 24.74s wall). Swift numbers from the spike binary's second (warm) run.
+Python timings are server-side wall times from `say` (chatterbox-turbo L2: 6.70s audio / 3.01s wall; fish L2: 6.27s audio / 24.74s wall). Swift numbers are clean-memory re-runs (see caveat).
+
+**Measurement caveat:** all original runs (Swift and Python) happened while an unrelated pre-existing gloam server held the ~13 GB Fish model resident, putting the 32 GB machine under memory pressure. After killing it, clean re-runs moved chatterbox-turbo from 2.36x → 2.51x and left fish essentially unchanged (0.20x → 0.19x) — Fish is compute-bound, not memory-starved. The Python baseline was not re-run; both implementations were originally measured under the same pressure, so the comparison direction holds.
 
 ## Failures / anomalies
 
