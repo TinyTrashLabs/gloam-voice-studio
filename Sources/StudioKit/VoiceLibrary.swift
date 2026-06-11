@@ -1,4 +1,5 @@
 import Foundation
+import EngineKit
 
 /// On-disk shape and key names are identical to the Python engine's
 /// voices.py meta.json so .gvoice packs interchange cleanly.
@@ -80,6 +81,55 @@ public struct VoiceLibrary: Sendable {
             throw StudioError.voiceNotFound(slug: slug)
         }
         try FileManager.default.removeItem(at: voiceDir)
+    }
+
+    /// Emotion suffixes tried in order when resolving a "<slug>-<emotion>"
+    /// variant. Cloned reference audio dominates prosody, so an acted clip
+    /// per emotion is what actually moves delivery; hype and excited are
+    /// near-aliases of each other. Parity with voices._EMOTION_ALIASES.
+    private static let emotionAliases: [Emotion: [String]] = [
+        .hype: ["hype", "excited"],
+        .excited: ["excited", "hype"],
+    ]
+
+    /// get(), preferring a "<slug>-<emotion>" variant when one exists.
+    /// neutral (and nil) always resolve to the base voice; a missing variant
+    /// falls back to base. Throws only if the BASE slug is unknown.
+    public func resolve(_ slug: String, emotion: Emotion?) throws
+        -> (meta: VoiceMeta, refURL: URL)
+    {
+        if let emotion, emotion != .neutral {
+            for suffix in Self.emotionAliases[emotion] ?? [emotion.rawValue] {
+                if let found = try? get("\(slug)-\(suffix)") { return found }
+            }
+        }
+        return try get(slug)
+    }
+
+    /// Edit a stored voice in place. Renaming re-slugs (the directory moves).
+    public func update(_ slug: String, name: String? = nil,
+                       refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
+        var (meta, _) = try get(slug)
+        var voiceDir = directory.appendingPathComponent(slug)
+        if let name, name != meta.name {
+            let newSlug = try Slug.slugify(name)
+            if newSlug != slug {
+                let target = directory.appendingPathComponent(newSlug)
+                guard !FileManager.default.fileExists(atPath: target.path) else {
+                    throw StudioError.voiceExists(slug: newSlug)
+                }
+                try FileManager.default.moveItem(at: voiceDir, to: target)
+                voiceDir = target
+            }
+            meta.name = name
+            meta.slug = newSlug
+        }
+        if let refText { meta.refText = refText }
+        if let refWav, !refWav.isEmpty {
+            try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
+        }
+        try write(meta, to: voiceDir)
+        return meta
     }
 
     func write(_ meta: VoiceMeta, to voiceDir: URL) throws {

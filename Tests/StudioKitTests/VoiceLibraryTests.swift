@@ -1,4 +1,5 @@
 import XCTest
+import EngineKit
 @testable import StudioKit
 
 final class VoiceLibraryTests: XCTestCase {
@@ -69,6 +70,77 @@ final class VoiceLibraryTests: XCTestCase {
 
     func testDeleteUnknownThrows() {
         XCTAssertThrowsError(try lib.delete("nope")) {
+            XCTAssertEqual($0 as? StudioError, .voiceNotFound(slug: "nope"))
+        }
+    }
+
+    // MARK: variant resolution
+
+    func testResolveNeutralAndNilReturnBase() throws {
+        _ = try lib.save(name: "cruz", refWav: Data([1]), refText: "")
+        _ = try lib.save(name: "cruz-hype", refWav: Data([2]), refText: "")
+        XCTAssertEqual(try lib.resolve("cruz", emotion: nil).meta.slug, "cruz")
+        XCTAssertEqual(try lib.resolve("cruz", emotion: .neutral).meta.slug, "cruz")
+    }
+
+    func testResolvePrefersEmotionVariant() throws {
+        _ = try lib.save(name: "cruz", refWav: Data([1]), refText: "")
+        _ = try lib.save(name: "cruz-hype", refWav: Data([2]), refText: "")
+        XCTAssertEqual(try lib.resolve("cruz", emotion: .hype).meta.slug, "cruz-hype")
+    }
+
+    func testResolveAliasesHypeAndExcited() throws {
+        _ = try lib.save(name: "cruz", refWav: Data([1]), refText: "")
+        _ = try lib.save(name: "cruz-hype", refWav: Data([2]), refText: "")
+        // no cruz-excited: excited falls through its alias chain to cruz-hype
+        XCTAssertEqual(try lib.resolve("cruz", emotion: .excited).meta.slug, "cruz-hype")
+    }
+
+    func testResolveUnknownVariantFallsBackToBase() throws {
+        _ = try lib.save(name: "cruz", refWav: Data([1]), refText: "")
+        XCTAssertEqual(try lib.resolve("cruz", emotion: .warm).meta.slug, "cruz")
+    }
+
+    func testResolveUnknownBaseThrows() {
+        XCTAssertThrowsError(try lib.resolve("nope", emotion: .hype)) {
+            XCTAssertEqual($0 as? StudioError, .voiceNotFound(slug: "nope"))
+        }
+    }
+
+    // MARK: update
+
+    func testUpdateRefTextOnly() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "old")
+        let meta = try lib.update("cruz", refText: "new")
+        XCTAssertEqual(meta.refText, "new")
+        XCTAssertEqual(try lib.get("cruz").meta.refText, "new")
+    }
+
+    func testUpdateRefWavReplacesFile() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        _ = try lib.update("cruz", refWav: Data([9, 9]))
+        XCTAssertEqual(try Data(contentsOf: try lib.get("cruz").refURL), Data([9, 9]))
+    }
+
+    func testUpdateRenameReslugsAndMovesDirectory() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([5]), refText: "t")
+        let meta = try lib.update("cruz", name: "Night Cruz")
+        XCTAssertEqual(meta.slug, "night-cruz")
+        XCTAssertEqual(meta.name, "Night Cruz")
+        XCTAssertEqual(try Data(contentsOf: try lib.get("night-cruz").refURL), Data([5]))
+        XCTAssertThrowsError(try lib.get("cruz"))
+    }
+
+    func testUpdateRenameCollisionThrows() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        _ = try lib.save(name: "Vega", refWav: Data([1]), refText: "")
+        XCTAssertThrowsError(try lib.update("cruz", name: "Vega")) {
+            XCTAssertEqual($0 as? StudioError, .voiceExists(slug: "vega"))
+        }
+    }
+
+    func testUpdateUnknownSlugThrows() {
+        XCTAssertThrowsError(try lib.update("nope", refText: "x")) {
             XCTAssertEqual($0 as? StudioError, .voiceNotFound(slug: "nope"))
         }
     }
