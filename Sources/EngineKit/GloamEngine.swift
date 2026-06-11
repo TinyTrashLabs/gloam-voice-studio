@@ -7,6 +7,10 @@ public actor GloamEngine {
     private let provider: ModelProviding
     private var resident: (backend: BackendID, model: any SpeechModel)?
     private var ackedLicenses: Set<BackendID> = []
+    /// Serializes all model work (loads + generations). Actors are reentrant at
+    /// await points, so without this two synthesize calls could interleave and
+    /// run concurrent GPU work.
+    private var tail: Task<Void, Never>?
 
     public init(provider: ModelProviding) {
         self.provider = provider
@@ -20,6 +24,8 @@ public actor GloamEngine {
         resident?.backend
     }
 
+    /// Evicts the resident model and releases accelerator memory.
+    /// Takes effect immediately; callers must not unload while a generation is in flight.
     public func unload() {
         guard resident != nil else { return }
         resident = nil
@@ -29,20 +35,27 @@ public actor GloamEngine {
     public func synthesize(backend: BackendID, request: SynthesisRequest)
         async throws -> SynthesisResult
     {
+        // Fast-fail synchronous checks before entering the task chain.
         if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
             throw EngineError.licenseAckRequired(backend)
         }
         let plan = try RequestPlanner.plan(backend: backend, request: request)
 
-        let model = try await residentModel(for: backend)
-        let start = Date()
-        let raw = try await model.synthesize(plan)
-        let wall = Date().timeIntervalSince(start)
-
-        return SynthesisResult(
-            samples: SpeedAdjust.apply(raw, speed: request.speed),
-            sampleRate: model.sampleRate,
-            wallSeconds: wall)
+        // Chain model work so concurrent calls never overlap at await points.
+        let previous = tail
+        let work = Task<SynthesisResult, Error> { [self] in
+            await previous?.value
+            let model = try await self.residentModel(for: backend)
+            let start = Date()
+            let raw = try await model.synthesize(plan)
+            let wall = Date().timeIntervalSince(start)
+            return SynthesisResult(
+                samples: SpeedAdjust.apply(raw, speed: request.speed),
+                sampleRate: model.sampleRate,
+                wallSeconds: wall)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
     }
 
     private func residentModel(for backend: BackendID) async throws -> any SpeechModel {

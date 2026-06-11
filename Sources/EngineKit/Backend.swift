@@ -19,6 +19,10 @@ public struct BackendSpec: Sendable, Equatable {
     public let needsLicenseAck: Bool
     /// chatterbox family: a reference clip is always required. fish: stock voice OK.
     public let needsRefAudio: Bool
+    /// Whether the backend honors an emotion-exaggeration knob. chatterbox → true,
+    /// chatterboxTurbo → false (turbo ignores exaggeration upstream), fishS2Pro → true
+    /// (emotion is expressed via temperature).
+    public let honorsEmotionKnob: Bool
 }
 
 extension BackendID {
@@ -27,15 +31,18 @@ extension BackendID {
         case .chatterbox:
             BackendSpec(modelRepo: "mlx-community/Chatterbox-TTS-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true)
+                        needsLicenseAck: false, needsRefAudio: true,
+                        honorsEmotionKnob: true)
         case .chatterboxTurbo:
             BackendSpec(modelRepo: "mlx-community/chatterbox-turbo-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true)
+                        needsLicenseAck: false, needsRefAudio: true,
+                        honorsEmotionKnob: false)
         case .fishS2Pro:
             BackendSpec(modelRepo: "mlx-community/fish-audio-s2-pro-bf16",
                         defaultSampleRate: 44100, honorsTags: true,
-                        needsLicenseAck: true, needsRefAudio: false)
+                        needsLicenseAck: true, needsRefAudio: false,
+                        honorsEmotionKnob: true)
         }
     }
 }

@@ -60,4 +60,20 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertEqual(plan.refText, "transcript")
         XCTAssertEqual(plan.refAudioPath, "/tmp/r.wav")
     }
+
+    func testZeroSpeedThrowsInvalidSpeed() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .fishS2Pro,
+            request: SynthesisRequest(text: "hi", speed: 0))) { error in
+            XCTAssertEqual(error as? EngineError, .invalidSpeed(0))
+        }
+    }
+
+    func testNegativeSpeedThrowsInvalidSpeed() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .fishS2Pro,
+            request: SynthesisRequest(text: "hi", speed: -1))) { error in
+            XCTAssertEqual(error as? EngineError, .invalidSpeed(-1))
+        }
+    }
 }

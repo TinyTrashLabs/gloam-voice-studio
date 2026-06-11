@@ -22,7 +22,7 @@ final class FakeModel: SpeechModel, @unchecked Sendable {
 final class FakeProvider: ModelProviding, @unchecked Sendable {
     var loads: [BackendID] = []
     var evictions = 0
-    var models: [BackendID: FakeModel] = [:]
+    var models: [BackendID: any SpeechModel] = [:]
 
     func loadModel(backend: BackendID) async throws -> any SpeechModel {
         loads.append(backend)
@@ -32,6 +32,24 @@ final class FakeProvider: ModelProviding, @unchecked Sendable {
     }
 
     func didEvictModel() { evictions += 1 }
+}
+
+/// Detects concurrent entries into synthesize using a lock.
+final class OverlapDetectingModel: SpeechModel, @unchecked Sendable {
+    let sampleRate: Int = 24000
+    private let lock = NSLock()
+    private var current = 0
+    private(set) var maxConcurrent = 0
+
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        lock.withLock {
+            current += 1
+            maxConcurrent = max(maxConcurrent, current)
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        lock.withLock { current -= 1 }
+        return [0.1, 0.2, 0.3]
+    }
 }
 
 final class GloamEngineTests: XCTestCase {
@@ -116,7 +134,7 @@ final class GloamEngineTests: XCTestCase {
         XCTAssertEqual(result.samples.count, 500)
     }
 
-    func testGenerationFailureWrapped() async {
+    func testGenerationFailureWrapped() async throws {
         let provider = FakeProvider()
         let failing = FakeModel()
         failing.errorToThrow = EngineError.generationFailed(backend: .chatterboxTurbo, message: "boom")
@@ -134,10 +152,10 @@ final class GloamEngineTests: XCTestCase {
         }
         // A failed generation must not wedge the engine: same backend still usable.
         failing.errorToThrow = nil
-        let result = try? await engine.synthesize(
+        let result = try await engine.synthesize(
             backend: .chatterboxTurbo,
             request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav"))
-        XCTAssertNotNil(result)
+        XCTAssertFalse(result.samples.isEmpty)
     }
 
     func testResultCarriesModelSampleRate() async throws {
@@ -148,5 +166,34 @@ final class GloamEngineTests: XCTestCase {
         let result = try await engine.synthesize(
             backend: .fishS2Pro, request: SynthesisRequest(text: "hi"))
         XCTAssertEqual(result.sampleRate, 44100)
+    }
+
+    func testConcurrentSynthesizeForSameBackendLoadsOnce() async throws {
+        let provider = FakeProvider()
+        let overlapModel = OverlapDetectingModel()
+        provider.models[.chatterboxTurbo] = overlapModel
+        let engine = GloamEngine(provider: provider)
+        let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav")
+        async let r1 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r2 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r3 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r4 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        _ = try await (r1, r2, r3, r4)
+        // Model was pre-installed; provider should have loaded it at most once.
+        XCTAssertLessThanOrEqual(provider.loads.filter { $0 == .chatterboxTurbo }.count, 1)
+    }
+
+    func testGenerationIsSerialized() async throws {
+        let provider = FakeProvider()
+        let overlapModel = OverlapDetectingModel()
+        provider.models[.chatterboxTurbo] = overlapModel
+        let engine = GloamEngine(provider: provider)
+        let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav")
+        async let r1 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r2 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r3 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        async let r4 = engine.synthesize(backend: .chatterboxTurbo, request: req)
+        _ = try await (r1, r2, r3, r4)
+        XCTAssertEqual(overlapModel.maxConcurrent, 1)
     }
 }

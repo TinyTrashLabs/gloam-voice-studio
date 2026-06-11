@@ -43,11 +43,13 @@ public enum EngineError: Error, Equatable, Sendable {
     case licenseAckRequired(BackendID)
     case refAudioRequired(BackendID)
     case generationFailed(backend: BackendID, message: String)
+    case invalidSpeed(Float)
 }
 
 /// Pure translation from user request to provider request, with validation.
 enum RequestPlanner {
     static func plan(backend: BackendID, request: SynthesisRequest) throws -> ProviderRequest {
+        guard request.speed > 0 else { throw EngineError.invalidSpeed(request.speed) }
         let spec = backend.spec
         if spec.needsRefAudio && request.refAudioPath == nil {
             throw EngineError.refAudioRequired(backend)

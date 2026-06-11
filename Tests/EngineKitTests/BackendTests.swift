@@ -16,6 +16,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
+        XCTAssertTrue(spec.honorsEmotionKnob)
     }
 
     func testChatterboxTurboSpec() {
@@ -25,6 +26,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
+        XCTAssertFalse(spec.honorsEmotionKnob)
     }
 
     func testFishSpec() {
@@ -34,6 +36,7 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(spec.honorsTags)
         XCTAssertTrue(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio)
+        XCTAssertTrue(spec.honorsEmotionKnob)
     }
 
     func testFishRefAudioSampleRateIsCodecRate() {
