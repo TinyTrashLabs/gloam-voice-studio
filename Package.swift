@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
+        .library(name: "StudioKit", targets: ["StudioKit"]),
     ],
     dependencies: [
         // Pinned to the revision validated by the Phase 0 spike (SPIKE-RESULTS.md).
@@ -14,6 +15,8 @@ let package = Package(
             revision: "10b7366204fd3991458de690f3d49651251055f5"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", .upToNextMajor(from: "2.5.0")),
     ],
     targets: [
         .target(
@@ -35,6 +38,23 @@ let package = Package(
             name: "spike",
             dependencies: ["EngineKit"],
             path: "Sources/spike"
+        ),
+        .target(
+            name: "StudioKit",
+            dependencies: [
+                "EngineKit",
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+                .product(name: "Hummingbird", package: "hummingbird"),
+            ],
+            path: "Sources/StudioKit"
+        ),
+        .testTarget(
+            name: "StudioKitTests",
+            dependencies: [
+                "StudioKit",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ],
+            path: "Tests/StudioKitTests"
         ),
     ]
 )
