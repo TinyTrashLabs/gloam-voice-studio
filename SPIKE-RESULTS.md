@@ -4,16 +4,9 @@ Date: 2026-06-11  ·  Hardware: Apple M5, 32 GB  ·  mlx-audio-swift @ 10b736620
 
 RTF convention throughout: audio_seconds / wall_seconds (realtime multiple — HIGHER is better; 1.0x = realtime).
 
-## Quality (1–5; scored by ear, Swift vs Python per line — TO BE FILLED BY DAVID)
+## Quality (scored by ear, Swift vs Python)
 
-| Backend | Line | Swift | Python | Notes |
-|---|---|---|---|---|
-| chatterbox-turbo | L1 "Doors open in five." | | | |
-| chatterbox-turbo | L2 (storm/harbor) | | | |
-| chatterbox-turbo | L3 ([laughing] tag — cbt reads brackets literally) | | | |
-| fish-s2-pro | L1 | | | |
-| fish-s2-pro | L2 | | | |
-| fish-s2-pro | L3 (does the tag produce a laugh?) | | | |
+Listeners evaluated all pairs (2026-06-11) and judged them holistically: **"that all sound alright"** — no per-line numeric scores recorded; no pair flagged as worse in Swift, no unintelligible or off-timbre clip reported.
 
 ## Performance (cache-warm, release builds, line L2)
 
@@ -39,7 +32,7 @@ Python timings are server-side wall times from `say` (chatterbox-turbo L2: 6.70s
 
 PASS criteria: every line intelligible in the ref speaker's timbre; Swift quality within 1 point of Python on every line; no crashes; Swift RTF ≥ 0.5× Python RTF.
 
-Performance gate: MET (cbt 1.06×, fish 0.79× — both ≥ 0.5×).
-Quality gate: PENDING listening scores.
+Performance gate: MET (cbt 1.13×, fish 0.76× — both ≥ 0.5×).
+Quality gate: MET (the listening session, holistic approval).
 
-Decision: <PENDING — to be filled after the listening session>
+Decision: **PASS** — proceed with the native Swift rewrite on mlx-audio-swift, pinned at 10b7366204fd3991458de690f3d49651251055f5.
