@@ -6,10 +6,20 @@ import MLXAudioTTS
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
 public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
-    public init() {}
+    /// Maps a backend to a local model directory (a path whose config.json
+    /// exists), or nil to fall back to the HuggingFace repo id (which makes
+    /// mlx-audio-swift download to its own cache). The app injects a resolver
+    /// pointing at its managed Caches/Models directory so downloads always go
+    /// through the in-app download manager.
+    private let modelPathResolver: (@Sendable (BackendID) -> String?)?
+
+    public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
+        self.modelPathResolver = modelPathResolver
+    }
 
     public func loadModel(backend: BackendID) async throws -> any SpeechModel {
-        let model = try await TTS.loadModel(modelRepo: backend.spec.modelRepo)
+        let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
+        let model = try await TTS.loadModel(modelRepo: source)
         return MLXSpeechModel(model: model, backend: backend)
     }
 
