@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 import Speech
 
@@ -23,6 +24,10 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
 
     public func transcribe(audioURL: URL, languageHint: String?) async throws -> Transcript {
         let locale = languageHint.map(Locale.init(identifier:)) ?? self.locale
+        if #available(macOS 26.0, *) {
+            do { return try await analyzerTranscribe(audioURL: audioURL, locale: locale) }
+            catch { /* fall through to SFSpeechRecognizer below */ }
+        }
         let recognizer = try makeRecognizer(locale: locale)
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
         request.requiresOnDeviceRecognition = true
@@ -108,6 +113,41 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
                 holder.task = nil
             }
         }
+    }
+
+    @available(macOS 26.0, *)
+    private func analyzerTranscribe(audioURL: URL, locale: Locale) async throws -> Transcript {
+        let transcriber = SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [],
+            attributeOptions: [])
+        // Ensure on-device assets for this locale are installed.
+        if let request = try await AssetInventory.assetInstallationRequest(
+            supporting: [transcriber]) {
+            try await request.downloadAndInstall()
+        }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let file = try AVAudioFile(forReading: audioURL)
+        // Collect final transcript segments concurrently while driving the analyzer.
+        async let collected: String = {
+            var text = ""
+            for try await result in transcriber.results {
+                if result.isFinal { text += String(result.text.characters) }
+            }
+            return text
+        }()
+        if let lastSample = try await analyzer.analyzeSequence(from: file) {
+            try await analyzer.finalizeAndFinish(through: lastSample)
+        } else {
+            await analyzer.cancelAndFinishNow()
+        }
+        let text = try await collected
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw SpeechError.transcriptionFailed("SpeechAnalyzer produced no text")
+        }
+        return Transcript(text: trimmed, language: locale.identifier)
     }
 
     private func makeRecognizer(locale: Locale) throws -> SFSpeechRecognizer {
