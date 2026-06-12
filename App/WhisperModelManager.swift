@@ -50,10 +50,20 @@ final class WhisperModelManager {
                     downloadBase: self.root,
                     from: WhisperModelCatalog.repo,
                     progressCallback: { [weak self] progress in
-                        Task { @MainActor in
-                            self?.states[variant] = .downloading(progress.fractionCompleted)
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  case .downloading = self.states[variant] else { return }
+                            self.states[variant] = .downloading(progress.fractionCompleted)
                         }
                     })
+                // WhisperKit returns early (partial folder) on cancel
+                // rather than throwing — never mark that .ready.
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: folder)
+                    self.states[variant] = .notDownloaded
+                    self.downloadTasks[variant] = nil
+                    return
+                }
                 let want = self.directory(for: variant)
                 if folder.standardizedFileURL != want.standardizedFileURL {
                     try? FileManager.default.createDirectory(
@@ -62,6 +72,9 @@ final class WhisperModelManager {
                     try? FileManager.default.removeItem(at: want)
                     try FileManager.default.moveItem(at: folder, to: want)
                 }
+                // Drop the HF cache tree WhisperKit leaves under root.
+                try? FileManager.default.removeItem(
+                    at: self.root.appendingPathComponent("models"))
                 self.states[variant] = .ready
             } catch is CancellationError {
                 self.states[variant] = .notDownloaded
@@ -79,6 +92,7 @@ final class WhisperModelManager {
     func delete(_ variant: String) {
         downloadTasks[variant]?.cancel()
         try? FileManager.default.removeItem(at: directory(for: variant))
+        try? FileManager.default.removeItem(at: root.appendingPathComponent("models"))
         states[variant] = .notDownloaded
     }
 }
