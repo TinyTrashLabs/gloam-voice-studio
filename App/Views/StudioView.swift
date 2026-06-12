@@ -4,72 +4,43 @@ import SwiftUI
 import UniformTypeIdentifiers
 import StudioKit
 
+enum StudioMode: String, CaseIterable {
+    case single = "Single Line"
+    case script = "Script"
+}
+
 struct StudioView: View {
     @Environment(AppModel.self) private var model
     @State private var player: AVAudioPlayer?
     @State private var playingVariant: UUID?
     @State private var exportDoc: DataDocument?
     @State private var historyPresented = false
+    @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
+
+    private var mode: StudioMode {
+        StudioMode(rawValue: modeRaw) ?? .single
+    }
 
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
             BrandLockup()
                 .padding(.bottom, 4)
-            TextEditor(text: $model.text)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 110)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-                .accessibilityIdentifier("line-editor")
-            if model.backend.spec.honorsTags {
-                Text("Inline tags like [laughing] and [pause] are supported by this backend.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 16) {
-                Picker("Emotion", selection: $model.emotion) {
-                    ForEach(AppModel.emotionOrder, id: \.self) {
-                        Text($0.rawValue.capitalized).tag($0)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
-                HStack(spacing: 6) {
-                    Text("Speed")
-                    Slider(value: $model.speed, in: 0.5...2.0, step: 0.05)
-                        .frame(width: 140)
-                    Text(String(format: "%.2f×", model.speed))
-                        .font(.system(.caption, design: .monospaced))
-                }
-                Spacer()
-            }
-
-            HStack(spacing: 10) {
-                Button("Generate") { Task { await model.generate(takes: 1) } }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(model.isGenerating)
-                    .accessibilityIdentifier("generate")
-                Button("Generate A/B") { Task { await model.generate(takes: 2) } }
-                    .disabled(model.isGenerating)
-                if model.isGenerating { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("History") { historyPresented = true }
-                    .accessibilityIdentifier("open-history")
-            }
-
-            if let error = model.generationError {
-                Text(error).foregroundStyle(.red).font(.callout)
-                    .accessibilityIdentifier("generation-error")
-            }
-
-            ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(model.variants) { variant in
-                        variantCard(variant)
-                    }
+            Picker("Mode", selection: Binding(
+                get: { StudioMode(rawValue: modeRaw) ?? .single },
+                set: { modeRaw = $0.rawValue })) {
+                ForEach(StudioMode.allCases, id: \.self) {
+                    Text($0.rawValue).tag($0)
                 }
             }
-            Spacer(minLength: 0)
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("studio-mode")
+
+            if mode == .script {
+                ScriptView()
+            } else {
+                singleModeStack
+            }
         }
         .padding(16)
         .sheet(isPresented: $historyPresented) { HistoryView() }
@@ -77,6 +48,65 @@ struct StudioView: View {
                                          set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .wav,
                       defaultFilename: "gloam-take") { _ in exportDoc = nil }
+    }
+
+    @ViewBuilder
+    private var singleModeStack: some View {
+        @Bindable var model = model
+        TextEditor(text: $model.text)
+            .font(.system(.body, design: .monospaced))
+            .frame(minHeight: 110)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+            .accessibilityIdentifier("line-editor")
+        if model.backend.spec.honorsTags {
+            Text("Inline tags like [laughing] and [pause] are supported by this backend.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        HStack(spacing: 16) {
+            Picker("Emotion", selection: $model.emotion) {
+                ForEach(AppModel.emotionOrder, id: \.self) {
+                    Text($0.rawValue.capitalized).tag($0)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 360)
+            HStack(spacing: 6) {
+                Text("Speed")
+                Slider(value: $model.speed, in: 0.5...2.0, step: 0.05)
+                    .frame(width: 140)
+                Text(String(format: "%.2f×", model.speed))
+                    .font(.system(.caption, design: .monospaced))
+            }
+            Spacer()
+        }
+
+        HStack(spacing: 10) {
+            Button("Generate") { Task { await model.generate(takes: 1) } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model.isGenerating)
+                .accessibilityIdentifier("generate")
+            Button("Generate A/B") { Task { await model.generate(takes: 2) } }
+                .disabled(model.isGenerating)
+            if model.isGenerating { ProgressView().controlSize(.small) }
+            Spacer()
+            Button("History") { historyPresented = true }
+                .accessibilityIdentifier("open-history")
+        }
+
+        if let error = model.generationError {
+            Text(error).foregroundStyle(.red).font(.callout)
+                .accessibilityIdentifier("generation-error")
+        }
+
+        ScrollView {
+            VStack(spacing: 10) {
+                ForEach(model.variants) { variant in
+                    variantCard(variant)
+                }
+            }
+        }
+        Spacer(minLength: 0)
     }
 
     @ViewBuilder
