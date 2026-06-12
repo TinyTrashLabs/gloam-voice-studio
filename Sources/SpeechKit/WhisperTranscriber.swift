@@ -13,6 +13,8 @@ public actor WhisperTranscriber: Transcriber {
         self.modelFolder = modelFolder
     }
 
+    /// Actor-reentrant: two first-callers may race to a double init; the
+    /// second assignment wins and both get a valid kit — accepted for v1.
     private func loadedKit() async throws -> WhisperKit {
         if let whisper { return whisper }
         do {
@@ -34,13 +36,19 @@ public actor WhisperTranscriber: Transcriber {
     public func transcribe(audioURL: URL, languageHint: String?) async throws -> Transcript {
         let kit = try await loadedKit()
         let options = DecodingOptions(language: languageHint)
-        // WhisperKit 1.0.0: transcribe(audioPaths: [String]) is non-throwing; returns [[TranscriptionResult]?]
-        let allResults = await kit.transcribe(
+        // WhisperKit 1.0.0: transcribeWithResults returns [Result<[TranscriptionResult], Error>],
+        // one element per input path — failures propagate as thrown SpeechError.
+        let results = await kit.transcribeWithResults(
             audioPaths: [audioURL.path],
             decodeOptions: options
         )
-        // allResults has one element per input path; flatten the inner array.
-        let text = (allResults.first??.map(\.text) ?? [])
+        guard let first = results.first else {
+            throw SpeechError.transcriptionFailed("Whisper returned no result")
+        }
+        let segments: [TranscriptionResult]
+        do { segments = try first.get() }
+        catch { throw SpeechError.transcriptionFailed(error.localizedDescription) }
+        let text = segments.map(\.text)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return Transcript(text: text, language: languageHint)

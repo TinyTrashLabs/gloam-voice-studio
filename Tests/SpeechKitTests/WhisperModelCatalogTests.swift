@@ -13,6 +13,21 @@ final class WhisperModelCatalogTests: XCTestCase {
         }
     }
 
+    func testWhisperTranscriberMissingModelThrows() async {
+        let transcriber = WhisperTranscriber(modelFolder: URL(
+            fileURLWithPath: "/nonexistent/model/folder"))
+        do {
+            _ = try await transcriber.transcribe(wavData: Data([1, 2, 3]))
+            XCTFail("expected throw")
+        } catch let error as SpeechError {
+            if case .engineUnavailable = error { } else if case .transcriptionFailed = error { } else {
+                XCTFail("unexpected SpeechError: \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
     func testWAVFileWritesValidHeader() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wavfile-test.wav")

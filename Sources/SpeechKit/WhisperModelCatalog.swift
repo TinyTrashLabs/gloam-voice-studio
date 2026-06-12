@@ -19,6 +19,6 @@ public struct WhisperModelCatalog: Sendable {
               approxBytes: 500_000_000),
         Model(variant: "openai_whisper-large-v3-v20240930_turbo",
               displayName: "Whisper Large v3 Turbo — best accuracy",
-              approxBytes: 1_600_000_000),
+              approxBytes: 650_000_000),
     ]
 }
