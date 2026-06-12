@@ -89,7 +89,7 @@ struct VoiceEditorSheet: View {
         else { return }   // never clobber text the user typed
         transcribing = true
         transcriptNote = nil
-        Task {
+        Task { @MainActor in
             defer { transcribing = false }
             guard await model.speech.ensureAuthorized() else {
                 transcriptNote = "Speech permission denied — type the transcript manually."

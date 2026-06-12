@@ -109,8 +109,9 @@ final class SmokeTests: XCTestCase {
             consentButton.click()
         }
 
+        XCTAssertTrue(app.buttons["new-voice"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["new-voice"].firstMatch.click()
-
+        XCTAssertTrue(app.buttons["use-sample-ref"].waitForExistence(timeout: 5))
         app.buttons["use-sample-ref"].click()
 
         let transcriptField = app.textViews["voice-ref-text"]
