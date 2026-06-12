@@ -81,7 +81,7 @@ struct StudioView: View {
             Spacer()
         }
 
-        DisclosureGroup("Direction (advanced)") {
+        DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Override emotion presets", isOn: $model.useDirectionOverrides)
                 if model.useDirectionOverrides {
@@ -110,6 +110,8 @@ struct StudioView: View {
                 }
             }
             .padding(.top, 6)
+        } label: {
+            Label("Direction (advanced)", systemImage: "slider.horizontal.3")
         }
         .font(.callout)
 
