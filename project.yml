@@ -1,0 +1,51 @@
+name: GloamVoiceStudio
+options:
+  bundleIdPrefix: fm.gloam
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  GloamVoiceStudioPackage:
+    path: .
+targets:
+  GloamVoiceStudio:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: GloamVoiceStudioPackage
+        product: EngineKit
+      - package: GloamVoiceStudioPackage
+        product: StudioKit
+    entitlements:
+      path: App/GloamVoiceStudio.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.security.device.audio-input: true
+        com.apple.security.files.user-selected.read-write: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Gloam Voice Studio
+        LSApplicationCategoryType: public.app-category.music
+        NSMicrophoneUsageDescription: >-
+          Gloam records short reference clips so you can clone voices you have
+          the rights to use. Audio never leaves this Mac.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+    scheme:
+      testTargets: [GloamVoiceStudioUITests]
+  GloamVoiceStudioUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [UITests]
+    dependencies:
+      - target: GloamVoiceStudio

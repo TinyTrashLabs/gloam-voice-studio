@@ -2,3 +2,5 @@
 build/
 .DS_Store
 xcuserdata/
+GloamVoiceStudio.xcodeproj/
+build-app/
