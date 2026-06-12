@@ -26,7 +26,13 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
         let locale = languageHint.map(Locale.init(identifier:)) ?? self.locale
         if #available(macOS 26.0, *) {
             do { return try await analyzerTranscribe(audioURL: audioURL, locale: locale) }
-            catch { /* fall through to SFSpeechRecognizer below */ }
+            catch SpeechError.transcriptionFailed(let why) {
+                // The analyzer ran and found no speech — SFSpeech can't do
+                // better, and falling through would misreport silence as a
+                // permission problem.
+                throw SpeechError.transcriptionFailed(why)
+            }
+            catch { /* asset/API failure: fall through to SFSpeechRecognizer */ }
         }
         let recognizer = try makeRecognizer(locale: locale)
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
@@ -140,6 +146,9 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
         if let lastSample = try await analyzer.analyzeSequence(from: file) {
             try await analyzer.finalizeAndFinish(through: lastSample)
         } else {
+            // cancelAndFinishNow also terminates transcriber.results; if it
+            // ever didn't, the async-let child would only end via scope-exit
+            // cancellation.
             await analyzer.cancelAndFinishNow()
         }
         let text = try await collected
