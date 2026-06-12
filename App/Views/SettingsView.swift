@@ -50,18 +50,26 @@ struct BackendsSettings: View {
             case .notDownloaded:
                 if backend.spec.needsLicenseAck && !model.didAckFishLicense {
                     Button("Review License…") { fishSheetShown = true }
+                        .help("Review the research/personal-use license before downloading")
                 } else {
                     Button("Download") { model.downloads.download(backend) }
+                        .help("Download this model to your Mac")
                 }
             case .downloading(let fraction):
                 ProgressView(value: fraction).frame(width: 120)
+                Text(String(format: "%.0f%%", fraction * 100))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
                 Button("Cancel") { model.downloads.cancelDownload(backend) }
+                    .help("Cancel the download")
             case .ready:
                 Text("Ready").foregroundStyle(.green)
                 Button("Delete") { model.downloads.delete(backend) }
+                    .help("Delete this model from disk")
             case .failed(let message):
                 Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
                 Button("Retry") { model.downloads.download(backend) }
+                    .help("Retry the download")
             }
         }
     }
@@ -88,6 +96,7 @@ struct FishLicenseSheet: View {
                 Button("Cancel") { dismiss() }
                 Button("I Confirm — Personal Use") {
                     model.didAckFishLicense = true
+                    model.downloads.download(.fishS2Pro)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

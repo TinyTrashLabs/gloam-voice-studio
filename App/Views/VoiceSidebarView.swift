@@ -1,4 +1,3 @@
-import AVFAudio
 import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -16,8 +15,7 @@ struct VoiceSidebarView: View {
     @State private var exportName = ""
     @State private var actionError: String?
     @State private var migratePresented = false
-    @State private var refPlayer: AVAudioPlayer?
-    @State private var previewingSlug: String?
+    @State private var refPlayer = PreviewPlayer()
     @State private var variantBase: VoiceMeta?
 
     var body: some View {
@@ -34,18 +32,28 @@ struct VoiceSidebarView: View {
                     .tag(voice.slug)
                     .contextMenu {
                         Button("Edit…") { editingSlug = voice.slug; editorPresented = true }
+                            .help("Edit voice name and reference audio")
                         Button("Preview Reference") { previewRef(voice) }
+                            .help("Play the reference audio for this voice")
                         Button("New Emotion Variant…") {
                             variantBase = voice
                             editingSlug = nil
                             editorPresented = true
                         }
+                        .help("Create a variant of this voice for a specific emotion")
                         Button("Export…") { export(voice.slug) }
+                            .help("Export voice as a .gvoice pack")
                         Divider()
                         Button("Delete", role: .destructive) { delete(voice.slug) }
+                            .help("Permanently delete this voice")
                     }
                 }
             }
+        }
+        .fileImporter(isPresented: $importerPresented,
+                      allowedContentTypes: [.gvoice, .zip],
+                      allowsMultipleSelection: true) { result in
+            importPacks(result)
         }
         .accessibilityIdentifier("voice-list")
         .toolbar {
@@ -54,11 +62,13 @@ struct VoiceSidebarView: View {
                     Label("New Voice", systemImage: "plus")
                 }
                 .accessibilityIdentifier("new-voice")
+                .help("Create a new voice from a recording or audio file")
             }
             ToolbarItem {
                 Button { importerPresented = true } label: {
                     Label("Import", systemImage: "square.and.arrow.down")
                 }
+                .help("Import .gvoice voice packs")
             }
         }
         .sheet(isPresented: $editorPresented, onDismiss: { variantBase = nil }) {
@@ -67,18 +77,6 @@ struct VoiceSidebarView: View {
                                  prefilledName: "\(base.name)-hype")
             } else {
                 VoiceEditorSheet(editingSlug: editingSlug)
-            }
-        }
-        .fileImporter(isPresented: $importerPresented,
-                      allowedContentTypes: [.gvoice, .zip],
-                      allowsMultipleSelection: true) { result in
-            importPacks(result)
-        }
-        .fileImporter(isPresented: $migratePresented,
-                      allowedContentTypes: [.folder],
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                migrateFromFolder(url)
             }
         }
         .fileExporter(isPresented: .init(get: { exportDoc != nil },
@@ -92,6 +90,17 @@ struct VoiceSidebarView: View {
         .onReceive(NotificationCenter.default.publisher(for: .gloamMigrate)) { _ in
             migratePresented = true
         }
+        .background(
+            Color.clear
+                .frame(width: 0, height: 0)
+                .fileImporter(isPresented: $migratePresented,
+                              allowedContentTypes: [.folder],
+                              allowsMultipleSelection: false) { result in
+                    if case .success(let urls) = result, let url = urls.first {
+                        migrateFromFolder(url)
+                    }
+                }
+        )
     }
 
     private var voiceList: [VoiceMeta] {
@@ -128,16 +137,8 @@ struct VoiceSidebarView: View {
     }
 
     private func previewRef(_ voice: VoiceMeta) {
-        if previewingSlug == voice.slug {
-            refPlayer?.stop()
-            refPlayer = nil
-            previewingSlug = nil
-            return
-        }
         guard let (_, refURL) = try? model.voices.get(voice.slug) else { return }
-        refPlayer = try? AVAudioPlayer(contentsOf: refURL)
-        refPlayer?.play()
-        previewingSlug = voice.slug
+        refPlayer.toggle(id: voice.slug, url: refURL)
     }
 
     private func migrateFromFolder(_ folderURL: URL) {

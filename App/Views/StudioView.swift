@@ -1,4 +1,3 @@
-import AVFAudio
 import EngineKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -11,8 +10,7 @@ enum StudioMode: String, CaseIterable {
 
 struct StudioView: View {
     @Environment(AppModel.self) private var model
-    @State private var player: AVAudioPlayer?
-    @State private var playingVariant: UUID?
+    @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var historyPresented = false
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
@@ -35,6 +33,7 @@ struct StudioView: View {
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("studio-mode")
+            .help("Switch between single-line and script generation modes")
 
             if mode == .script {
                 ScriptView()
@@ -43,7 +42,10 @@ struct StudioView: View {
             }
         }
         .padding(16)
-        .sheet(isPresented: $historyPresented) { HistoryView() }
+        .inspector(isPresented: $historyPresented) {
+            HistoryView()
+                .inspectorColumnWidth(min: 300, ideal: 360)
+        }
         .fileExporter(isPresented: .init(get: { exportDoc != nil },
                                          set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .wav,
@@ -71,10 +73,12 @@ struct StudioView: View {
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 360)
+            .help("Pick the emotional read; uses an acted '-emotion' reference variant when one exists")
             HStack(spacing: 6) {
                 Text("Speed")
                 Slider(value: $model.speed, in: 0.5...2.0, step: 0.05)
                     .frame(width: 140)
+                    .help("Adjust speech rate (0.5x–2.0x)")
                 Text(String(format: "%.2f×", model.speed))
                     .font(.system(.caption, design: .monospaced))
             }
@@ -83,13 +87,17 @@ struct StudioView: View {
 
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Override emotion presets", isOn: $model.useDirectionOverrides)
+                Text("Replace the emotion presets with manual knobs: Temperature controls how adventurous Fish's delivery is; Exaggeration drives Chatterbox's intensity.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Use manual knobs", isOn: $model.useDirectionOverrides)
+                    .help("Enable manual temperature and exaggeration controls")
                 if model.useDirectionOverrides {
                     if model.backend.spec.honorsTags {
                         HStack {
                             Text("Temperature")
                             Slider(value: $model.temperatureOverride,
                                    in: 0.3...1.2).frame(width: 160)
+                                .help("How adventurous Fish's delivery is")
                             Text(String(format: "%.2f", model.temperatureOverride))
                                 .font(.system(.caption, design: .monospaced))
                         }
@@ -99,6 +107,7 @@ struct StudioView: View {
                             Text("Exaggeration")
                             Slider(value: $model.exaggerationOverride,
                                    in: 0...1).frame(width: 160)
+                                .help("Drive Chatterbox's intensity")
                             Text(String(format: "%.2f", model.exaggerationOverride))
                                 .font(.system(.caption, design: .monospaced))
                         }
@@ -109,9 +118,10 @@ struct StudioView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
         } label: {
-            Label("Direction (advanced)", systemImage: "slider.horizontal.3")
+            Label("Fine-tune delivery (advanced)", systemImage: "slider.horizontal.3")
         }
         .font(.callout)
 
@@ -120,12 +130,15 @@ struct StudioView: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model.isGenerating)
                 .accessibilityIdentifier("generate")
+                .help("Synthesize this line (⌘↩)")
             Button("Generate A/B") { Task { await model.generate(takes: 2) } }
                 .disabled(model.isGenerating)
+                .help("Two takes to compare")
             if model.isGenerating { ProgressView().controlSize(.small) }
             Spacer()
-            Button("History") { historyPresented = true }
+            Button("History") { historyPresented.toggle() }
                 .accessibilityIdentifier("open-history")
+                .help("Toggle the history panel")
         }
 
         if let error = model.generationError {
@@ -161,8 +174,8 @@ struct StudioView: View {
                 }
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Brand.fgDim)
-                Button(playingVariant == variant.id ? "Stop" : "Play") {
-                    toggle(variant)
+                Button(player.playingID == variant.id.uuidString ? "Stop" : "Play") {
+                    player.toggle(id: variant.id.uuidString, data: variant.wavData)
                 }
                 .accessibilityIdentifier("play-\(variant.label)")
                 Button("Export…") {
@@ -172,17 +185,10 @@ struct StudioView: View {
                         pcm16: Data(pcm), sampleRate: variant.sampleRate,
                         provenance: WAVEncoder.provenanceComment))
                 }
+                .help("Export this variant as a WAV file")
             }
             .padding(6)
         }
     }
 
-    private func toggle(_ variant: Variant) {
-        if playingVariant == variant.id {
-            player?.stop(); playingVariant = nil; return
-        }
-        player = try? AVAudioPlayer(data: variant.wavData)
-        player?.play()
-        playingVariant = variant.id
-    }
 }

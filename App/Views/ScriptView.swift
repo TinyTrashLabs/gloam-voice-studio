@@ -1,4 +1,3 @@
-import AVFAudio
 import EngineKit
 import StudioKit
 import SwiftUI
@@ -6,8 +5,7 @@ import UniformTypeIdentifiers
 
 struct ScriptView: View {
     @Environment(AppModel.self) private var model
-    @State private var player: AVAudioPlayer?
-    @State private var playingTake: String?
+    @State private var player = PreviewPlayer()
     @State private var exportSheet = false
 
     var body: some View {
@@ -16,20 +14,27 @@ struct ScriptView: View {
             HStack {
                 Button("Add Line") { script.addLine() }
                     .accessibilityIdentifier("add-line")
+                    .help("Add a new script line")
                 Button(script.isBatchRunning ? "Generating…" : "Generate All") {
                     Task { await script.generateAll() }
                 }
                 .disabled(script.isBatchRunning)
                 .accessibilityIdentifier("generate-all")
+                .help("Generate all lines in the script")
                 if script.isBatchRunning { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Export…") { exportSheet = true }
                     .disabled(script.session.lines.allSatisfy { $0.takes.isEmpty })
                     .accessibilityIdentifier("script-export")
+                    .help("Export all lines as a stitched WAV")
             }
             List {
                 ForEach(script.session.lines) { line in
-                    LineRow(line: line, playingTake: $playingTake, play: play)
+                    LineRow(line: line, playingTake: Binding(get: { player.playingID }, set: { _ in }), play: { id in
+                        if let data = model.script.takeWavData(id) {
+                            player.toggle(id: id, data: data)
+                        }
+                    })
                 }
                 .onMove { script.moveLines(from: $0, to: $1) }
             }
@@ -38,13 +43,6 @@ struct ScriptView: View {
         .sheet(isPresented: $exportSheet) { ScriptExportSheet() }
     }
 
-    private func play(_ takeID: String) {
-        if playingTake == takeID { player?.stop(); playingTake = nil; return }
-        guard let data = model.script.takeWavData(takeID) else { return }
-        player = try? AVAudioPlayer(data: data)
-        player?.play()
-        playingTake = takeID
-    }
 }
 
 private struct LineRow: View {
@@ -79,6 +77,7 @@ private struct LineRow: View {
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }
+                .help("Delete this line")
             }
             if case .failed(let message) = script.status[line.id] ?? .idle {
                 Text(message).font(.caption).foregroundStyle(.red)
@@ -159,6 +158,7 @@ private struct LineRow: View {
                     script.deleteTake(line.id, takeID: take.id)
                 } label: { Image(systemName: "trash") }
                 .controlSize(.small)
+                .help("Delete this take")
                 Spacer()
             }
             .padding(.leading, 16)
