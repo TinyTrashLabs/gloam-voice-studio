@@ -22,6 +22,11 @@ struct VoiceSidebarView: View {
         @Bindable var model = model
         List(selection: $model.selectedVoiceSlug) {
             Section("Voices") {
+                if voiceList.isEmpty {
+                    Text("No voices yet — click + to record or drop a clip.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 ForEach(voiceList, id: \.slug) { voice in
                     VStack(alignment: .leading) {
                         Text(voice.name)

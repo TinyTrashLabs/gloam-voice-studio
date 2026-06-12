@@ -57,7 +57,7 @@ struct StudioView: View {
         @Bindable var model = model
         TextEditor(text: $model.text)
             .font(.system(.body, design: .monospaced))
-            .frame(minHeight: 110)
+            .frame(minHeight: 110, maxHeight: 220)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
             .accessibilityIdentifier("line-editor")
         if model.backend.spec.honorsTags {

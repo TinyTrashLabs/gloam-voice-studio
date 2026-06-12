@@ -56,6 +56,11 @@ private struct LineRow: View {
         let script = model.script
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
+                Button { expanded.toggle() } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                }
+                .help("Takes & direction")
+                .accessibilityIdentifier("expand-line")
                 statusDot
                 TextField("Line text", text: Binding(
                     get: { line.text },
@@ -69,11 +74,6 @@ private struct LineRow: View {
                 }
                 .help("Generate this line")
                 .accessibilityIdentifier("generate-line")
-                Button { expanded.toggle() } label: {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                }
-                .help("Takes & direction")
-                .accessibilityIdentifier("expand-line")
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }
