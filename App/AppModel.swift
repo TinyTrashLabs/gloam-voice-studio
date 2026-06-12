@@ -25,6 +25,7 @@ final class AppModel {
     let history: HistoryStore
     let engine: GloamEngine
     let downloads: ModelDownloadManager
+    let speech: SpeechManager
     private var server: LocalAPIServer?
 
     // Persisted settings (raw UserDefaults so @Observable views update via model)
@@ -88,6 +89,7 @@ final class AppModel {
         voices = VoiceLibrary(directory: voicesDir)
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
+        speech = SpeechManager(uiTest: uiTest)
         backend = BackendID(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
             ?? .chatterboxTurbo
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790

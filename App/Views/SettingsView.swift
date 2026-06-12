@@ -1,4 +1,5 @@
 import EngineKit
+import SpeechKit
 import StudioKit
 import SwiftUI
 
@@ -6,6 +7,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             BackendsSettings().tabItem { Label("Backends", systemImage: "cpu") }
+            SpeechSettings().tabItem { Label("Speech", systemImage: "waveform.and.mic") }
             ServerSettings().tabItem { Label("API Server", systemImage: "network") }
             StorageSettings().tabItem { Label("Storage", systemImage: "internaldrive") }
         }
@@ -150,5 +152,74 @@ struct StorageSettings: View {
             ("History", StoragePaths.directorySize(StoragePaths.history)),
             ("Models", StoragePaths.directorySize(StoragePaths.models)),
         ]
+    }
+}
+
+struct SpeechSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var speech = model.speech
+        Form {
+            Picker("Transcribe with", selection: $speech.engineChoice) {
+                ForEach(SpeechManager.EngineChoice.allCases, id: \.self) {
+                    Text($0.label).tag($0)
+                }
+            }
+            .accessibilityIdentifier("speech-engine-picker")
+            if speech.engineChoice == .whisper && !speech.whisperReady {
+                Text("Whisper model not downloaded — Apple speech will be used until it is.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            TextField("Language hint (BCP-47, blank = system)",
+                      text: $speech.languageHint)
+                .help("e.g. en-US, de-DE — used by both engines")
+            Section("Whisper models") {
+                ForEach(WhisperModelCatalog.models) { whisperRow($0) }
+            }
+            Section {
+                Text("Both engines run entirely on this Mac — audio never leaves it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { model.speech.whisperModels.refresh() }
+    }
+
+    @ViewBuilder
+    private func whisperRow(_ entry: WhisperModelCatalog.Model) -> some View {
+        @Bindable var speech = model.speech
+        let state = model.speech.whisperModels.state(for: entry.variant)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.displayName)
+                Text("≈ " + ByteCountFormatter.string(
+                        fromByteCount: entry.approxBytes, countStyle: .file))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if state == .ready {
+                Toggle("Use", isOn: Binding(
+                    get: { speech.whisperVariant == entry.variant },
+                    set: { if $0 { speech.whisperVariant = entry.variant } }))
+                    .toggleStyle(.checkbox)
+            }
+            switch state {
+            case .notDownloaded:
+                Button("Download") { model.speech.whisperModels.download(entry.variant) }
+            case .downloading(let fraction):
+                ProgressView(value: fraction).frame(width: 120)
+                Text(String(format: "%.0f%%", fraction * 100))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Button("Cancel") { model.speech.whisperModels.cancelDownload(entry.variant) }
+            case .ready:
+                Text("Ready").foregroundStyle(.green)
+                Button("Delete") { model.speech.whisperModels.delete(entry.variant) }
+            case .failed(let message):
+                Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
+                Button("Retry") { model.speech.whisperModels.download(entry.variant) }
+            }
+        }
     }
 }
