@@ -18,5 +18,8 @@ struct GloamVoiceStudioApp: App {
                 }
             }
         }
+        Settings {
+            SettingsView().environment(model)
+        }
     }
 }

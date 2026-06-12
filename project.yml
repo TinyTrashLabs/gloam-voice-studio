@@ -57,3 +57,7 @@ targets:
     sources: [UITests]
     dependencies:
       - target: GloamVoiceStudio
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
