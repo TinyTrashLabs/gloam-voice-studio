@@ -83,6 +83,7 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
                 guard let result else { return }
                 if result.isFinal {
                     if settled.claim() {
+                        holder.task = nil
                         continuation.yield(.final(result.bestTranscription.formattedString))
                         continuation.finish()
                     }
@@ -97,6 +98,10 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
                 }
                 request.endAudio()
             }
+            // Consumer cancellation may interrupt the feeder before
+            // endAudio(); cancelling the recognition task makes SFSpeech
+            // fire its callback (cancellation error), which `settled` drops —
+            // so teardown does not depend on endAudio having run.
             continuation.onTermination = { _ in
                 feeder.cancel()
                 holder.task?.cancel()
