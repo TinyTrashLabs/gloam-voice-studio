@@ -8,8 +8,11 @@ struct ContentView: View {
         NavigationSplitView {
             VoiceSidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+                .scrollContentBackground(.hidden)
+                .background(Brand.ink2)
         } detail: {
             StudioView()
+                .background(Brand.ink)
         }
         .sheet(isPresented: .constant(!model.didAcceptCloneConsent)) {
             ConsentSheet()

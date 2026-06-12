@@ -14,6 +14,8 @@ struct StudioView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
+            BrandLockup()
+                .padding(.bottom, 4)
             TextEditor(text: $model.text)
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 110)
@@ -84,7 +86,7 @@ struct StudioView: View {
                 Text(variant.label)
                     .font(.system(.headline, design: .monospaced))
                     .padding(6)
-                    .background(Circle().fill(Color.accentColor.opacity(0.25)))
+                    .background(Circle().fill(Brand.gradient.opacity(0.25)))
                     .accessibilityIdentifier("variant-badge-\(variant.label)")
                 WaveformView(wavData: variant.wavData)
                     .frame(height: 44)
@@ -92,9 +94,9 @@ struct StudioView: View {
                     Text(String(format: "%.2fs · wall %.2fs", variant.seconds,
                                 variant.wallSeconds))
                     Text(String(format: "%.2fx realtime", variant.rtf))
-                        .foregroundStyle(.secondary)
                 }
                 .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Brand.fgDim)
                 Button(playingVariant == variant.id ? "Stop" : "Play") {
                     toggle(variant)
                 }

@@ -3,7 +3,7 @@ import SwiftUI
 /// Peak-bin waveform from 16-bit PCM wav data (skips the 44-byte header).
 struct WaveformView: View {
     let wavData: Data
-    var color: Color = .accentColor
+    var color: Color = Brand.accent
 
     var body: some View {
         Canvas { context, size in
