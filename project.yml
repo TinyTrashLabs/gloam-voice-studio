@@ -17,6 +17,8 @@ targets:
         product: EngineKit
       - package: GloamVoiceStudioPackage
         product: StudioKit
+      - package: GloamVoiceStudioPackage
+        product: SpeechKit
     entitlements:
       path: App/GloamVoiceStudio.entitlements
       properties:
@@ -33,6 +35,9 @@ targets:
         NSMicrophoneUsageDescription: >-
           Gloam records short reference clips so you can clone voices you have
           the rights to use. Audio never leaves this Mac.
+        NSSpeechRecognitionUsageDescription: >-
+          Gloam transcribes reference clips and dictation on this Mac using
+          Apple's on-device speech recognition. Audio never leaves this Mac.
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: fm.gloam.gvoice
             UTTypeConformsTo:

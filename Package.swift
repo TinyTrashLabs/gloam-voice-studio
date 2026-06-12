@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
         .library(name: "StudioKit", targets: ["StudioKit"]),
+        .library(name: "SpeechKit", targets: ["SpeechKit"]),
     ],
     dependencies: [
         // Pinned to the revision validated by the Phase 0 spike (SPIKE-RESULTS.md).
@@ -17,6 +18,7 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", .upToNextMajor(from: "2.5.0")),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMajor(from: "1.0.0")),
     ],
     targets: [
         .target(
@@ -55,6 +57,18 @@ let package = Package(
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
             path: "Tests/StudioKitTests"
+        ),
+        .target(
+            name: "SpeechKit",
+            dependencies: [
+                .product(name: "WhisperKit", package: "WhisperKit"),
+            ],
+            path: "Sources/SpeechKit"
+        ),
+        .testTarget(
+            name: "SpeechKitTests",
+            dependencies: ["SpeechKit"],
+            path: "Tests/SpeechKitTests"
         ),
     ]
 )
