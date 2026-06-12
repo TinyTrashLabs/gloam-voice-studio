@@ -9,6 +9,7 @@ struct TranscribeWindow: View {
     @State private var status = "Drop an audio file here, or choose one."
     @State private var working = false
     @State private var importerShown = false
+    @State private var transcribeTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -64,8 +65,8 @@ struct TranscribeWindow: View {
 
     private func transcribe(url: URL) {
         status = url.lastPathComponent
-        let scoped = url.startAccessingSecurityScopedResource()
         run { transcriber, hint in
+            let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             return try await transcriber.transcribe(audioURL: url, languageHint: hint)
         }
@@ -78,9 +79,10 @@ struct TranscribeWindow: View {
     }
 
     private func run(_ work: @escaping (any Transcriber, String?) async throws -> Transcript) {
+        transcribeTask?.cancel()
         working = true
-        Task { @MainActor in
-            defer { working = false }
+        transcribeTask = Task { @MainActor in
+            defer { if !Task.isCancelled { working = false } }
             guard await model.speech.ensureAuthorized() else {
                 status = "Speech permission denied."
                 return
@@ -88,9 +90,13 @@ struct TranscribeWindow: View {
             do {
                 let transcript = try await work(model.speech.makeTranscriber(),
                                                 model.speech.effectiveLanguageHint)
+                guard !Task.isCancelled else { return }
                 resultText = transcript.text
                 status = "Done."
+            } catch is CancellationError {
+                // superseded by a newer transcription
             } catch {
+                guard !Task.isCancelled else { return }
                 status = model.describeAny(error)
             }
         }
