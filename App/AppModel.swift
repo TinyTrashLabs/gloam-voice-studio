@@ -48,6 +48,11 @@ final class AppModel {
         }
     }
 
+    // Engine residency (mirrored from the engine actor for the toolbar UI)
+    var loadedBackend: BackendID?
+    var memGB: Double = 0
+    var modelOpInFlight = false
+
     // Studio state
     var selectedVoiceSlug: String?
     var text = ""
@@ -143,6 +148,28 @@ final class AppModel {
         }
     }
 
+    // MARK: model residency
+
+    func refreshEngineStatus() async {
+        loadedBackend = await engine.loadedBackend()
+        memGB = MemoryFootprint.currentGB()
+    }
+
+    func loadModel(_ backend: BackendID) async {
+        guard downloads.state(for: backend) == .ready, !modelOpInFlight else { return }
+        modelOpInFlight = true
+        defer { modelOpInFlight = false }
+        do { try await engine.preload(backend: backend) }
+        catch { generationError = describeAny(error) }
+        await refreshEngineStatus()
+    }
+
+    func unloadModel() async {
+        guard !isGenerating else { return }
+        await engine.unload()
+        await refreshEngineStatus()
+    }
+
     /// Shared engine path used by single-line mode and script mode.
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.
@@ -177,6 +204,7 @@ final class AppModel {
             temperatureOverride: useDirectionOverrides ? temperatureOverride : nil,
             exaggerationOverride: useDirectionOverrides ? exaggerationOverride : nil)
         let result = try await engine.synthesize(backend: backend, request: request)
+        await refreshEngineStatus()   // synthesis loads implicitly
         _ = try? history.save(
             pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
             text: text, backend: backend.rawValue, voice: resolvedVoice,

@@ -52,17 +52,30 @@ struct StudioView: View {
                       defaultFilename: "gloam-take") { _ in exportDoc = nil }
     }
 
+    /// The whole bench scrolls: expanded disclosures (tags, fine-tune) must
+    /// never force the stack taller than the window — SwiftUI centers
+    /// overflowing stacks, shoving everything off-screen ("blank window").
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                benchControls
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var benchControls: some View {
+        @Bindable var model = model
         TextEditor(text: $model.text)
             .font(.system(.body, design: .monospaced))
-            .frame(minHeight: 110, maxHeight: 220)
+            .frame(height: 110)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
             .accessibilityIdentifier("line-editor")
         if model.backend.spec.honorsTags {
-            Text("Inline tags like [laughing] and [pause] are supported by this backend.")
-                .font(.caption).foregroundStyle(.secondary)
+            TagChipsView(text: $model.text)
         }
 
         HStack(spacing: 16) {
@@ -146,14 +159,11 @@ struct StudioView: View {
                 .accessibilityIdentifier("generation-error")
         }
 
-        ScrollView {
-            VStack(spacing: 10) {
-                ForEach(model.variants) { variant in
-                    variantCard(variant)
-                }
+        VStack(spacing: 10) {
+            ForEach(model.variants) { variant in
+                variantCard(variant)
             }
         }
-        Spacer(minLength: 0)
     }
 
     @ViewBuilder

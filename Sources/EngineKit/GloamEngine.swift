@@ -32,6 +32,23 @@ public actor GloamEngine {
         provider.didEvictModel()
     }
 
+    /// Loads the model for `backend` (evicting any other resident model)
+    /// without synthesizing — backs the UI's explicit Load button. Chained
+    /// through the same task tail as synthesize so loads never overlap
+    /// in-flight GPU work.
+    public func preload(backend: BackendID) async throws {
+        if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
+            throw EngineError.licenseAckRequired(backend)
+        }
+        let previous = tail
+        let work = Task<Void, Error> { [self] in
+            await previous?.value
+            _ = try await self.residentModel(for: backend)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
     public func synthesize(backend: BackendID, request: SynthesisRequest)
         async throws -> SynthesisResult
     {
