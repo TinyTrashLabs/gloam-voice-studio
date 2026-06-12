@@ -76,4 +76,36 @@ final class RequestPlannerTests: XCTestCase {
             XCTAssertEqual(error as? EngineError, .invalidSpeed(-1))
         }
     }
+
+    func testTemperatureOverrideBeatsEmotionOnFish() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .fishS2Pro,
+            request: SynthesisRequest(text: "hi", emotion: .warm,
+                                      temperatureOverride: 0.95))
+        XCTAssertEqual(plan.temperature, 0.95)
+    }
+
+    func testTemperatureOverrideIgnoredWhenBackendDoesNotHonorTags() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterboxTurbo,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      temperatureOverride: 0.95))
+        XCTAssertNil(plan.temperature)
+    }
+
+    func testExaggerationOverrideBeatsEmotionOnChatterbox() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      emotion: .flat, exaggerationOverride: 0.9))
+        XCTAssertEqual(plan.exaggeration, 0.9)
+    }
+
+    func testExaggerationOverrideIgnoredOnTurbo() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterboxTurbo,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      exaggerationOverride: 0.9))
+        XCTAssertNil(plan.exaggeration)
+    }
 }

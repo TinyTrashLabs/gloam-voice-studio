@@ -10,14 +10,21 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// resample after generation — extreme values shift pitch, same trade-off
     /// as both upstream implementations.
     public var speed: Float
+    /// Override emotion's fishTemperature when present (Fish only).
+    public var temperatureOverride: Float?
+    /// Override emotion's chatterboxExaggeration when present (Chatterbox only).
+    public var exaggerationOverride: Float?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
-                emotion: Emotion = .neutral, speed: Float = 1.0) {
+                emotion: Emotion = .neutral, speed: Float = 1.0,
+                temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil) {
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText
         self.emotion = emotion
         self.speed = speed
+        self.temperatureOverride = temperatureOverride
+        self.exaggerationOverride = exaggerationOverride
     }
 }
 
@@ -58,8 +65,8 @@ enum RequestPlanner {
             text: request.text,
             refAudioPath: request.refAudioPath,
             refText: request.refText,
-            temperature: spec.honorsTags ? request.emotion.fishTemperature : nil,
-            exaggeration: backend == .chatterbox ? request.emotion.chatterboxExaggeration : nil
+            temperature: spec.honorsTags ? (request.temperatureOverride ?? request.emotion.fishTemperature) : nil,
+            exaggeration: backend == .chatterbox ? (request.exaggerationOverride ?? request.emotion.chatterboxExaggeration) : nil
         )
     }
 }
