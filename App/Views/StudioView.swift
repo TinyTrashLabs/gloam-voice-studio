@@ -69,11 +69,14 @@ struct StudioView: View {
     @ViewBuilder
     private var benchControls: some View {
         @Bindable var model = model
-        TextEditor(text: $model.text)
-            .font(.system(.body, design: .monospaced))
-            .frame(height: 110)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-            .accessibilityIdentifier("line-editor")
+        HStack(alignment: .top, spacing: 8) {
+            TextEditor(text: $model.text)
+                .font(.system(.body, design: .monospaced))
+                .frame(height: 110)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                .accessibilityIdentifier("line-editor")
+            DictationButton(text: $model.text)
+        }
         if model.backend.spec.honorsTags {
             TagChipsView(text: $model.text)
         }

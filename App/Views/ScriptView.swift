@@ -69,6 +69,9 @@ private struct LineRow: View {
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .accessibilityIdentifier("script-line-text")
+                DictationButton(text: Binding(
+                    get: { line.text },
+                    set: { text in script.update(line.id) { $0.text = text } }))
                 Button { Task { await script.generate(lineID: line.id) } } label: {
                     Image(systemName: "waveform.badge.plus")
                 }

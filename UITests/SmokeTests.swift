@@ -121,6 +121,28 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testDictationButtonAppendsFakeTranscript() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        // Defensive: dismiss consent sheet if present.
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) {
+            consentButton.click()
+        }
+
+        let dictate = app.buttons["dictate"].firstMatch
+        XCTAssertTrue(dictate.waitForExistence(timeout: 10))
+        dictate.click()   // start
+        dictate.click()   // stop → FakeTranscriber emits "fake transcript"
+        let editor = app.textViews["line-editor"]
+        let predicate = NSPredicate(format: "value CONTAINS 'fake transcript'")
+        expectation(for: predicate, evaluatedWith: editor)
+        waitForExpectations(timeout: 10)
+    }
+
+    @MainActor
     func testCreateVoiceGeneratePlayHistory() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest"]
