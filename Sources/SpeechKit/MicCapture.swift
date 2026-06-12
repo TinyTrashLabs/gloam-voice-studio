@@ -13,6 +13,9 @@ public final class MicCapture {
     /// Starts the mic and returns the chunk stream. Throws if the input
     /// device is unavailable. Caller must call stop() when done.
     public func start() throws -> AsyncStream<AudioChunk> {
+        guard continuation == nil else {
+            throw SpeechError.engineUnavailable("capture already in progress")
+        }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else {
