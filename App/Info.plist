@@ -24,6 +24,8 @@
 	<string>public.app-category.music</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Gloam records short reference clips so you can clone voices you have the rights to use. Audio never leaves this Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Gloam transcribes reference clips and dictation on this Mac using Apple's on-device speech recognition. Audio never leaves this Mac.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
