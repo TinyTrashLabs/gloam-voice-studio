@@ -1,3 +1,4 @@
+import SpeechKit
 import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,6 +14,8 @@ struct VoiceEditorSheet: View {
     @State private var refDescription = "No reference yet"
     @State private var showRecorder = false
     @State private var error: String?
+    @State private var transcribing = false
+    @State private var transcriptNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -23,6 +26,16 @@ struct VoiceEditorSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
             TextEditor(text: $refText).frame(height: 70)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+                .accessibilityIdentifier("voice-ref-text")
+            if transcribing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Transcribing reference…").font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let transcriptNote {
+                Text(transcriptNote).font(.caption).foregroundStyle(.secondary)
+            }
 
             GroupBox {
                 VStack(spacing: 8) {
@@ -33,6 +46,7 @@ struct VoiceEditorSheet: View {
                             Button("Use Sample Reference") {
                                 refData = UITestMode.sampleReference()
                                 refDescription = "Sample reference (2.0 s)"
+                                autoTranscribe()
                             }
                             .accessibilityIdentifier("use-sample-ref")
                         }
@@ -63,9 +77,37 @@ struct VoiceEditorSheet: View {
             RecorderView { data, seconds in
                 refData = data
                 refDescription = String(format: "Recorded clip (%.1f s)", seconds)
+                autoTranscribe()
             }
         }
         .onAppear { loadExisting() }
+    }
+
+    private func autoTranscribe() {
+        guard let refData,
+              refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }   // never clobber text the user typed
+        transcribing = true
+        transcriptNote = nil
+        Task {
+            defer { transcribing = false }
+            guard await model.speech.ensureAuthorized() else {
+                transcriptNote = "Speech permission denied — type the transcript manually."
+                return
+            }
+            do {
+                let transcriber = model.speech.makeTranscriber()
+                let transcript = try await transcriber.transcribe(
+                    wavData: refData,
+                    languageHint: model.speech.effectiveLanguageHint)
+                if refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    refText = transcript.text
+                    transcriptNote = "Auto-transcribed — review before saving."
+                }
+            } catch {
+                transcriptNote = "Couldn't auto-transcribe (\(model.describeAny(error))) — type it manually."
+            }
+        }
     }
 
     private func loadExisting() {
@@ -90,6 +132,7 @@ struct VoiceEditorSheet: View {
                     refData = try Data(contentsOf: url)
                     refDescription = url.lastPathComponent
                     error = nil
+                    autoTranscribe()
                 } catch { self.error = "\(error)" }
             }
         }

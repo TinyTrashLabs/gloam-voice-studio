@@ -98,6 +98,28 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testSampleReferenceAutoFillsTranscript() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        // Defensive: dismiss consent sheet if present.
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) {
+            consentButton.click()
+        }
+
+        app.buttons["new-voice"].firstMatch.click()
+
+        app.buttons["use-sample-ref"].click()
+
+        let transcriptField = app.textViews["voice-ref-text"]
+        let predicate = NSPredicate(format: "value CONTAINS 'fake transcript'")
+        expectation(for: predicate, evaluatedWith: transcriptField)
+        waitForExpectations(timeout: 10)
+    }
+
+    @MainActor
     func testCreateVoiceGeneratePlayHistory() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest"]
