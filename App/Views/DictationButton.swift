@@ -20,6 +20,10 @@ struct DictationButton: View {
             }
             .help(controller.isActive ? "Stop dictation" : "Dictate")
             .accessibilityIdentifier("dictate")
+            if controller.isProcessing {
+                ProgressView().controlSize(.mini)
+                    .help("Transcribing…")
+            }
             if let message = controller.errorMessage {
                 Text(message).font(.caption2).foregroundStyle(.red)
             }

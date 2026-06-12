@@ -3,19 +3,18 @@ import Observation
 import SpeechKit
 
 /// One live dictation session bound to a text target. Streams partials into
-/// the text (appended at the end; committed on finals), so the user sees
-/// words appear as they speak. Whisper engine emits no partials — text
-/// arrives when the user stops.
+/// the text (appended at the end; committed on finals). Whisper emits no
+/// partials — its text arrives after stop(), while `isProcessing` is true.
 @MainActor @Observable
 final class DictationController {
-    private(set) var isActive = false
+    private(set) var isActive = false      // mic open
+    private(set) var isProcessing = false  // stopped, final text still pending
     private(set) var errorMessage: String?
 
     private var mic: MicCapture?
     private var uiTestContinuation: AsyncStream<AudioChunk>.Continuation?
     private var task: Task<Void, Never>?
-    private var committedText = ""
-    private var setText: ((String) -> Void)?
+    private var session = UUID()
 
     func toggle(speech: SpeechManager,
                 getText: @escaping () -> String,
@@ -26,29 +25,41 @@ final class DictationController {
     private func start(speech: SpeechManager,
                        getText: @escaping () -> String,
                        setText: @escaping (String) -> Void) {
+        // Restarting drops any still-draining previous session — its pending
+        // final would otherwise race the new session on the same field.
+        task?.cancel()
+        mic?.stop(); mic = nil
+        uiTestContinuation?.finish(); uiTestContinuation = nil
+
+        let token = UUID()
+        session = token
         errorMessage = nil
-        self.setText = setText
-        let base = getText()
-        committedText = base.isEmpty || base.hasSuffix(" ") || base.hasSuffix("\n")
-            ? base : base + " "
         isActive = true
+        isProcessing = false
+        let base = getText()
         task = Task { @MainActor in
+            // Session-local text state: a later session can never cross wires.
+            var committed = base.isEmpty || base.hasSuffix(" ") || base.hasSuffix("\n")
+                ? base : base + " "
             guard await speech.ensureAuthorized() else {
-                fail("Speech permission denied."); return
+                self.fail("Speech permission denied.", token: token); return
             }
             let audio: AsyncStream<AudioChunk>
             if UITestMode.isActive {
                 // Headless runners have no microphone; FakeTranscriber only
                 // needs the stream to finish, which stop() does.
                 let (stream, cont) = AsyncStream.makeStream(of: AudioChunk.self)
-                self.uiTestContinuation = cont
+                if self.session == token { self.uiTestContinuation = cont }
+                else { cont.finish() }
                 audio = stream
             } else {
                 let mic = MicCapture()
-                self.mic = mic
-                do { audio = try mic.start() }
-                catch {
-                    fail((error as? SpeechError)?.errorDescription ?? "\(error)")
+                do {
+                    audio = try mic.start()
+                    if self.session == token { self.mic = mic } else { mic.stop() }
+                } catch {
+                    self.fail((error as? SpeechError)?.errorDescription ?? "\(error)",
+                              token: token)
                     return
                 }
             }
@@ -57,42 +68,46 @@ final class DictationController {
                 for try await update in transcriber.liveTranscribe(audio: audio) {
                     switch update {
                     case .partial(let text):
-                        self.setText?(self.committedText + text)
+                        setText(committed + text)
                     case .final(let text):
-                        self.committedText += text
-                        self.setText?(self.committedText)
+                        committed += text
+                        setText(committed)
                     }
                 }
+            } catch is CancellationError {
+                return   // superseded session: drop silently, touch no state
             } catch {
-                fail((error as? SpeechError)?.errorDescription ?? "\(error)")
+                self.fail((error as? SpeechError)?.errorDescription ?? "\(error)",
+                          token: token)
                 return
             }
-            self.finishCleanly()
+            self.finish(token: token)
         }
     }
 
     func stop() {
-        // Finishing the audio stream lets the engine emit its final(s);
-        // the task ends on its own once the transcriber stream finishes.
-        mic?.stop()
-        mic = nil
-        uiTestContinuation?.finish()
-        uiTestContinuation = nil
+        // Finishing the audio stream lets the engine emit its final(s); the
+        // task drains them into the field, then finish(token:) cleans up.
+        mic?.stop(); mic = nil
+        uiTestContinuation?.finish(); uiTestContinuation = nil
         isActive = false
+        isProcessing = task != nil
     }
 
-    private func finishCleanly() {
-        mic?.stop()
-        mic = nil
-        uiTestContinuation?.finish()
-        uiTestContinuation = nil
+    private func finish(token: UUID) {
+        guard session == token else { return }
         isActive = false
+        isProcessing = false
         task = nil
-        setText = nil
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ message: String, token: UUID) {
+        guard session == token else { return }
         errorMessage = message
-        finishCleanly()
+        mic?.stop(); mic = nil
+        uiTestContinuation?.finish(); uiTestContinuation = nil
+        isActive = false
+        isProcessing = false
+        task = nil
     }
 }
