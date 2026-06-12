@@ -18,10 +18,19 @@ Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights ar
 - **Reference Audio & Transcription** — Record or drop reference clips; optional transcript hints improve quality.
 - **Emotion & Speed Control** — Generate with five emotion variants (flat, neutral, warm, excited, hype); adjust playback speed 0.5× to 2.0×.
 - **A/B Variants** — Generate two takes side-by-side; compare waveforms and playback.
-- **History** — Browse all generated takes with metadata (backend, voice, emotion, RTF). Play or delete entries.
+- **History** — Browse all generated takes with metadata (backend, voice, emotion, RTF). Play or delete entries. Reuse any entry to repopulate the studio editor.
 - **Model Downloads** — Download weights in-app with progress indication. Automatic preflight storage check.
 - **Local API Server** — Optional OpenAI-compatible HTTP server (loopback-only, port 8790 by default) for programmatic access.
 - **Sandbox** — Minimal entitlements; data lives in Application Support and Caches directories.
+
+### Voice Lab
+
+- **Script sessions** — Multi-line script editor with per-line voice and emotion direction; lines can be reordered at will.
+- **Persistent takes** — Each generated take is saved to disk (WAV + JSON session); takes survive app relaunches and are browsable per line.
+- **Batch generation** — Generate all lines in a script session serially with a single click; per-line status indicators (queued → generating → done/failed).
+- **Stitched export** — Export the full script as one WAV: starred (or newest) take per line, configurable silence gap between lines, optional peak normalization to −0.18 dBFS.
+- **Direction overrides** — Per-session temperature and exaggeration knobs that override emotion presets for capable backends (Fish S2-Pro: temperature; Chatterbox: exaggeration).
+- **History reuse** — One-click "Reuse" in the history browser repopulates the studio editor (text, voice, emotion, backend) from any past generation.
 
 ## Architecture
 

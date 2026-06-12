@@ -4,6 +4,14 @@ import SwiftUI
 struct GloamVoiceStudioApp: App {
     @State private var model = AppModel()
 
+    init() {
+        // In UI-test mode, reset persisted UI state so tests start from a clean
+        // known state regardless of what previous runs left behind.
+        if UITestMode.isActive {
+            UserDefaults.standard.removeObject(forKey: "studioMode")
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

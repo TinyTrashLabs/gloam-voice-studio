@@ -75,6 +75,7 @@ private struct LineRow: View {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                 }
                 .help("Takes & direction")
+                .accessibilityIdentifier("expand-line")
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }
