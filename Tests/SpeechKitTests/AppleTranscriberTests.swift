@@ -14,7 +14,7 @@ final class AppleTranscriberTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: aiff) }
         let say = Process()
         say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        say.arguments = ["-o", aiff.path, "hello world"]
+        say.arguments = ["-o", aiff.path, "--data-format=LEI16@22050", "hello world"]
         try say.run()
         say.waitUntilExit()
         XCTAssertEqual(say.terminationStatus, 0)

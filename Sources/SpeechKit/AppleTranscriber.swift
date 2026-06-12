@@ -31,9 +31,14 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
         // recognitionTask may call back more than once; resume exactly once.
         let resumed = ResumeGuard()
         return try await withCheckedThrowingContinuation { cont in
-            recognizer.recognitionTask(with: request) { result, error in
+            // Hold the task (and through it the request) until a callback
+            // resolves the continuation — an orphaned task can drop its
+            // callback and hang the await forever.
+            let holder = TaskHolder()
+            holder.task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     if resumed.claim() {
+                        holder.task = nil
                         cont.resume(throwing: SpeechError.transcriptionFailed(
                             error.localizedDescription))
                     }
@@ -41,6 +46,7 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
                 }
                 guard let result, result.isFinal else { return }
                 if resumed.claim() {
+                    holder.task = nil
                     cont.resume(returning: Transcript(
                         text: result.bestTranscription.formattedString,
                         language: locale.identifier))
@@ -56,7 +62,7 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
             "live transcription not implemented yet")) }
     }
 
-    func makeRecognizer(locale: Locale) throws -> SFSpeechRecognizer {
+    private func makeRecognizer(locale: Locale) throws -> SFSpeechRecognizer {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             throw SpeechError.notAuthorized
         }
@@ -72,6 +78,11 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
         }
         return recognizer
     }
+}
+
+/// Keeps an SFSpeechRecognitionTask alive until its callback resolves.
+final class TaskHolder: @unchecked Sendable {
+    var task: SFSpeechRecognitionTask?
 }
 
 /// Tiny lock so completion-handler APIs resume a continuation exactly once.
