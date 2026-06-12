@@ -105,6 +105,45 @@ public enum APIRouter {
                 body: .init(byteBuffer: ByteBuffer(data: data)))
         }
 
+        router.post("v1/audio/speech") { request, context in
+            let req = try await request.decode(as: SpeechRequest.self, context: context)
+            if (req.response_format ?? "wav") != "wav" {
+                throw APIError(status: .badRequest,
+                               detail: "only response_format=wav is supported")
+            }
+            guard !req.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw APIError(status: .badRequest, detail: "input is empty")
+            }
+            // OpenAI clients send voices like "alloy" — a matching library slug
+            // clones that voice; unknown names fall through to no reference so
+            // off-the-shelf clients work without config (server.py parity).
+            let backend = req.model.flatMap(BackendID.init(rawValue:)) ?? deps.defaultBackend
+            var refPath: String? = nil
+            var refText: String? = nil
+            if let voice = req.voice, let found = try? deps.voices.get(voice) {
+                refPath = found.refURL.path
+                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+            }
+            do {
+                let result = try await deps.engine.synthesize(
+                    backend: backend,
+                    request: SynthesisRequest(text: req.input, refAudioPath: refPath,
+                                              refText: refText))
+                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
+                                            sampleRate: result.sampleRate)
+                return Response(status: .ok,
+                                headers: [.contentType: "audio/wav"],
+                                body: .init(byteBuffer: ByteBuffer(data: wav)))
+            } catch EngineError.licenseAckRequired {
+                throw APIError(status: .forbidden, detail: fishLicenseNotice)
+            } catch EngineError.refAudioRequired(let b) {
+                throw APIError(status: .badRequest,
+                               detail: "backend '\(b.rawValue)' requires reference audio")
+            } catch let error as EngineError {
+                throw APIError(status: .internalServerError, detail: "\(error)")
+            }
+        }
+
         return router
     }
 

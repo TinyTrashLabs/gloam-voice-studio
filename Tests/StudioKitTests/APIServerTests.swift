@@ -122,6 +122,90 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testSpeechSynthesizesWav() async throws {
+        try await app().test(.router) { client in
+            let create = #"{"name":"Cruz","refAudio":"AAEC","refText":"hi"}"#
+            try await client.execute(uri: "/voices", method: .post,
+                                     body: ByteBuffer(string: create)) { _ in }
+            let speech = #"{"input":"hello world","model":"chatterbox-turbo","voice":"cruz"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: speech)) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(response.headers[.contentType], "audio/wav")
+                let wav = Data(buffer: response.body)
+                XCTAssertEqual(wav.prefix(4), Data("RIFF".utf8))
+                XCTAssertEqual(wav.count, 44 + 4 * 2)  // FakeModel returns 4 samples
+            }
+        }
+    }
+
+    func testSpeechUnknownVoiceFallsThroughToRefAudioRequired() async throws {
+        try await app().test(.router) { client in
+            // chatterbox-turbo requires ref audio; unknown voice resolves none → 400
+            let speech = #"{"input":"hello","voice":"alloy"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: speech)) { response in
+                XCTAssertEqual(response.status, .badRequest)
+                XCTAssertNotNil(try self.json(response.body)["detail"])
+            }
+        }
+    }
+
+    func testSpeechFishWithoutAckIs403WithNotice() async throws {
+        try await app().test(.router) { client in
+            let speech = #"{"input":"hello","model":"fish-s2-pro"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: speech)) { response in
+                XCTAssertEqual(response.status, .forbidden)
+                XCTAssertEqual(try self.json(response.body)["detail"] as? String,
+                               fishLicenseNotice)
+            }
+        }
+    }
+
+    func testSpeechRejectsNonWavFormatAndEmptyInput() async throws {
+        try await app().test(.router) { client in
+            try await client.execute(
+                uri: "/v1/audio/speech", method: .post,
+                body: ByteBuffer(string: #"{"input":"x","response_format":"mp3"}"#)) { response in
+                XCTAssertEqual(response.status, .badRequest)
+                XCTAssertEqual(try self.json(response.body)["detail"] as? String,
+                               "only response_format=wav is supported")
+            }
+            try await client.execute(
+                uri: "/v1/audio/speech", method: .post,
+                body: ByteBuffer(string: #"{"input":"  "}"#)) { response in
+                XCTAssertEqual(response.status, .badRequest)
+                XCTAssertEqual(try self.json(response.body)["detail"] as? String,
+                               "input is empty")
+            }
+        }
+    }
+
+    func testLiveServerBindsLoopback() async throws {
+        let server = LocalAPIServer(deps: deps)
+        let port = 18799
+        try await server.start(port: port)
+        // poll /health until the listener is up (max ~3s)
+        let url = URL(string: "http://127.0.0.1:\(port)/health")!
+        var lastError: Error? = nil
+        for _ in 0..<30 {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+                let body = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+                XCTAssertEqual(body["ok"] as? Bool, true)
+                await server.stop()
+                return
+            } catch {
+                lastError = error
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        await server.stop()
+        XCTFail("server never came up: \(String(describing: lastError))")
+    }
+
     func testExportImportOverHTTP() async throws {
         try await app().test(.router) { client in
             let create = #"{"name":"Cruz","refAudio":"AAEC","refText":"hi"}"#
