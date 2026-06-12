@@ -33,6 +33,14 @@ targets:
         NSMicrophoneUsageDescription: >-
           Gloam records short reference clips so you can clone voices you have
           the rights to use. Audio never leaves this Mac.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: fm.gloam.gvoice
+            UTTypeConformsTo:
+              - public.zip-archive
+            UTTypeDescription: Gloam voice pack
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - gvoice
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio

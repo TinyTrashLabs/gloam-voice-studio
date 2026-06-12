@@ -6,10 +6,17 @@ struct GloamVoiceStudioApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Text("GLOAM.FM — Voice Studio")
-                .font(.system(.title, design: .monospaced))
-                .frame(minWidth: 900, minHeight: 600)
+            ContentView()
                 .environment(model)
+                .frame(minWidth: 960, minHeight: 620)
+        }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Divider()
+                Button("Migrate from gloam-voice-engine…") {
+                    NotificationCenter.default.post(name: .gloamMigrate, object: nil)
+                }
+            }
         }
     }
 }
