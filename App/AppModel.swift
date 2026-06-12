@@ -4,6 +4,10 @@ import Observation
 import StudioKit
 import SwiftUI
 
+struct AppGenerationError: Error {
+    let message: String
+}
+
 /// One generated take, ready to play/export.
 struct Variant: Identifiable, Equatable {
     let id = UUID()
@@ -54,6 +58,17 @@ final class AppModel {
     var generationError: String?
     var voicesVersion = 0   // bump to refresh voice lists after library mutations
 
+    // Direction overrides (Task 6 wires the UI)
+    var useDirectionOverrides = false
+    var temperatureOverride: Float = 0.7
+    var exaggerationOverride: Float = 0.5
+
+    @ObservationIgnored lazy var script: ScriptModel = ScriptModel(
+        app: self,
+        store: SessionStore(directory: UITestMode.isActive
+            ? UITestMode.tempRoot.appendingPathComponent("Session")
+            : StoragePaths.appSupport.appendingPathComponent("Session")))
+
     static let emotionOrder: [Emotion] = [.flat, .neutral, .warm, .excited, .hype]
 
     private var memoryPressureSource: DispatchSourceMemoryPressure?
@@ -100,50 +115,24 @@ final class AppModel {
             generationError = "Enter some text first."
             return
         }
-        guard downloads.state(for: backend) == .ready else {
-            generationError = "Download the \(backend.rawValue) model in Settings first."
-            return
-        }
-        if backend.spec.needsLicenseAck && !didAckFishLicense {
-            generationError = "Acknowledge the Fish license in Settings first."
-            return
-        }
-        var refPath: String?
-        var refText: String?
-        var resolvedVoice: String?
-        if let slug = selectedVoiceSlug {
-            guard let found = try? voices.resolve(slug, emotion: emotion) else {
-                generationError = "Voice '\(slug)' is missing."
-                return
-            }
-            refPath = found.refURL.path
-            refText = found.meta.refText.isEmpty ? nil : found.meta.refText
-            resolvedVoice = found.meta.slug
-        }
-        if backend.spec.needsRefAudio && refPath == nil {
-            generationError = "This backend needs a voice — pick or create one in the sidebar."
-            return
-        }
         isGenerating = true
         defer { isGenerating = false }
         variants = []
         for take in 0..<max(1, takes) {
             do {
-                let request = SynthesisRequest(
-                    text: text, refAudioPath: refPath, refText: refText,
+                let result = try await synthesizeLine(
+                    text: text, voiceSlug: selectedVoiceSlug,
                     emotion: emotion, speed: speed)
-                let result = try await engine.synthesize(backend: backend, request: request)
                 let pcm = PCM16.data(from: result.samples)
                 let seconds = Double(result.samples.count) / Double(result.sampleRate)
                 let wav = WAVEncoder.encode(pcm16: pcm, sampleRate: result.sampleRate)
-                _ = try? history.save(
-                    pcm: pcm, sampleRate: result.sampleRate, text: text,
-                    backend: backend.rawValue, voice: resolvedVoice,
-                    emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
                 variants.append(Variant(
                     label: String(UnicodeScalar(65 + take)!),  // A, B, …
                     wavData: wav, sampleRate: result.sampleRate,
                     seconds: seconds, wallSeconds: result.wallSeconds))
+            } catch let err as AppGenerationError {
+                generationError = err.message
+                return
             } catch let error as EngineError {
                 generationError = describe(error)
                 return
@@ -152,6 +141,53 @@ final class AppModel {
                 return
             }
         }
+    }
+
+    /// Shared engine path used by single-line mode and script mode.
+    /// Throws AppGenerationError for precondition failures so callers show
+    /// the same messages the single-line flow does.
+    func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
+                        speed: Float) async throws -> SynthesisResult {
+        guard downloads.state(for: backend) == .ready else {
+            throw AppGenerationError(
+                message: "Download the \(backend.rawValue) model in Settings first.")
+        }
+        if backend.spec.needsLicenseAck && !didAckFishLicense {
+            throw AppGenerationError(
+                message: "Acknowledge the Fish license in Settings first.")
+        }
+        var refPath: String?
+        var refText: String?
+        var resolvedVoice: String?
+        if let slug = voiceSlug {
+            guard let found = try? voices.resolve(slug, emotion: emotion) else {
+                throw AppGenerationError(message: "Voice '\(slug)' is missing.")
+            }
+            refPath = found.refURL.path
+            refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+            resolvedVoice = found.meta.slug
+        }
+        if backend.spec.needsRefAudio && refPath == nil {
+            throw AppGenerationError(
+                message: "This backend needs a voice — pick or create one in the sidebar.")
+        }
+        let request = SynthesisRequest(
+            text: text, refAudioPath: refPath, refText: refText,
+            emotion: emotion, speed: speed,
+            temperatureOverride: useDirectionOverrides ? temperatureOverride : nil,
+            exaggerationOverride: useDirectionOverrides ? exaggerationOverride : nil)
+        let result = try await engine.synthesize(backend: backend, request: request)
+        _ = try? history.save(
+            pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
+            text: text, backend: backend.rawValue, voice: resolvedVoice,
+            emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+        return result
+    }
+
+    func describeAny(_ error: Error) -> String {
+        if let appError = error as? AppGenerationError { return appError.message }
+        if let engineError = error as? EngineError { return describe(engineError) }
+        return "\(error)"
     }
 
     private func describe(_ error: EngineError) -> String {
