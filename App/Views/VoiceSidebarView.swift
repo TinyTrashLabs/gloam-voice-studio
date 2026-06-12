@@ -1,3 +1,4 @@
+import AVFAudio
 import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -15,6 +16,9 @@ struct VoiceSidebarView: View {
     @State private var exportName = ""
     @State private var actionError: String?
     @State private var migratePresented = false
+    @State private var refPlayer: AVAudioPlayer?
+    @State private var previewingSlug: String?
+    @State private var variantBase: VoiceMeta?
 
     var body: some View {
         @Bindable var model = model
@@ -30,6 +34,12 @@ struct VoiceSidebarView: View {
                     .tag(voice.slug)
                     .contextMenu {
                         Button("Edit…") { editingSlug = voice.slug; editorPresented = true }
+                        Button("Preview Reference") { previewRef(voice) }
+                        Button("New Emotion Variant…") {
+                            variantBase = voice
+                            editingSlug = nil
+                            editorPresented = true
+                        }
                         Button("Export…") { export(voice.slug) }
                         Divider()
                         Button("Delete", role: .destructive) { delete(voice.slug) }
@@ -51,8 +61,13 @@ struct VoiceSidebarView: View {
                 }
             }
         }
-        .sheet(isPresented: $editorPresented) {
-            VoiceEditorSheet(editingSlug: editingSlug)
+        .sheet(isPresented: $editorPresented, onDismiss: { variantBase = nil }) {
+            if let base = variantBase {
+                VoiceEditorSheet(editingSlug: nil,
+                                 prefilledName: "\(base.name)-hype")
+            } else {
+                VoiceEditorSheet(editingSlug: editingSlug)
+            }
         }
         .fileImporter(isPresented: $importerPresented,
                       allowedContentTypes: [.gvoice, .zip],
@@ -110,6 +125,19 @@ struct VoiceSidebarView: View {
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
+    }
+
+    private func previewRef(_ voice: VoiceMeta) {
+        if previewingSlug == voice.slug {
+            refPlayer?.stop()
+            refPlayer = nil
+            previewingSlug = nil
+            return
+        }
+        guard let (_, refURL) = try? model.voices.get(voice.slug) else { return }
+        refPlayer = try? AVAudioPlayer(contentsOf: refURL)
+        refPlayer?.play()
+        previewingSlug = voice.slug
     }
 
     private func migrateFromFolder(_ folderURL: URL) {

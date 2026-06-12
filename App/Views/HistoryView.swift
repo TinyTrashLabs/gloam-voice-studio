@@ -1,4 +1,5 @@
 import AVFAudio
+import EngineKit
 import StudioKit
 import SwiftUI
 
@@ -31,6 +32,8 @@ struct HistoryView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Button("Reuse") { reuse(entry) }
+                            .accessibilityIdentifier("reuse-entry")
                         Button(playingID == entry.id ? "Stop" : "Play") { toggle(entry.id) }
                         Button(role: .destructive) {
                             try? model.history.delete(entry.id); version += 1
@@ -58,6 +61,14 @@ struct HistoryView: View {
             parts.append(String(format: "%.2fx", entry.seconds / (Double(wallMs) / 1000)))
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func reuse(_ entry: HistoryEntry) {
+        model.text = entry.text ?? ""
+        model.emotion = entry.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral
+        if let voice = entry.voice { model.selectedVoiceSlug = voice }
+        model.backend = BackendID(rawValue: entry.backend ?? "") ?? model.backend
+        dismiss()
     }
 
     private func toggle(_ id: String) {

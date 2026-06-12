@@ -81,6 +81,38 @@ struct StudioView: View {
             Spacer()
         }
 
+        DisclosureGroup("Direction (advanced)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Override emotion presets", isOn: $model.useDirectionOverrides)
+                if model.useDirectionOverrides {
+                    if model.backend.spec.honorsTags {
+                        HStack {
+                            Text("Temperature")
+                            Slider(value: $model.temperatureOverride,
+                                   in: 0.3...1.2).frame(width: 160)
+                            Text(String(format: "%.2f", model.temperatureOverride))
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                    }
+                    if model.backend == .chatterbox {
+                        HStack {
+                            Text("Exaggeration")
+                            Slider(value: $model.exaggerationOverride,
+                                   in: 0...1).frame(width: 160)
+                            Text(String(format: "%.2f", model.exaggerationOverride))
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                    }
+                    if !model.backend.spec.honorsTags && model.backend != .chatterbox {
+                        Text("chatterbox-turbo ignores direction knobs — emotion comes from acted reference variants.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.callout)
+
         HStack(spacing: 10) {
             Button("Generate") { Task { await model.generate(takes: 1) } }
                 .keyboardShortcut(.return, modifiers: .command)

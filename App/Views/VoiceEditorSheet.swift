@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct VoiceEditorSheet: View {
     let editingSlug: String?
+    var prefilledName: String? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -68,7 +69,12 @@ struct VoiceEditorSheet: View {
     }
 
     private func loadExisting() {
-        guard let slug = editingSlug, let found = try? model.voices.get(slug) else { return }
+        guard let slug = editingSlug, let found = try? model.voices.get(slug) else {
+            if editingSlug == nil, let prefill = prefilledName {
+                name = prefill
+            }
+            return
+        }
         name = found.meta.name
         refText = found.meta.refText
         refDescription = "Keeping existing reference"
