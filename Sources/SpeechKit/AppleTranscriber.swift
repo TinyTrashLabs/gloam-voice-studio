@@ -57,9 +57,52 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
 
     public func liveTranscribe(audio: AsyncStream<AudioChunk>)
         -> AsyncThrowingStream<TranscriptUpdate, Error> {
-        // Implemented in the next task.
-        AsyncThrowingStream { $0.finish(throwing: SpeechError.engineUnavailable(
-            "live transcription not implemented yet")) }
+        let locale = self.locale
+        return AsyncThrowingStream { continuation in
+            let recognizer: SFSpeechRecognizer
+            do { recognizer = try makeRecognizer(locale: locale) }
+            catch { continuation.finish(throwing: error); return }
+
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.requiresOnDeviceRecognition = true
+            request.shouldReportPartialResults = true
+
+            // Once a final result (or genuine failure) has settled the
+            // stream, late SFSpeech callbacks (e.g. the cancellation-
+            // flavored error after endAudio) must be dropped.
+            let settled = ResumeGuard()
+            let holder = TaskHolder()
+            holder.task = recognizer.recognitionTask(with: request) { result, error in
+                if let error {
+                    if settled.claim() {
+                        continuation.finish(throwing: SpeechError.transcriptionFailed(
+                            error.localizedDescription))
+                    }
+                    return
+                }
+                guard let result else { return }
+                if result.isFinal {
+                    if settled.claim() {
+                        continuation.yield(.final(result.bestTranscription.formattedString))
+                        continuation.finish()
+                    }
+                } else {
+                    continuation.yield(.partial(result.bestTranscription.formattedString))
+                }
+            }
+
+            let feeder = Task {
+                for await chunk in audio {
+                    if let buffer = chunk.pcmBuffer() { request.append(buffer) }
+                }
+                request.endAudio()
+            }
+            continuation.onTermination = { _ in
+                feeder.cancel()
+                holder.task?.cancel()
+                holder.task = nil
+            }
+        }
     }
 
     private func makeRecognizer(locale: Locale) throws -> SFSpeechRecognizer {
