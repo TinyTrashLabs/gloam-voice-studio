@@ -22,6 +22,11 @@ Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights ar
 - **Model Downloads** — Download weights in-app with progress indication. Automatic preflight storage check.
 - **Local API Server** — Optional OpenAI-compatible HTTP server (loopback-only, port 8790 by default) for programmatic access.
 - **Sandbox** — Minimal entitlements; data lives in Application Support and Caches directories.
+- **Speech-to-text, fully on-device** — reference clips auto-transcribe when you
+  record or drop them, every editor has a dictate button, and File → Transcribe
+  Audio… (⇧⌘T) converts any audio file to text. Apple's built-in recognizer by
+  default; downloadable Whisper models (Settings → Speech) for harder audio.
+  Audio never leaves the Mac.
 
 ### Voice Lab
 
@@ -37,9 +42,10 @@ Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights ar
 ```
 App (SwiftUI)
   ├─ EngineKit (synthesis engine, model loading)
-  └─ StudioKit (voice library, history store, .gvoice I/O, WAV encoding)
-       └─ mlx-audio-swift + EngineKit/MLXSpeechModel (on-device synthesis)
-       └─ HuggingFace (model downloading)
+  ├─ StudioKit (voice library, history store, .gvoice I/O, WAV encoding)
+  │    └─ mlx-audio-swift + EngineKit/MLXSpeechModel (on-device synthesis)
+  │    └─ HuggingFace (model downloading)
+  └─ SpeechKit (on-device speech-to-text: Apple speech / WhisperKit)
 ```
 
 The `AppModel` owns the engine, voices store, history store, and optional API server. UI-test mode swaps in a fake provider for fast XCUITest runs without weights.
