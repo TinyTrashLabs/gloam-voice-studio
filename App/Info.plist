@@ -24,5 +24,25 @@
 	<string>public.app-category.music</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Gloam records short reference clips so you can clone voices you have the rights to use. Audio never leaves this Mac.</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Gloam voice pack</string>
+			<key>UTTypeIdentifier</key>
+			<string>fm.gloam.gvoice</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>gvoice</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>
