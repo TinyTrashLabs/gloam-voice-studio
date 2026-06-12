@@ -16,6 +16,8 @@ public struct FakeTranscriber: Transcriber {
         Transcript(text: batchResult, language: "en")
     }
 
+    /// NOTE: updates are emitted only after `audio` finishes — callers must
+    /// finish the audio stream (stop the mic) or the stream waits forever.
     public func liveTranscribe(audio: AsyncStream<AudioChunk>)
         -> AsyncThrowingStream<TranscriptUpdate, Error> {
         let updates = liveUpdates

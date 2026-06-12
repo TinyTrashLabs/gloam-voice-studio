@@ -13,7 +13,7 @@ final class TranscriberTests: XCTestCase {
         XCTAssertEqual(transcript.text, "hello from the fake")
     }
 
-    func testWavDataConvenienceWritesTempFileAndCleansUp() async throws {
+    func testWavDataConvenienceReturnsTranscript() async throws {
         let fake = FakeTranscriber(batchResult: "via data")
         let transcript = try await fake.transcribe(wavData: Data([1, 2, 3]))
         XCTAssertEqual(transcript.text, "via data")
@@ -32,6 +32,11 @@ final class TranscriberTests: XCTestCase {
         }
         XCTAssertEqual(updates,
                        [.partial("hel"), .partial("hello"), .final("hello world")])
+    }
+
+    func testAudioChunkEmptySamplesReturnsNilBuffer() {
+        let chunk = AudioChunk(samples: [], sampleRate: 16000)
+        XCTAssertNil(chunk.pcmBuffer())
     }
 
     func testAudioChunkToPCMBufferRoundTrip() throws {

@@ -15,7 +15,8 @@ public struct AudioChunk: Equatable, Sendable {
 
     /// Rebuild a float32 mono AVAudioPCMBuffer (for SFSpeech append()).
     public func pcmBuffer() -> AVAudioPCMBuffer? {
-        guard let format = AVAudioFormat(
+        guard !samples.isEmpty,
+              let format = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
                   channels: 1, interleaved: false),
               let buffer = AVAudioPCMBuffer(
