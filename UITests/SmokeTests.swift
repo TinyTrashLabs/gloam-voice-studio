@@ -143,6 +143,26 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testTranscribeWindowProducesText() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+        // consent-accept guard: copy from existing tests
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) {
+            consentButton.click()
+        }
+        app.typeKey("t", modifierFlags: [.command, .shift])
+        let sample = app.buttons["transcribe-sample"]
+        XCTAssertTrue(sample.waitForExistence(timeout: 5))
+        sample.click()
+        let result = app.textViews["transcribe-result"]
+        let predicate = NSPredicate(format: "value CONTAINS 'fake transcript'")
+        expectation(for: predicate, evaluatedWith: result)
+        waitForExpectations(timeout: 10)
+    }
+
+    @MainActor
     func testCreateVoiceGeneratePlayHistory() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest"]

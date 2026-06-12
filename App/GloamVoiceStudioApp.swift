@@ -22,13 +22,27 @@ struct GloamVoiceStudioApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Divider()
+                TranscribeMenuButton()
                 Button("Migrate from gloam-voice-engine…") {
                     NotificationCenter.default.post(name: .gloamMigrate, object: nil)
                 }
             }
         }
+        Window("Transcribe Audio", id: "transcribe") {
+            TranscribeWindow()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
         Settings {
             SettingsView().environment(model)
         }
+    }
+}
+
+private struct TranscribeMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Transcribe Audio…") { openWindow(id: "transcribe") }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
     }
 }
