@@ -16,10 +16,39 @@ struct VoiceEditorSheet: View {
     @State private var error: String?
     @State private var transcribing = false
     @State private var transcriptNote: String?
+    @State private var avatarVersion = 0
+    @State private var avatarImporterPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(editingSlug == nil ? "New Voice" : "Edit Voice").font(.title3.bold())
+            HStack(spacing: 12) {
+                let _ = avatarVersion  // depend on version so view refreshes after save/remove
+                VoiceAvatarView(
+                    slug: editingSlug ?? "",
+                    name: name,
+                    avatarURL: editingSlug.flatMap { model.voices.avatarURL($0) },
+                    size: 72)
+                VStack(alignment: .leading, spacing: 6) {
+                    if editingSlug != nil {
+                        Button("Upload Photo…") { avatarImporterPresented = true }
+                            .accessibilityIdentifier("avatar-upload")
+                        if let slug = editingSlug, model.voices.avatarURL(slug) != nil {
+                            Button("Remove") {
+                                try? model.voices.removeAvatar(slug)
+                                avatarVersion += 1
+                            }
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("avatar-remove")
+                        }
+                    } else {
+                        Text("Save voice first\nto upload a photo")
+                            .font(.caption)
+                            .foregroundStyle(Brand.fgFaint)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+            }
             TextField("Name", text: $name)
                 .accessibilityIdentifier("voice-name")
             Text("Reference transcript (what the clip says — improves cloning)")
@@ -81,6 +110,21 @@ struct VoiceEditorSheet: View {
             }
         }
         .onAppear { loadExisting() }
+        .fileImporter(
+            isPresented: $avatarImporterPresented,
+            allowedContentTypes: [.png, .jpeg, .heic, .image],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result,
+                  let url = urls.first,
+                  let slug = editingSlug else { return }
+            url.startAccessingSecurityScopedResource()
+            defer { url.stopAccessingSecurityScopedResource() }
+            guard let raw = try? Data(contentsOf: url),
+                  let png = AvatarProcessor.makeAvatarPNG(from: raw) else { return }
+            try? model.voices.saveAvatar(slug, pngData: png)
+            avatarVersion += 1
+        }
     }
 
     private func autoTranscribe() {

@@ -144,4 +144,38 @@ final class VoiceLibraryTests: XCTestCase {
             XCTAssertEqual($0 as? StudioError, .voiceNotFound(slug: "nope"))
         }
     }
+
+    // MARK: avatar
+
+    func testAvatarURLNilWhenAbsent() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        XCTAssertNil(lib.avatarURL("cruz"))
+    }
+
+    func testSaveAndRetrieveAvatar() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        let png = Data([0x89, 0x50, 0x4E, 0x47]) // PNG magic bytes
+        try lib.saveAvatar("cruz", pngData: png)
+        let url = lib.avatarURL("cruz")
+        XCTAssertNotNil(url)
+        XCTAssertEqual(try Data(contentsOf: url!), png)
+    }
+
+    func testSaveAvatarUnknownSlugThrows() {
+        XCTAssertThrowsError(try lib.saveAvatar("nope", pngData: Data([1]))) {
+            XCTAssertEqual($0 as? StudioError, .voiceNotFound(slug: "nope"))
+        }
+    }
+
+    func testRemoveAvatarDeletesFile() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        try lib.saveAvatar("cruz", pngData: Data([0x89, 0x50, 0x4E, 0x47]))
+        try lib.removeAvatar("cruz")
+        XCTAssertNil(lib.avatarURL("cruz"))
+    }
+
+    func testRemoveAvatarNoErrorWhenAbsent() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        XCTAssertNoThrow(try lib.removeAvatar("cruz"))
+    }
 }

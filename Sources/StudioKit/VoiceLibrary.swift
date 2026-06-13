@@ -132,6 +132,26 @@ public struct VoiceLibrary: Sendable {
         return meta
     }
 
+    public func avatarURL(_ slug: String) -> URL? {
+        let url = directory.appendingPathComponent(slug).appendingPathComponent("avatar.png")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    public func saveAvatar(_ slug: String, pngData: Data) throws {
+        let voiceDir = directory.appendingPathComponent(slug)
+        guard FileManager.default.fileExists(atPath: voiceDir.path) else {
+            throw StudioError.voiceNotFound(slug: slug)
+        }
+        try pngData.write(to: voiceDir.appendingPathComponent("avatar.png"))
+    }
+
+    public func removeAvatar(_ slug: String) throws {
+        let url = directory.appendingPathComponent(slug).appendingPathComponent("avatar.png")
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
     func write(_ meta: VoiceMeta, to voiceDir: URL) throws {
         try JSONEncoder().encode(meta).write(to: voiceDir.appendingPathComponent("meta.json"))
     }
