@@ -38,7 +38,7 @@ struct HistoryView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.top, 12)
+            .padding(.top, 38)
             .padding(.bottom, 6)
             TextField("Filter — text, voice, model…", text: $query)
                 .textFieldStyle(.roundedBorder)
@@ -54,23 +54,32 @@ struct HistoryView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(entries, id: \.id) { entry in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(entry.text ?? "—").lineLimit(2).truncationMode(.tail)
-                            tagRow(entry)
-                        }
-                        Spacer()
-                        Button("Reuse") { reuse(entry) }
-                            .accessibilityIdentifier("reuse-entry")
-                        Button(player.playingID == entry.id ? "Stop" : "Play") {
-                            if let url = try? model.history.wavURL(entry.id) {
-                                player.toggle(id: entry.id, url: url)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(entry.text ?? "—").lineLimit(2).truncationMode(.tail)
+                        tagRow(entry)
+                        HStack(spacing: 8) {
+                            Button("Load") { reuse(entry) }
+                                .accessibilityIdentifier("reuse-entry")
+                                .help("Load this take's text, voice & settings back into the editor")
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                            Button {
+                                if let url = try? model.history.wavURL(entry.id) {
+                                    player.toggle(id: entry.id, url: url)
+                                }
+                            } label: {
+                                Image(systemName: player.playingID == entry.id ? "stop.fill" : "play.fill")
                             }
+                            .accessibilityIdentifier("play-entry")
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            Button(role: .destructive) {
+                                pendingDelete = entry
+                            } label: { Image(systemName: "trash") }
+                            .accessibilityIdentifier("delete-entry")
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
                         }
-                        Button(role: .destructive) {
-                            pendingDelete = entry
-                        } label: { Image(systemName: "trash") }
-                        .accessibilityIdentifier("delete-entry")
                     }
                 }
             }
@@ -128,7 +137,6 @@ struct HistoryView: View {
             .background(Capsule().fill(tint.opacity(0.12)))
             .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 1))
             .foregroundStyle(tint == Brand.accent ? Brand.accent : Brand.fgDim)
-            .lineLimit(1)
     }
 
     private func durationCaption(_ entry: HistoryEntry) -> String {

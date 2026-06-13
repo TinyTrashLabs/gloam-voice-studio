@@ -20,7 +20,7 @@ struct ContentView: View {
                 // Floating drawer: elevated surface + leading shadow so it reads
                 // as sliding over the bench rather than mirroring the library.
                 HistoryView()
-                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 320)
+                    .frame(minWidth: 260, idealWidth: 360, maxWidth: 360)
                     .layoutPriority(-1)
                     .background(Brand.ink2.opacity(0.6))
                     .background(.ultraThinMaterial)
@@ -69,15 +69,42 @@ struct ContentView: View {
             ModelManagerView().environment(model)
         }
 
-        // 3. API server indicator
+        // 3. API server indicator (clickable — opens Settings)
         if model.serverEnabled {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 6, height: 6)
-                Text("API :\(model.serverPort)")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(Brand.fgDim)
+            if #available(macOS 14, *) {
+                SettingsLink {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                        Text("API :\(model.serverPort)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Brand.fgDim)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("API server running on port \(model.serverPort) — open settings")
+                .accessibilityIdentifier("api-indicator")
+            } else {
+                Button {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                } label: {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                        Text("API :\(model.serverPort)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Brand.fgDim)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("API server running on port \(model.serverPort) — open settings")
+                .accessibilityIdentifier("api-indicator")
             }
         }
 
