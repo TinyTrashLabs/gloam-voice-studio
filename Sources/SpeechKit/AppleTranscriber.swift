@@ -83,6 +83,11 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
             // flavored error after endAudio) must be dropped.
             let settled = ResumeGuard()
             let holder = TaskHolder()
+            // On-device recognition closes an utterance after a pause —
+            // signalled by speechRecognitionMetadata on the result — and the
+            // next partial restarts from empty. Each closed utterance must be
+            // committed as .final or the post-pause partial erases it.
+            let lastUtterance = TextBox()
             holder.task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
                     if settled.claim() {
@@ -92,14 +97,21 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
                     return
                 }
                 guard let result else { return }
+                let text = result.bestTranscription.formattedString
                 if result.isFinal {
                     if settled.claim() {
                         holder.task = nil
-                        continuation.yield(.final(result.bestTranscription.formattedString))
+                        // With no speech after the last utterance commit, the
+                        // terminal result re-delivers that utterance's text —
+                        // committing it again would duplicate it.
+                        continuation.yield(.final(text == lastUtterance.get() ? "" : text))
                         continuation.finish()
                     }
+                } else if result.speechRecognitionMetadata != nil {
+                    lastUtterance.set(text)
+                    continuation.yield(.final(text))
                 } else {
-                    continuation.yield(.partial(result.bestTranscription.formattedString))
+                    continuation.yield(.partial(text))
                 }
             }
 
@@ -180,6 +192,14 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
 /// Keeps an SFSpeechRecognitionTask alive until its callback resolves.
 final class TaskHolder: @unchecked Sendable {
     var task: SFSpeechRecognitionTask?
+}
+
+/// Lock-protected string shared with the recognition callback queue.
+final class TextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+    func set(_ value: String) { lock.lock(); text = value; lock.unlock() }
+    func get() -> String { lock.lock(); defer { lock.unlock() }; return text }
 }
 
 /// Tiny lock so completion-handler APIs resume a continuation exactly once.

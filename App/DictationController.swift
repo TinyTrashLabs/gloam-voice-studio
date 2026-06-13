@@ -39,8 +39,9 @@ final class DictationController {
         let base = getText()
         task = Task { @MainActor in
             // Session-local text state: a later session can never cross wires.
-            var committed = base.isEmpty || base.hasSuffix(" ") || base.hasSuffix("\n")
-                ? base : base + " "
+            // Separators are added lazily by joined(_:), so committed is the
+            // base text untouched until the first utterance lands.
+            var committed = base
             guard await speech.ensureAuthorized() else {
                 self.fail("Speech permission denied.", token: token); return
             }
@@ -65,12 +66,21 @@ final class DictationController {
             }
             let transcriber = speech.makeTranscriber()
             do {
+                // Utterance commits arrive as repeated .finals (one per pause)
+                // — join them with a space, added lazily so the field never
+                // carries a trailing space.
+                func joined(_ text: String) -> String {
+                    committed.isEmpty || committed.hasSuffix(" ") || committed.hasSuffix("\n")
+                        ? text : " " + text
+                }
                 for try await update in transcriber.liveTranscribe(audio: audio) {
                     switch update {
                     case .partial(let text):
-                        setText(committed + text)
-                    case .final(let text):
-                        committed += text
+                        setText(committed + joined(text))
+                    case .final(let text) where !text.isEmpty:
+                        committed += joined(text)
+                        setText(committed)
+                    case .final:
                         setText(committed)
                     }
                 }

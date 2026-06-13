@@ -23,12 +23,17 @@ public final class MicCapture {
         }
         let (stream, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         self.continuation = continuation
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+        // The tap fires on AVFAudio's private queue. It must be @Sendable so
+        // it does NOT inherit this class's @MainActor isolation — the runtime
+        // isolation check would trap on the first buffer. Capture the sample
+        // rate as a plain Double, not the non-Sendable AVAudioFormat.
+        let sampleRate = format.sampleRate
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { @Sendable buffer, _ in
             guard let channel = buffer.floatChannelData?[0] else { return }
             let samples = Array(UnsafeBufferPointer(
                 start: channel, count: Int(buffer.frameLength)))
             continuation.yield(AudioChunk(samples: samples,
-                                          sampleRate: format.sampleRate))
+                                          sampleRate: sampleRate))
         }
         engine.prepare()
         do { try engine.start() } catch {

@@ -19,6 +19,7 @@ struct GloamVoiceStudioApp: App {
                 .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
         }
+        .defaultSize(width: 1280, height: 860)
         .commands {
             CommandGroup(after: .newItem) {
                 Divider()
