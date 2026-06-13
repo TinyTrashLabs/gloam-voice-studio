@@ -72,11 +72,18 @@ private struct LineRow: View {
                 DictationButton(text: Binding(
                     get: { line.text },
                     set: { text in script.update(line.id) { $0.text = text } }))
-                Button { Task { await script.generate(lineID: line.id) } } label: {
-                    Image(systemName: "waveform.badge.plus")
+                let lineStatus = script.status[line.id] ?? .idle
+                if case .generating = lineStatus {
+                    ProgressView().controlSize(.small)
+                } else if case .queued = lineStatus {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button { Task { await script.generate(lineID: line.id) } } label: {
+                        Image(systemName: "waveform.badge.plus")
+                    }
+                    .help("Generate this line")
+                    .accessibilityIdentifier("generate-line")
                 }
-                .help("Generate this line")
-                .accessibilityIdentifier("generate-line")
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }

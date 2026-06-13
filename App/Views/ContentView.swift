@@ -4,19 +4,32 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var modelsPopover = false
+    @State private var historyVisible = false
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView {
+        HStack(spacing: 0) {
             VoiceSidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-                .scrollContentBackground(.hidden)
+                .frame(width: 248)
                 .background(Brand.ink2)
-        } detail: {
+            Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
             StudioView()
+                .frame(maxWidth: .infinity)
                 .background(Brand.ink)
-                .toolbar { mainToolbar }
+            if historyVisible {
+                // Floating drawer: elevated surface + leading shadow so it reads
+                // as sliding over the bench rather than mirroring the library.
+                HistoryView()
+                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 320)
+                    .layoutPriority(-1)
+                    .background(Brand.ink2.opacity(0.6))
+                    .background(.ultraThinMaterial)
+                    .shadow(color: .black.opacity(0.4), radius: 14, x: -8, y: 0)
+                    .transition(.move(edge: .trailing))
+            }
         }
+        .animation(.easeInOut(duration: 0.15), value: historyVisible)
+        .toolbar { mainToolbar }
         .sheet(isPresented: .constant(!model.didAcceptCloneConsent)) {
             ConsentSheet()
         }
@@ -68,7 +81,18 @@ struct ContentView: View {
             }
         }
 
-        // 4. Settings gear
+        // 4. History panel toggle
+        Button {
+            historyVisible.toggle()
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(historyVisible ? Brand.accent : Color.primary)
+        }
+        .accessibilityIdentifier("open-history")
+        .help("Toggle the history panel (⌘Y)")
+        .keyboardShortcut("y", modifiers: .command)
+
+        // 5. Settings gear
         if #available(macOS 14, *) {
             SettingsLink {
                 Image(systemName: "gearshape")
@@ -97,7 +121,7 @@ struct ContentView: View {
                 Text("loaded")
             case .ready:
                 Circle().fill(Brand.fgFaint).frame(width: 6, height: 6)
-                Text("ready")
+                Text("not loaded")
             case .downloading(let fraction):
                 ProgressView(value: fraction)
                     .progressViewStyle(.circular)
@@ -171,7 +195,7 @@ struct ModelManagerView: View {
             case .notDownloaded, .failed:
                 SettingsLink { Text("Settings…").font(.caption) }
             }
-            if model.modelOpInFlight && !isLoaded && downloadState == .ready {
+            if model.loadingBackend == backend {
                 ProgressView().controlSize(.small)
             }
         }

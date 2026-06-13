@@ -26,36 +26,33 @@ struct TagChipsView: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            // Bounded scroll: chip rows must never force the stack taller
-            // than the window (they'd overflow past the title bar).
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Self.groups, id: \.label) { group in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(group.label.uppercased())
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Brand.fgFaint)
-                            FlowLayout(spacing: 6) {
-                                ForEach(group.tags, id: \.self) { tag in
-                                    chip(tag, color: group.color)
-                                }
+            // The bench itself scrolls (StudioView wraps it in a ScrollView),
+            // so the chips lay out at full height — no inner scroll region.
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Self.groups, id: \.label) { group in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(group.label.uppercased())
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Brand.fgFaint)
+                        FlowLayout(spacing: 6) {
+                            ForEach(group.tags, id: \.self) { tag in
+                                chip(tag, color: group.color)
                             }
                         }
                     }
-                    HStack(spacing: 6) {
-                        TextField("custom — free-form works, e.g. whisper in small voice",
-                                  text: $customTag)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 320)
-                            .onSubmit { insertCustom() }
-                        Button("+ Tag") { insertCustom() }
-                            .disabled(customTag.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 6)
+                HStack(spacing: 6) {
+                    TextField("custom — free-form works, e.g. whisper in small voice",
+                              text: $customTag)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 320)
+                        .onSubmit { insertCustom() }
+                    Button("+ Tag") { insertCustom() }
+                        .disabled(customTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
-            .frame(maxHeight: 200)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6)
         } label: {
             Label("Inject tags — click to append", systemImage: "tag")
         }
