@@ -1,0 +1,236 @@
+[
+  {
+    "id": "nabucasa-bg_bg-dimitar",
+    "name": "Dimitar (bg_BG)",
+    "language": "bg_BG",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/bg_BG/dimitar/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-de_de-kerstin",
+    "name": "Kerstin (de_DE)",
+    "language": "de_DE",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/de_DE/kerstin/de_rhasspy-0004.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-en_us-joe",
+    "name": "Joe",
+    "language": "en_US",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/en_US/joe/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-en_us-kathleen",
+    "name": "Kathleen",
+    "language": "en_US",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/en_US/kathleen/arctic_a0001_1592748574.mp3",
+    "refText": "Author of the danger trail, Philip Steels, etc."
+  },
+  {
+    "id": "nabucasa-es_es-dave",
+    "name": "Dave (es_ES)",
+    "language": "es_ES",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/es_ES/dave/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-hu_hu-anna",
+    "name": "Anna (hu_HU)",
+    "language": "hu_HU",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/hu_HU/anna/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-hu_hu-berta",
+    "name": "Berta (hu_HU)",
+    "language": "hu_HU",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/hu_HU/berta/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-hu_hu-imre",
+    "name": "Imre (hu_HU)",
+    "language": "hu_HU",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/hu_HU/imre/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-it_it-paola",
+    "name": "Paola (it_IT)",
+    "language": "it_IT",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/it_IT/paola/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-ne_np-chitwan",
+    "name": "Chitwan (ne_NP)",
+    "language": "ne_NP",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/ne_NP/chitwan/0.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-nl_be-flemishguy",
+    "name": "Flemishguy (nl_BE)",
+    "language": "nl_BE",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/nl_BE/flemishguy/nl_rhasspy_1_1602428220.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-nl_be-nathalie",
+    "name": "Nathalie (nl_BE)",
+    "language": "nl_BE",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/nl_BE/nathalie/nl_rhasspy_1.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-nl_nl-alex",
+    "name": "Alex (nl_NL)",
+    "language": "nl_NL",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/nl_NL/alex/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-nl_nl-pim",
+    "name": "Pim (nl_NL)",
+    "language": "nl_NL",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/nl_NL/pim/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-nl_nl-ronnie",
+    "name": "Ronnie (nl_NL)",
+    "language": "nl_NL",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/nl_NL/ronnie/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pl_pl-darkman",
+    "name": "Darkman (pl_PL)",
+    "language": "pl_PL",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pl_PL/darkman/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pl_pl-gosia",
+    "name": "Gosia (pl_PL)",
+    "language": "pl_PL",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pl_PL/gosia/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pt_br-cadu",
+    "name": "Cadu (pt_BR)",
+    "language": "pt_BR",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pt_BR/cadu/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pt_br-faber",
+    "name": "Faber (pt_BR)",
+    "language": "pt_BR",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pt_BR/faber/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pt_br-jeff",
+    "name": "Jeff (pt_BR)",
+    "language": "pt_BR",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pt_BR/jeff/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-pt_pt-tugao",
+    "name": "Tugão (pt_PT)",
+    "language": "pt_PT",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/pt_PT/tug%C3%A3o/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-ro_ro-mihai",
+    "name": "Mihai (ro_RO)",
+    "language": "ro_RO",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/ro_RO/mihai/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-ru_ru-denis",
+    "name": "Denis (ru_RU)",
+    "language": "ru_RU",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/ru_RU/denis/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-ru_ru-dmitri",
+    "name": "Dmitri (ru_RU)",
+    "language": "ru_RU",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/ru_RU/dmitri/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-sk_sk-lili",
+    "name": "Lili (sk_SK)",
+    "language": "sk_SK",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/sk_SK/lili/0000000001.mp3",
+    "refText": ""
+  },
+  {
+    "id": "nabucasa-zh_cn-chaowen",
+    "name": "Chaowen (zh_CN)",
+    "language": "zh_CN",
+    "license": "CC0",
+    "attribution": "NabuCasa/voice-datasets",
+    "audioURL": "https://raw.githubusercontent.com/NabuCasa/voice-datasets/master/zh_CN/chaowen/0000000001.mp3",
+    "refText": ""
+  }
+]
