@@ -12,6 +12,7 @@ struct StudioView: View {
     @Environment(AppModel.self) private var model
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
+    @State private var voicePickerOpen = false
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
 
     private var mode: StudioMode {
@@ -119,24 +120,11 @@ struct StudioView: View {
         // ── VOICE picker ────────────────────────────────────────────────────
         zoneLabel("VOICE")
         let voices = model.voices.list()
-        Menu {
-            ForEach(voices, id: \.slug) { voice in
-                Button {
-                    model.selectedVoiceSlug = voice.slug
-                } label: {
-                    HStack(spacing: 6) {
-                        VoiceAvatarView(
-                            slug: voice.slug,
-                            name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
-                            size: 16)
-                        Text(voice.name)
-                    }
-                }
-            }
-            if voices.isEmpty {
-                Text("No voices available").foregroundStyle(Brand.fgDim)
-            }
+        // Custom popover dropdown (not a native Menu): AppKit menus flatten
+        // custom SwiftUI views, so VoiceAvatarView collapsed to a bare monogram
+        // and names dropped. A popover renders full SwiftUI, avatars included.
+        Button {
+            voicePickerOpen.toggle()
         } label: {
             HStack(spacing: 6) {
                 if let slug = model.selectedVoiceSlug,
@@ -162,9 +150,12 @@ struct StudioView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 1))
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .fixedSize()
         .accessibilityIdentifier("voice-picker")
+        .popover(isPresented: $voicePickerOpen, arrowEdge: .bottom) {
+            voicePickerList(voices)
+        }
 
         // ── WRITE zone ──────────────────────────────────────────────────────
         zoneLabel("WRITE")
@@ -270,6 +261,53 @@ struct StudioView: View {
             }
         }
         .id("variants-anchor")
+    }
+
+    /// Popover list for the voice picker: avatar + name per row, with a
+    /// checkmark on the current selection. Rendered in a popover so the custom
+    /// avatar views actually draw (native menus flatten them).
+    @ViewBuilder
+    private func voicePickerList(_ voices: [VoiceMeta]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if voices.isEmpty {
+                Text("No voices yet — add one in the sidebar.")
+                    .font(.callout)
+                    .foregroundStyle(Brand.fgDim)
+                    .padding(10)
+            }
+            ForEach(voices, id: \.slug) { voice in
+                let selected = model.selectedVoiceSlug == voice.slug
+                Button {
+                    model.selectedVoiceSlug = voice.slug
+                    voicePickerOpen = false
+                } label: {
+                    HStack(spacing: 8) {
+                        VoiceAvatarView(
+                            slug: voice.slug,
+                            name: voice.name,
+                            avatarURL: model.voices.avatarURL(voice.slug),
+                            size: 22)
+                        Text(voice.name).foregroundStyle(Brand.fg)
+                        Spacer(minLength: 12)
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Brand.accent)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(selected ? Color.white.opacity(0.07) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .frame(width: 240)
+        .background(Brand.ink2)
     }
 
     /// Tiny monospaced zone eyebrow label.

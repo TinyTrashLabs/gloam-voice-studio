@@ -18,6 +18,12 @@ struct GloamVoiceStudioApp: App {
                 .environment(model)
                 .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
+                // Empty the window title — the GLOAM.FM lockup in the sidebar is
+                // the brand, so the OS title text is redundant. (navigationTitle
+                // empties the text but keeps the titlebar layout, so the toolbar
+                // stays on the right; .windowStyle(.hiddenTitleBar) would shove
+                // the toolbar to the leading edge.)
+                .navigationTitle("")
         }
         .defaultSize(width: 1280, height: 860)
         .commands {

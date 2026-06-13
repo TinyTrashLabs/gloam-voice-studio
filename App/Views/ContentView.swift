@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var historyVisible = false
+    @State private var modelPickerOpen = false
 
     var body: some View {
         @Bindable var model = model
@@ -34,163 +35,212 @@ struct ContentView: View {
         }
     }
 
+    // macOS merges all automatic toolbar items into ONE "Liquid Glass" capsule.
+    // We don't draw our own pill backgrounds (that double-chromed and bled over
+    // the OS capsule). On macOS 26+, ToolbarSpacer(.fixed) splits the capsule
+    // into separate glass pills — the native way to separate the model chip, the
+    // API chip, and the icon buttons. On older macOS the spacers are absent and
+    // the items share one capsule (acceptable fallback).
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
+        // 1+2. Model chooser — a Button + popover, NOT a native Menu. Menus
+        //      rescale the status dot to the default control icon size (so it
+        //      never matched the API dot) and flatten custom views. A popover
+        //      renders full SwiftUI, so this chip and the API chip stay identical.
+        ToolbarItem(placement: .automatic) {
+            Button { modelPickerOpen.toggle() } label: { modelStatusChip }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("backend-picker")
+                .help("Pick model · load/unload · memory")
+                .popover(isPresented: $modelPickerOpen, arrowEdge: .bottom) { modelPickerList }
+                .task {
+                    model.downloads.refresh()
+                    await model.refreshEngineStatus()
+                }
+        }
+
+        if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
+
+        // 3. API server indicator — clicking selects the API Server tab first
+        //    (via shared AppStorage) so Settings opens there, not on whatever
+        //    tab was last viewed.
+        ToolbarItem(placement: .automatic) {
+            SettingsLink { apiIndicatorLabel }
+                .buttonStyle(.plain)
+                .help(apiIndicatorHelp)
+                .accessibilityIdentifier("api-indicator")
+                .simultaneousGesture(TapGesture().onEnded {
+                    UserDefaults.standard.set(SettingsTab.api.rawValue, forKey: "settingsTab")
+                })
+        }
+
+        if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
+
+        // 4+5. History toggle + settings gear share one pill (icon cluster).
         ToolbarItemGroup(placement: .automatic) {
-            toolbarContent
+            Button {
+                historyVisible.toggle()
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(historyVisible ? Brand.accent : Brand.fgDim)
+            }
+            .accessibilityIdentifier("open-history")
+            .help("Toggle the history panel (⌘Y)")
+            .keyboardShortcut("y", modifiers: .command)
+
+            SettingsLink {
+                Image(systemName: "gearshape")
+            }
+            .accessibilityIdentifier("open-settings")
         }
     }
 
-    @ViewBuilder
-    private var toolbarContent: some View {
-        @Bindable var model = model
+    // Models offered in the chooser, in priority order.
+    private var pickerBackends: [BackendID] { [.fishS2Pro, .chatterboxTurbo, .chatterbox] }
 
-        // 1+2. Merged backend picker + model management in one Menu
-        Menu {
-            // Pick a model — tapping it selects AND loads it (one resident at a
-            // time). Regular `chatterbox` is kept but marked experimental: its T3
-            // can fail to emit end-of-speech and repeat the line; turbo supersedes it.
-            ForEach([BackendID.fishS2Pro, .chatterboxTurbo, .chatterbox], id: \.self) { b in
+    /// Display name (+ "experimental" for regular chatterbox).
+    private func modelDisplayName(_ b: BackendID) -> String {
+        b == .chatterbox ? "\(b.rawValue) (experimental)" : b.rawValue
+    }
+
+    /// Short status phrase for a backend, shown under its name in the popover.
+    private func modelStateText(_ b: BackendID) -> String {
+        let loaded = model.loadedBackend == b
+        switch model.downloads.state(for: b) {
+        case .ready where loaded: return "loaded"
+        case .ready: return "not loaded"
+        case .downloading(let f): return "downloading \(Int(f * 100))%"
+        case .notDownloaded: return "not downloaded"
+        case .failed: return "failed"
+        }
+    }
+
+    /// One status-dot color used everywhere (chip + popover rows + API chip):
+    /// green = loaded/active, dim = on disk not loaded, else the download state.
+    private func statusDot(for b: BackendID) -> Color {
+        let loaded = model.loadedBackend == b
+        switch model.downloads.state(for: b) {
+        case .ready where loaded: return .green
+        case .ready: return Brand.fgFaint
+        case .downloading: return .yellow
+        case .notDownloaded: return .orange
+        case .failed: return .red
+        }
+    }
+
+    /// 7pt status dot — the single source of truth for every status dot.
+    private func dot(_ color: Color) -> some View {
+        Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(color)
+    }
+
+    /// API server chip: green dot + full loopback address when running, dim dot
+    /// + "API off" when not. No custom pill — the OS toolbar capsule is the
+    /// chrome. Clicking opens the API Server settings tab.
+    @ViewBuilder
+    private var apiIndicatorLabel: some View {
+        let on = model.serverEnabled
+        HStack(spacing: 5) {
+            dot(on ? .green : Brand.fgFaint)
+            Text(verbatim: on ? "127.0.0.1:\(model.serverPort)" : "API off")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(Brand.fgDim)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        // Internal padding so the dot sits inboard of the OS capsule's rounded
+        // edge (otherwise it hugs the curve and reads as bleeding over).
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
+    }
+
+    private var apiIndicatorHelp: String {
+        model.serverEnabled
+            ? "API server at http://127.0.0.1:\(model.serverPort) — open settings"
+            : "API server off — open settings to enable"
+    }
+
+    /// The toolbar chip: status dot + current backend name + chevron. No custom
+    /// pill — the OS toolbar capsule is the chrome.
+    @ViewBuilder
+    private var modelStatusChip: some View {
+        HStack(spacing: 5) {
+            dot(statusDot(for: model.backend))
+            Text(model.backend.rawValue)
+            if model.modelOpInFlight { ProgressView().controlSize(.mini) }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Brand.fgFaint)
+        }
+        .font(.caption)
+        .foregroundStyle(Brand.fgDim)
+        .lineLimit(1)
+        // Internal padding so the dot sits inboard of the OS capsule's rounded
+        // edge (otherwise it hugs the curve and reads as bleeding over).
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
+    }
+
+    /// Popover contents for the model chooser: one row per backend (dot + name +
+    /// status + checkmark when loaded), then Unload + memory. Selecting a ready
+    /// model loads it immediately.
+    @ViewBuilder
+    private var modelPickerList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(pickerBackends, id: \.self) { b in
+                let loaded = model.loadedBackend == b
                 Button {
                     model.backend = b
                     if model.downloads.state(for: b) == .ready {
                         Task { await model.loadModel(b) }
                     }
+                    modelPickerOpen = false
                 } label: {
-                    if model.backend == b {
-                        Label(modelMenuTitle(b), systemImage: "checkmark")
-                    } else {
-                        Text(modelMenuTitle(b))
+                    HStack(spacing: 8) {
+                        dot(statusDot(for: b))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(modelDisplayName(b)).foregroundStyle(Brand.fg)
+                            Text(modelStateText(b))
+                                .font(.caption2).foregroundStyle(Brand.fgDim)
+                        }
+                        Spacer(minLength: 12)
+                        if loaded {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Brand.accent)
+                        }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(model.backend == b ? Color.white.opacity(0.06) : .clear))
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .disabled(model.modelOpInFlight)
             }
-            Divider()
+            Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
             if let loaded = model.loadedBackend {
-                Button("Unload \(loaded.rawValue)") {
+                Button {
                     Task { await model.unloadModel() }
+                    modelPickerOpen = false
+                } label: {
+                    Text("Unload \(loaded.rawValue)")
+                        .foregroundStyle(Brand.fgDim)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .disabled(model.isGenerating || model.modelOpInFlight)
             }
             Text(String(format: "App memory: %.2f GB", model.memGB))
-        } label: {
-            modelStatusChip
+                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                .padding(.horizontal, 8).padding(.top, 2)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .accessibilityIdentifier("backend-picker")
-        .help("Pick model · load/unload · memory")
-        .task {
-            model.downloads.refresh()
-            await model.refreshEngineStatus()
-        }
-
-        // 3. API server indicator (clickable — opens Settings)
-        if model.serverEnabled {
-            if #available(macOS 14, *) {
-                SettingsLink {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                        Text(verbatim: "API :\(model.serverPort)")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(Brand.fgDim)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                }
-                .buttonStyle(.borderless)
-                .help("API server running on port \(model.serverPort) — open settings")
-                .accessibilityIdentifier("api-indicator")
-            } else {
-                Button {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                } label: {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 6, height: 6)
-                        Text(verbatim: "API :\(model.serverPort)")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(Brand.fgDim)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                }
-                .buttonStyle(.borderless)
-                .help("API server running on port \(model.serverPort) — open settings")
-                .accessibilityIdentifier("api-indicator")
-            }
-        }
-
-        // 4. History panel toggle
-        Button {
-            historyVisible.toggle()
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
-                .foregroundStyle(historyVisible ? Brand.accent : Color.primary)
-        }
-        .accessibilityIdentifier("open-history")
-        .help("Toggle the history panel (⌘Y)")
-        .keyboardShortcut("y", modifiers: .command)
-
-        // 5. Settings gear
-        if #available(macOS 14, *) {
-            SettingsLink {
-                Image(systemName: "gearshape")
-            }
-            .accessibilityIdentifier("open-settings")
-        } else {
-            Button {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .accessibilityIdentifier("open-settings")
-        }
-    }
-
-    /// Per-backend menu row title: name (+ "experimental" for regular chatterbox)
-    /// and its current state.
-    private func modelMenuTitle(_ b: BackendID) -> String {
-        let name = b == .chatterbox ? "\(b.rawValue) (experimental)" : b.rawValue
-        let loaded = model.loadedBackend == b
-        switch model.downloads.state(for: b) {
-        case .ready where loaded: return "\(name) — loaded"
-        case .ready: return "\(name) — tap to load"
-        case .downloading(let f): return "\(name) — \(Int(f * 100))%"
-        case .notDownloaded: return "\(name) — get in Settings"
-        case .failed: return "\(name) — failed"
-        }
-    }
-
-    /// Toolbar menu label: a status dot + the CURRENT backend's name, so you can
-    /// see at a glance which model is selected and whether it's loaded.
-    @ViewBuilder
-    private var modelStatusChip: some View {
-        let loaded = model.loadedBackend == model.backend
-        let dot: Color = {
-            switch model.downloads.state(for: model.backend) {
-            case .ready where loaded: return .green
-            case .ready: return .secondary           // visibly "ready, not loaded"
-            case .downloading: return .yellow
-            case .notDownloaded: return .orange
-            case .failed: return .red
-            }
-        }()
-        HStack(spacing: 4) {
-            // Hollow ring when not loaded, solid green when loaded — clear at a glance.
-            Circle()
-                .fill(loaded ? dot : .clear)
-                .overlay(Circle().stroke(dot, lineWidth: loaded ? 0 : 1.5))
-                .frame(width: 7, height: 7)
-            Text(model.backend.rawValue)
-            if model.modelOpInFlight { ProgressView().controlSize(.mini) }
-        }
-        .font(.caption)
-        .foregroundStyle(Brand.fgDim)
-        .lineLimit(1)
+        .padding(8)
+        .frame(width: 260)
+        .background(Brand.ink2)
     }
 }
 

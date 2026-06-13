@@ -3,13 +3,25 @@ import SpeechKit
 import StudioKit
 import SwiftUI
 
+/// Stable tab identifiers so other UI (e.g. the toolbar API chip) can deep-link
+/// to a specific Settings tab via the shared "settingsTab" AppStorage key.
+enum SettingsTab: String {
+    case backends, speech, api, storage
+}
+
 struct SettingsView: View {
+    @AppStorage("settingsTab") private var tab = SettingsTab.backends.rawValue
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             BackendsSettings().tabItem { Label("Backends", systemImage: "cpu") }
+                .tag(SettingsTab.backends.rawValue)
             SpeechSettings().tabItem { Label("Speech", systemImage: "waveform.and.mic") }
+                .tag(SettingsTab.speech.rawValue)
             ServerSettings().tabItem { Label("API Server", systemImage: "network") }
+                .tag(SettingsTab.api.rawValue)
             StorageSettings().tabItem { Label("Storage", systemImage: "internaldrive") }
+                .tag(SettingsTab.storage.rawValue)
         }
         .frame(width: 560)
         .padding(20)
@@ -121,7 +133,7 @@ struct ServerSettings: View {
                 .disabled(model.serverEnabled)
             Section {
                 Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
-                Text("curl -s http://127.0.0.1:\(model.serverPort)/health")
+                Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
             }

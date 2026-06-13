@@ -23,6 +23,15 @@ struct VoiceSidebarView: View {
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
+            // Brand lockup lives top-left in the sidebar — its proper home,
+            // rather than floating in the bench where it read as misplaced.
+            BrandLockup()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
+            Divider().overlay(Color.white.opacity(0.06))
+
             HStack(alignment: .center) {
                 Text("VOICES")
                     .font(.system(size: 13, weight: .heavy))
@@ -71,10 +80,35 @@ struct VoiceSidebarView: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        // Visible affordances so actions aren't buried in the
-                        // right-click menu: a hover-revealed edit pencil + an
-                        // always-present ⋯ overflow that mirrors the context menu.
-                        if hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug {
+                        // Visible affordances so the common actions aren't buried
+                        // in the ⋯ overflow: an inline play-sample (surfaced per
+                        // request), a hover-revealed edit pencil, then ⋯ for the
+                        // rest. Play stays visible while THIS voice is playing so
+                        // you can stop it without re-hovering.
+                        let isPlaying = refPlayer.playingID == voice.slug
+                        let showControls = hoveredSlug == voice.slug
+                            || model.selectedVoiceSlug == voice.slug
+                        if showControls || isPlaying {
+                            Button { previewRef(voice) } label: {
+                                ZStack {
+                                    if isPlaying {
+                                        EqualizerBars(color: Brand.accent)
+                                    } else {
+                                        Image(systemName: "play.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(Brand.fgDim)
+                                    }
+                                }
+                                .frame(width: 22, height: 22)
+                                .background(Circle()
+                                    .fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
+                                .contentShape(Circle())
+                            }
+                            .buttonStyle(.borderless)
+                            .help(isPlaying ? "Stop preview" : "Play sample")
+                            .accessibilityIdentifier("play-voice")
+                        }
+                        if showControls {
                             Button { editingSlug = voice.slug; editorPresented = true } label: {
                                 Image(systemName: "pencil")
                             }
@@ -155,8 +189,10 @@ struct VoiceSidebarView: View {
     private func voiceActions(_ voice: VoiceMeta) -> some View {
         Button("Edit…") { editingSlug = voice.slug; editorPresented = true }
             .help("Edit voice name and reference audio")
-        Button("Preview Reference") { previewRef(voice) }
-            .help("Play the reference audio for this voice")
+        Button(refPlayer.playingID == voice.slug ? "Stop Sample" : "Play Sample") {
+            previewRef(voice)
+        }
+        .help("Play the reference audio for this voice")
         Button("New Emotion Variant…") {
             variantBase = voice
             editingSlug = nil
@@ -240,5 +276,35 @@ struct VoiceSidebarView: View {
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
+    }
+}
+
+/// Tiny animated equalizer — three accent bars bobbing at staggered rates,
+/// echoing the EQ mark in the GLOAM.FM lockup. Shown in a voice row's play
+/// button while that voice's sample is playing, so "now playing" reads as
+/// motion, not just a swapped icon.
+struct EqualizerBars: View {
+    var color: Color = Brand.accent
+
+    // Per-bar (rest height, peak height, beat duration) — different durations
+    // keep the bars out of sync so the motion feels organic.
+    private let bars: [(min: CGFloat, max: CGFloat, dur: Double)] = [
+        (4, 12, 0.52), (8, 14, 0.38), (3, 10, 0.64),
+    ]
+    @State private var animating = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 2) {
+            ForEach(bars.indices, id: \.self) { i in
+                Capsule(style: .continuous)
+                    .fill(color)
+                    .frame(width: 2.5, height: animating ? bars[i].max : bars[i].min)
+                    .animation(
+                        .easeInOut(duration: bars[i].dur).repeatForever(autoreverses: true),
+                        value: animating)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .onAppear { animating = true }
     }
 }
