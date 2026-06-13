@@ -20,7 +20,7 @@ struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
     @State private var fishSheetShown = false
 
-    private let backends: [BackendID] = [.chatterboxTurbo, .fishS2Pro]
+    private let backends: [BackendID] = [.chatterbox, .chatterboxTurbo, .fishS2Pro]
 
     var body: some View {
         @Bindable var model = model

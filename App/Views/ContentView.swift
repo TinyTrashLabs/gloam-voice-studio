@@ -48,9 +48,9 @@ struct ContentView: View {
         // 1+2. Merged backend picker + model management in one Menu
         Menu {
             // Pick a model — tapping it selects AND loads it (one resident at a
-            // time). Regular `chatterbox` is hidden: its T3 fails end-of-speech;
-            // chatterbox-turbo (distilled) supersedes it.
-            ForEach([BackendID.fishS2Pro, .chatterboxTurbo], id: \.self) { b in
+            // time). Regular `chatterbox` is kept but marked experimental: its T3
+            // can fail to emit end-of-speech and repeat the line; turbo supersedes it.
+            ForEach([BackendID.fishS2Pro, .chatterboxTurbo, .chatterbox], id: \.self) { b in
                 Button {
                     model.backend = b
                     if model.downloads.state(for: b) == .ready {
@@ -151,15 +151,17 @@ struct ContentView: View {
         }
     }
 
-    /// Per-backend menu row title: name + its current state.
+    /// Per-backend menu row title: name (+ "experimental" for regular chatterbox)
+    /// and its current state.
     private func modelMenuTitle(_ b: BackendID) -> String {
+        let name = b == .chatterbox ? "\(b.rawValue) (experimental)" : b.rawValue
         let loaded = model.loadedBackend == b
         switch model.downloads.state(for: b) {
-        case .ready where loaded: return "\(b.rawValue) — loaded"
-        case .ready: return "\(b.rawValue) — tap to load"
-        case .downloading(let f): return "\(b.rawValue) — \(Int(f * 100))%"
-        case .notDownloaded: return "\(b.rawValue) — get in Settings"
-        case .failed: return "\(b.rawValue) — failed"
+        case .ready where loaded: return "\(name) — loaded"
+        case .ready: return "\(name) — tap to load"
+        case .downloading(let f): return "\(name) — \(Int(f * 100))%"
+        case .notDownloaded: return "\(name) — get in Settings"
+        case .failed: return "\(name) — failed"
         }
     }
 
@@ -171,14 +173,18 @@ struct ContentView: View {
         let dot: Color = {
             switch model.downloads.state(for: model.backend) {
             case .ready where loaded: return .green
-            case .ready: return Brand.fgFaint
+            case .ready: return .secondary           // visibly "ready, not loaded"
             case .downloading: return .yellow
             case .notDownloaded: return .orange
             case .failed: return .red
             }
         }()
         HStack(spacing: 4) {
-            Circle().fill(dot).frame(width: 6, height: 6)
+            // Hollow ring when not loaded, solid green when loaded — clear at a glance.
+            Circle()
+                .fill(loaded ? dot : .clear)
+                .overlay(Circle().stroke(dot, lineWidth: loaded ? 0 : 1.5))
+                .frame(width: 7, height: 7)
             Text(model.backend.rawValue)
             if model.modelOpInFlight { ProgressView().controlSize(.mini) }
         }
