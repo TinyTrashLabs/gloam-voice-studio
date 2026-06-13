@@ -3,7 +3,6 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @State private var modelsPopover = false
     @State private var historyVisible = false
 
     var body: some View {
@@ -46,29 +45,44 @@ struct ContentView: View {
     private var toolbarContent: some View {
         @Bindable var model = model
 
-        // 1. Backend picker
-        Picker("Backend", selection: $model.backend) {
-            // Regular `chatterbox` is hidden: its T3 fails to emit end-of-speech
-            // (repeats the line). chatterbox-turbo (distilled) supersedes it.
+        // 1+2. Merged backend picker + model management in one Menu
+        Menu {
+            // Pick a model — tapping it selects AND loads it (one resident at a
+            // time). Regular `chatterbox` is hidden: its T3 fails end-of-speech;
+            // chatterbox-turbo (distilled) supersedes it.
             ForEach([BackendID.fishS2Pro, .chatterboxTurbo], id: \.self) { b in
-                Text(b.rawValue).tag(b)
+                Button {
+                    model.backend = b
+                    if model.downloads.state(for: b) == .ready {
+                        Task { await model.loadModel(b) }
+                    }
+                } label: {
+                    if model.backend == b {
+                        Label(modelMenuTitle(b), systemImage: "checkmark")
+                    } else {
+                        Text(modelMenuTitle(b))
+                    }
+                }
+                .disabled(model.modelOpInFlight)
             }
-        }
-        .pickerStyle(.menu)
-        .accessibilityIdentifier("backend-picker")
-        .task { model.downloads.refresh() }
-
-        // 2. Model status → models popover (load/unload + memory)
-        Button {
-            Task { await model.refreshEngineStatus() }
-            modelsPopover = true
+            Divider()
+            if let loaded = model.loadedBackend {
+                Button("Unload \(loaded.rawValue)") {
+                    Task { await model.unloadModel() }
+                }
+                .disabled(model.isGenerating || model.modelOpInFlight)
+            }
+            Text(String(format: "App memory: %.2f GB", model.memGB))
         } label: {
             modelStatusChip
         }
-        .accessibilityIdentifier("models-button")
-        .help("Model residency — load, unload, memory")
-        .popover(isPresented: $modelsPopover, arrowEdge: .bottom) {
-            ModelManagerView().environment(model)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("backend-picker")
+        .help("Pick model · load/unload · memory")
+        .task {
+            model.downloads.refresh()
+            await model.refreshEngineStatus()
         }
 
         // 3. API server indicator (clickable — opens Settings)
@@ -79,7 +93,7 @@ struct ContentView: View {
                         Circle()
                             .fill(.green)
                             .frame(width: 6, height: 6)
-                        Text("API :\(model.serverPort)")
+                        Text(verbatim: "API :\(model.serverPort)")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(Brand.fgDim)
                             .lineLimit(1)
@@ -97,7 +111,7 @@ struct ContentView: View {
                         Circle()
                             .fill(.green)
                             .frame(width: 6, height: 6)
-                        Text("API :\(model.serverPort)")
+                        Text(verbatim: "API :\(model.serverPort)")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(Brand.fgDim)
                             .lineLimit(1)
@@ -137,32 +151,36 @@ struct ContentView: View {
         }
     }
 
-    /// Compact one-glance status for the SELECTED backend; details live in
-    /// the popover. Kept to a dot + one short word so it can never overflow
-    /// the toolbar.
+    /// Per-backend menu row title: name + its current state.
+    private func modelMenuTitle(_ b: BackendID) -> String {
+        let loaded = model.loadedBackend == b
+        switch model.downloads.state(for: b) {
+        case .ready where loaded: return "\(b.rawValue) — loaded"
+        case .ready: return "\(b.rawValue) — tap to load"
+        case .downloading(let f): return "\(b.rawValue) — \(Int(f * 100))%"
+        case .notDownloaded: return "\(b.rawValue) — get in Settings"
+        case .failed: return "\(b.rawValue) — failed"
+        }
+    }
+
+    /// Toolbar menu label: a status dot + the CURRENT backend's name, so you can
+    /// see at a glance which model is selected and whether it's loaded.
     @ViewBuilder
     private var modelStatusChip: some View {
-        let state = model.downloads.state(for: model.backend)
-        HStack(spacing: 4) {
-            switch state {
-            case .ready where model.loadedBackend == model.backend:
-                Circle().fill(.green).frame(width: 6, height: 6)
-                Text("loaded")
-            case .ready:
-                Circle().fill(Brand.fgFaint).frame(width: 6, height: 6)
-                Text("not loaded")
-            case .downloading(let fraction):
-                ProgressView(value: fraction)
-                    .progressViewStyle(.circular)
-                    .controlSize(.mini)
-                Text("\(Int(fraction * 100))%")
-            case .notDownloaded:
-                Circle().fill(.orange).frame(width: 6, height: 6)
-                Text("get")
-            case .failed:
-                Circle().fill(.red).frame(width: 6, height: 6)
-                Text("failed")
+        let loaded = model.loadedBackend == model.backend
+        let dot: Color = {
+            switch model.downloads.state(for: model.backend) {
+            case .ready where loaded: return .green
+            case .ready: return Brand.fgFaint
+            case .downloading: return .yellow
+            case .notDownloaded: return .orange
+            case .failed: return .red
             }
+        }()
+        HStack(spacing: 4) {
+            Circle().fill(dot).frame(width: 6, height: 6)
+            Text(model.backend.rawValue)
+            if model.modelOpInFlight { ProgressView().controlSize(.mini) }
         }
         .font(.caption)
         .foregroundStyle(Brand.fgDim)

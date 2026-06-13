@@ -21,8 +21,6 @@ struct StudioView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
-            BrandLockup()
-                .padding(.bottom, 4)
             Picker("Mode", selection: Binding(
                 get: { StudioMode(rawValue: modeRaw) ?? .single },
                 set: { modeRaw = $0.rawValue })) {
@@ -117,6 +115,56 @@ struct StudioView: View {
     @ViewBuilder
     private var benchControls: some View {
         @Bindable var model = model
+
+        // ── VOICE picker ────────────────────────────────────────────────────
+        zoneLabel("VOICE")
+        let voices = model.voices.list()
+        Menu {
+            ForEach(voices, id: \.slug) { voice in
+                Button {
+                    model.selectedVoiceSlug = voice.slug
+                } label: {
+                    HStack(spacing: 6) {
+                        VoiceAvatarView(
+                            slug: voice.slug,
+                            name: voice.name,
+                            avatarURL: model.voices.avatarURL(voice.slug),
+                            size: 16)
+                        Text(voice.name)
+                    }
+                }
+            }
+            if voices.isEmpty {
+                Text("No voices available").foregroundStyle(Brand.fgDim)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let slug = model.selectedVoiceSlug,
+                   let voice = voices.first(where: { $0.slug == slug }) {
+                    VoiceAvatarView(
+                        slug: voice.slug,
+                        name: voice.name,
+                        avatarURL: model.voices.avatarURL(voice.slug),
+                        size: 22)
+                    Text(voice.name)
+                        .font(.system(.callout, design: .default))
+                        .foregroundStyle(Brand.fg)
+                } else {
+                    Text("Choose a voice")
+                        .foregroundStyle(Brand.fgDim)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(Brand.fgFaint)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("voice-picker")
 
         // ── WRITE zone ──────────────────────────────────────────────────────
         zoneLabel("WRITE")
