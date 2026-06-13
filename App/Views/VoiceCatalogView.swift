@@ -1,3 +1,4 @@
+import SpeechKit
 import StudioKit
 import SwiftUI
 
@@ -65,6 +66,9 @@ struct VoiceCatalogView: View {
                 HStack(spacing: 4) {
                     chip(voice.language, tint: Brand.fgDim)
                     chip(voice.license, tint: Brand.accent)
+                    ForEach(voice.emotions, id: \.self) { emotion in
+                        chip(emotion, tint: Brand.fgDim)
+                    }
                 }
             }
 
@@ -81,7 +85,7 @@ struct VoiceCatalogView: View {
         switch currentState {
         case .available:
             Button("Install") {
-                manager.install(voice, into: model.voices)
+                manager.install(voice, into: model.voices, transcriber: model.speech.makeTranscriber())
             }
             .accessibilityIdentifier("install-voice")
             .buttonStyle(.bordered)
@@ -112,7 +116,7 @@ struct VoiceCatalogView: View {
 
         case .failed(let msg):
             Button("Retry") {
-                manager.install(voice, into: model.voices)
+                manager.install(voice, into: model.voices, transcriber: model.speech.makeTranscriber())
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

@@ -49,6 +49,20 @@ public struct VoiceLibrary: Sendable {
         return meta
     }
 
+    /// Save a voice at a caller-chosen slug, overwriting any existing entry.
+    /// Used for variant dirs like `<baseSlug>-excited` where slugify cannot
+    /// guarantee the exact suffix format.
+    @discardableResult
+    public func saveAt(slug: String, name: String, refWav: Data, refText: String) throws -> VoiceMeta {
+        let voiceDir = directory.appendingPathComponent(slug)
+        try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
+        try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
+        let meta = VoiceMeta(name: name, slug: slug, refText: refText,
+                             createdAt: Self.timestamp())
+        try write(meta, to: voiceDir)
+        return meta
+    }
+
     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
         let voiceDir = directory.appendingPathComponent(slug)
         let metaURL = voiceDir.appendingPathComponent("meta.json")
