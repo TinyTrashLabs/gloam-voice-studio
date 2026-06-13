@@ -44,6 +44,12 @@ public struct SynthesisResult: Sendable {
     public let sampleRate: Int
     /// Generation wall-clock seconds (excludes model load).
     public let wallSeconds: Double
+
+    public init(samples: [Float], sampleRate: Int, wallSeconds: Double) {
+        self.samples = samples
+        self.sampleRate = sampleRate
+        self.wallSeconds = wallSeconds
+    }
 }
 
 public enum EngineError: Error, Equatable, Sendable {

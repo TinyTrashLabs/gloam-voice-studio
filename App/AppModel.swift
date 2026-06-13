@@ -53,6 +53,9 @@ final class AppModel {
     var loadedBackend: BackendID?
     var memGB: Double = 0
     var modelOpInFlight = false
+    /// The specific backend currently being loaded, so only its row spins
+    /// (modelOpInFlight is global and would otherwise spin every Load button).
+    var loadingBackend: BackendID?
 
     // Studio state
     var selectedVoiceSlug: String?
@@ -160,7 +163,8 @@ final class AppModel {
     func loadModel(_ backend: BackendID) async {
         guard downloads.state(for: backend) == .ready, !modelOpInFlight else { return }
         modelOpInFlight = true
-        defer { modelOpInFlight = false }
+        loadingBackend = backend
+        defer { modelOpInFlight = false; loadingBackend = nil }
         do { try await engine.preload(backend: backend) }
         catch { generationError = describeAny(error) }
         await refreshEngineStatus()
@@ -205,7 +209,13 @@ final class AppModel {
             emotion: emotion, speed: speed,
             temperatureOverride: useDirectionOverrides ? temperatureOverride : nil,
             exaggerationOverride: useDirectionOverrides ? exaggerationOverride : nil)
-        let result = try await engine.synthesize(backend: backend, request: request)
+        let raw = try await engine.synthesize(backend: backend, request: request)
+        // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
+        // ~95%, so without this Fish takes sound much quieter. Normalize once here
+        // so history, A/B variants, and script takes all stay consistent.
+        let result = SynthesisResult(
+            samples: AudioAssembler.normalizePeak(floats: raw.samples),
+            sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
         _ = try? history.save(
             pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,

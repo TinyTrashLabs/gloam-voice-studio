@@ -37,11 +37,24 @@ final class ModelDownloadManager {
 
     func refresh() {
         for backend in [BackendID.chatterbox, .chatterboxTurbo, .fishS2Pro] {
-            let config = directory(for: backend).appendingPathComponent("config.json")
             if case .downloading = states[backend] { continue }
-            states[backend] = FileManager.default.fileExists(atPath: config.path)
-                ? .ready : .notDownloaded
+            states[backend] = isComplete(backend) ? .ready : .notDownloaded
         }
+    }
+
+    /// A model is only "ready" if it has both a config AND the actual weight
+    /// file(s). An interrupted download can leave the small non-LFS files
+    /// (config.json, tokenizer.json) behind without `model.safetensors` — that
+    /// dir would otherwise read as ready and then fail at generate time with a
+    /// confusing `modelNotInitialized`. Require weights so the UI honestly
+    /// offers a (re)download instead.
+    private func isComplete(_ backend: BackendID) -> Bool {
+        let dir = directory(for: backend)
+        guard FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path) else { return false }
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? []
+        return contents.contains { $0.pathExtension == "safetensors" }
     }
 
     func download(_ backend: BackendID) {

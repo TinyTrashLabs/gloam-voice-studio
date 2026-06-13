@@ -18,6 +18,20 @@ public enum AudioAssembler {
 
     /// Scale so the peak hits `target` of full scale (default −0.18 dBFS ≈ 0.98).
     /// Silence (or already-at-target audio) passes through unchanged.
+    /// Peak-normalize float samples (range [-1, 1]) to `target` full-scale.
+    /// Fish output peaks at only ~6–9% while Chatterbox hits ~95%, so without
+    /// this Fish takes sound far quieter than Chatterbox on playback/export.
+    /// Already-near-target clips are returned untouched.
+    public static func normalizePeak(floats samples: [Float],
+                                     target: Float = 0.98) -> [Float] {
+        var peak: Float = 0
+        for s in samples { peak = max(peak, abs(s)) }
+        guard peak > 1e-6 else { return samples }
+        let scale = target / peak
+        guard abs(scale - 1) > 1e-3 else { return samples }
+        return samples.map { max(-1.0, min(1.0, $0 * scale)) }
+    }
+
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {
         var peak: Int32 = 0
         pcm.withUnsafeBytes { raw in
