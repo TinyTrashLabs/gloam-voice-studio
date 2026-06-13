@@ -1,4 +1,5 @@
 import EngineKit
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import XCTest
@@ -178,6 +179,31 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
                 XCTAssertEqual(response.status, .badRequest)
                 XCTAssertEqual(try self.json(response.body)["detail"] as? String,
                                "input is empty")
+            }
+        }
+    }
+
+    func testCORSAllowlist() async throws {
+        let acao = HTTPField.Name("access-control-allow-origin")!
+        try await app().test(.router) { client in
+            // Allowed origin → echoed back on the actual response.
+            try await client.execute(uri: "/health", method: .get,
+                                     headers: [.origin: "https://gloam.fm"]) { response in
+                XCTAssertEqual(response.headers[acao], "https://gloam.fm")
+            }
+            // JSON POST preflight (OPTIONS) for an allowed origin gets the allow headers.
+            try await client.execute(uri: "/v1/audio/speech", method: .options, headers: [
+                .origin: "https://gloam-app.pages.dev",
+                HTTPField.Name("access-control-request-method")!: "POST",
+                HTTPField.Name("access-control-request-headers")!: "content-type",
+            ]) { response in
+                XCTAssertEqual(response.headers[acao], "https://gloam-app.pages.dev")
+                XCTAssertNotNil(response.headers[HTTPField.Name("access-control-allow-methods")!])
+            }
+            // Disallowed origin → no allow-origin header (browser blocks it).
+            try await client.execute(uri: "/health", method: .get,
+                                     headers: [.origin: "https://evil.example"]) { response in
+                XCTAssertNil(response.headers[acao])
             }
         }
     }

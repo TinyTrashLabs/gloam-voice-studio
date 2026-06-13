@@ -17,6 +17,16 @@ public enum APIRouter {
     public static func build(_ deps: APIDependencies) -> Router<BasicRequestContext> {
         let router = Router()
 
+        // CORS for external browser clients (the gloam.fm DJ app) that fetch
+        // this loopback API cross-origin. The Studio UI is same-origin and
+        // unaffected. Added before routes so it wraps every response and
+        // answers the JSON POST preflight (OPTIONS). Allowlist only — note
+        // `.oneOf` is exact-match, so `*.gloam.fm` subdomains aren't covered.
+        router.add(middleware: CORSMiddleware(
+            allowOrigin: .oneOf("https://gloam.fm", "https://gloam-app.pages.dev"),
+            allowHeaders: [.contentType],
+            allowMethods: [.get, .post, .patch, .delete, .options]))
+
         router.get("health") { _, _ in
             let loaded = await deps.engine.loadedBackend()
             return HealthResponse(
