@@ -36,7 +36,7 @@ final class ModelDownloadManager {
     }
 
     func refresh() {
-        for backend in [BackendID.chatterbox, .chatterboxTurbo, .fishS2Pro] {
+        for backend in [BackendID.chatterboxTurbo, .fishS2Pro] {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
         }

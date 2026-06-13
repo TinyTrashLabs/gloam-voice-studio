@@ -10,10 +10,11 @@ let package = Package(
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
     ],
     dependencies: [
-        // Pinned to the revision validated by the Phase 0 spike (SPIKE-RESULTS.md).
+        // Vendored fork of Blaizzy/mlx-audio-swift @ 10b7366204… with raised S3Gen
+        // flow-matching steps (chatterbox quality fix). See TinyTrashLabs/mlx-audio-swift.
         .package(
-            url: "https://github.com/Blaizzy/mlx-audio-swift.git",
-            revision: "10b7366204fd3991458de690f3d49651251055f5"),
+            url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
+            revision: "ff45ab3e5189d74250be26ca438afb9d5f108f5b"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),

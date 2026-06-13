@@ -94,7 +94,7 @@ final class AppModel {
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
         backend = BackendID(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
-            ?? .chatterboxTurbo
+            ?? .fishS2Pro
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")

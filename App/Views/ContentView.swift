@@ -48,7 +48,9 @@ struct ContentView: View {
 
         // 1. Backend picker
         Picker("Backend", selection: $model.backend) {
-            ForEach([BackendID.chatterbox, .chatterboxTurbo, .fishS2Pro], id: \.self) { b in
+            // Regular `chatterbox` is hidden: its T3 fails to emit end-of-speech
+            // (repeats the line). chatterbox-turbo (distilled) supersedes it.
+            ForEach([BackendID.fishS2Pro, .chatterboxTurbo], id: \.self) { b in
                 Text(b.rawValue).tag(b)
             }
         }
@@ -173,7 +175,7 @@ struct ContentView: View {
 struct ModelManagerView: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] = [.chatterbox, .chatterboxTurbo, .fishS2Pro]
+    private let backends: [BackendID] = [.chatterboxTurbo, .fishS2Pro]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
