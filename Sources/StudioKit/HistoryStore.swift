@@ -76,9 +76,8 @@ public final class HistoryStore: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: json.path) else {
             throw StudioError.historyEntryNotFound(id)
         }
-        try FileManager.default.removeItem(at: json)
-        try? FileManager.default.removeItem(
-            at: directory.appendingPathComponent("\(id).wav"))
+        Self.discard(json)
+        Self.discard(directory.appendingPathComponent("\(id).wav"))
     }
 
     @discardableResult
@@ -88,12 +87,19 @@ public final class HistoryStore: @unchecked Sendable {
         let children = try FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: nil)
         for url in children where url.pathExtension == "json" {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(
-                at: url.deletingPathExtension().appendingPathExtension("wav"))
+            Self.discard(url)
+            Self.discard(url.deletingPathExtension().appendingPathExtension("wav"))
             removed += 1
         }
         return removed
+    }
+
+    /// User deletions are recoverable: prefer the Trash, fall back to
+    /// permanent removal only where no Trash exists (e.g. some test volumes).
+    private static func discard(_ url: URL) {
+        let fm = FileManager.default
+        do { try fm.trashItem(at: url, resultingItemURL: nil) }
+        catch { try? fm.removeItem(at: url) }
     }
 
     private func prune() {
