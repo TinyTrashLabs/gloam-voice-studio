@@ -96,11 +96,14 @@ struct ContentView: View {
     }
 
     // Models offered in the chooser, in priority order.
-    private var pickerBackends: [BackendID] { [.fishS2Pro, .chatterboxTurbo, .chatterbox] }
+    // Qwen3 (multilingual cloning) and turbo/Fish up top; regular chatterbox is
+    // demoted to last — its MLX port doesn't emit the stop token so it doubles
+    // the line. Kept available but clearly flagged.
+    private var pickerBackends: [BackendID] { [.qwen3, .chatterboxTurbo, .fishS2Pro, .chatterbox] }
 
-    /// Display name (+ "experimental" for regular chatterbox).
+    /// Display name (+ honest flag for regular chatterbox's doubling bug).
     private func modelDisplayName(_ b: BackendID) -> String {
-        b == .chatterbox ? "\(b.rawValue) (experimental)" : b.rawValue
+        b == .chatterbox ? "\(b.rawValue) (legacy — doubles)" : b.rawValue
     }
 
     /// Short status phrase for a backend, shown under its name in the popover.

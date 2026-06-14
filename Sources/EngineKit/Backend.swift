@@ -1,6 +1,7 @@
 /// TTS backends, raw values identical to the Python engine's backend strings
 /// so .gvoice metadata and API payloads interoperate.
 public enum BackendID: String, CaseIterable, Sendable, Codable {
+    case qwen3 = "qwen3"
     case chatterbox
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
@@ -28,6 +29,14 @@ public struct BackendSpec: Sendable, Equatable {
 extension BackendID {
     public var spec: BackendSpec {
         switch self {
+        case .qwen3:
+            // Alibaba's multilingual Qwen3-TTS (Base). Supports reference-audio
+            // voice cloning (refAudio + refText) AND default-voice synthesis, so
+            // a ref clip is optional like Fish. Language auto-detects (nil → auto).
+            BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        honorsEmotionKnob: false)
         case .chatterbox:
             BackendSpec(modelRepo: "mlx-community/Chatterbox-TTS-fp16",
                         defaultSampleRate: 24000, honorsTags: false,

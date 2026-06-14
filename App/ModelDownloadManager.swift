@@ -16,6 +16,7 @@ final class ModelDownloadManager {
 
     /// Approximate full download sizes, for the disk preflight (bytes).
     static let approxBytes: [BackendID: Int64] = [
+        .qwen3: 1_200_000_000,
         .chatterbox: 2_300_000_000,
         .chatterboxTurbo: 2_300_000_000,
         .fishS2Pro: 11_100_000_000,
@@ -36,7 +37,7 @@ final class ModelDownloadManager {
     }
 
     func refresh() {
-        for backend in [BackendID.chatterbox, .chatterboxTurbo, .fishS2Pro] {
+        for backend in BackendID.allCases {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
         }
@@ -68,18 +69,7 @@ final class ModelDownloadManager {
         let repo = backend.spec.modelRepo
         downloadTasks[backend] = Task {
             do {
-                guard let repoID = Repo.ID(rawValue: repo) else {
-                    self.states[backend] = .failed("Invalid repo id: \(repo)")
-                    self.downloadTasks[backend] = nil
-                    return
-                }
-                let client = HubClient()
-                _ = try await client.downloadSnapshot(
-                    of: repoID,
-                    to: dest,
-                    progressHandler: { [weak self] progress in
-                        self?.states[backend] = .downloading(progress.fractionCompleted)
-                    })
+                try await downloadRepoSnapshot(repo: repo, to: dest, backend: backend)
                 self.states[backend] = .ready
             } catch is CancellationError {
                 self.states[backend] = .notDownloaded
@@ -87,6 +77,51 @@ final class ModelDownloadManager {
                 self.states[backend] = .failed(error.localizedDescription)
             }
             self.downloadTasks[backend] = nil
+        }
+    }
+
+    struct DownloadError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Downloads every file in a HuggingFace repo to `dir`, preserving any
+    /// subdirectories (e.g. Qwen3's `speech_tokenizer/`). We do this ourselves
+    /// rather than via HubClient.downloadSnapshot because swift-huggingface 0.9.0
+    /// throws "Invalid file destination" for nested repo files when copying to an
+    /// explicit destination — flat repos (chatterbox/fish) work, subdir repos
+    /// (qwen3) don't. Public resolve URLs need no auth for mlx-community repos.
+    private func downloadRepoSnapshot(repo: String, to dir: URL,
+                                      backend: BackendID) async throws {
+        struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
+        guard let treeURL = URL(
+            string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true") else {
+            throw DownloadError(message: "Invalid repo id: \(repo)")
+        }
+        let (listData, _) = try await URLSession.shared.data(from: treeURL)
+        let files = try JSONDecoder().decode([Entry].self, from: listData)
+            .filter { $0.type == "file" }
+        guard !files.isEmpty else {
+            throw DownloadError(message: "No files found in \(repo)")
+        }
+        let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
+        var done: Int64 = 0
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for file in files {
+            try Task.checkCancellation()
+            guard let src = URL(
+                string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
+            let target = dir.appendingPathComponent(file.path)
+            try FileManager.default.createDirectory(
+                at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let (tmp, response) = try await URLSession.shared.download(from: src)
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                throw DownloadError(message: "\(file.path): HTTP \(http.statusCode)")
+            }
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.moveItem(at: tmp, to: target)
+            done += file.size ?? 0
+            states[backend] = .downloading(Double(done) / Double(total))
         }
     }
 
