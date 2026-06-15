@@ -6,7 +6,28 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 3)
+        XCTAssertEqual(BackendID.allCases.count, 7)
+    }
+
+    func testQwenBackendRawValues() {
+        XCTAssertEqual(BackendID.qwen06B.rawValue, "qwen3-0.6b")
+        XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
+        XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
+        XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
+        XCTAssertEqual(BackendID.allCases.count, 7)
+    }
+
+    func testQwenFamilyFlag() {
+        XCTAssertTrue(BackendID.qwen06B.isQwen)
+        XCTAssertTrue(BackendID.qwenCustom.isQwen)
+        XCTAssertFalse(BackendID.fishS2Pro.isQwen)
+        XCTAssertFalse(BackendID.chatterbox.isQwen)
+    }
+
+    func testLegacyQwenMigration() {
+        XCTAssertEqual(BackendID.migrating(rawValue: "qwen3"), .qwen06B)
+        XCTAssertEqual(BackendID.migrating(rawValue: "fish-s2-pro"), .fishS2Pro)
+        XCTAssertNil(BackendID.migrating(rawValue: "nonsense"))
     }
 
     func testChatterboxSpec() {

@@ -1,7 +1,10 @@
 /// TTS backends, raw values identical to the Python engine's backend strings
 /// so .gvoice metadata and API payloads interoperate.
 public enum BackendID: String, CaseIterable, Sendable, Codable {
-    case qwen3 = "qwen3"
+    case qwen06B = "qwen3-0.6b"
+    case qwen17B = "qwen3-1.7b"
+    case qwenDesign = "qwen3-design"
+    case qwenCustom = "qwen3-custom"
     case chatterbox
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
@@ -9,6 +12,22 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
     public static let fishCodecSampleRate = 44100
+
+    /// Qwen3-TTS family — these resolve their repo from a base + quant suffix and
+    /// store weights in quant-suffixed directories.
+    public var isQwen: Bool {
+        switch self {
+        case .qwen06B, .qwen17B, .qwenDesign, .qwenCustom: true
+        default: false
+        }
+    }
+
+    /// Like `init(rawValue:)` but maps the retired `"qwen3"` raw value (was
+    /// 0.6B-Base-8bit) to `.qwen06B` so persisted settings/history survive.
+    public static func migrating(rawValue: String) -> BackendID? {
+        if rawValue == "qwen3" { return .qwen06B }
+        return BackendID(rawValue: rawValue)
+    }
 }
 
 public struct BackendSpec: Sendable, Equatable {
@@ -29,11 +48,23 @@ public struct BackendSpec: Sendable, Equatable {
 extension BackendID {
     public var spec: BackendSpec {
         switch self {
-        case .qwen3:
-            // Alibaba's multilingual Qwen3-TTS (Base). Supports reference-audio
-            // voice cloning (refAudio + refText) AND default-voice synthesis, so
-            // a ref clip is optional like Fish. Language auto-detects (nil → auto).
+        case .qwen06B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        honorsEmotionKnob: false)
+        case .qwen17B:
+            BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        honorsEmotionKnob: false)
+        case .qwenDesign:
+            BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        honorsEmotionKnob: false)
+        case .qwenCustom:
+            BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,
                         honorsEmotionKnob: false)
