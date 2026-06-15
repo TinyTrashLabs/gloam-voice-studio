@@ -72,6 +72,17 @@ final class AppModel {
     var temperatureOverride: Float = 0.7
     var exaggerationOverride: Float = 0.5
 
+    // Qwen natural-language controls
+    var instruct: String = ""
+    var speaker: String = BackendID.qwenPresetSpeakers.first ?? "Vivian"
+    var language: String = "auto"
+    var qwenTopP: Float = 1.0
+    var qwenTopK: Int = 50
+    var qwenRepetitionPenalty: Float = 1.05
+
+    // API request console (shared with the server)
+    let apiLog = APILog()
+
     @ObservationIgnored lazy var script: ScriptModel = ScriptModel(
         app: self,
         store: SessionStore(directory: UITestMode.isActive
@@ -93,7 +104,7 @@ final class AppModel {
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
-        backend = BackendID(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
+        backend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
             ?? .fishS2Pro
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
@@ -104,7 +115,12 @@ final class AppModel {
         } else {
             let modelRoot = StoragePaths.models
             engine = GloamEngine(provider: MLXModelProvider(modelPathResolver: { backend in
-                let dir = modelRoot.appendingPathComponent(backend.rawValue)
+                // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
+                // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
+                let quantRaw = backend.isQwen
+                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
+                    : nil
+                let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
                 let hasConfig = FileManager.default.fileExists(
                     atPath: dir.appendingPathComponent("config.json").path)
                 return hasConfig ? dir.path : nil
@@ -204,11 +220,18 @@ final class AppModel {
             throw AppGenerationError(
                 message: "This backend needs a voice — pick or create one in the sidebar.")
         }
+        let controls = backend.controls
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
             emotion: emotion, speed: speed,
-            temperatureOverride: useDirectionOverrides ? temperatureOverride : nil,
-            exaggerationOverride: useDirectionOverrides ? exaggerationOverride : nil)
+            temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
+            exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
+            instruct: controls.instruct != .none ? instruct : nil,
+            speaker: controls.presetSpeakers.isEmpty ? nil : speaker,
+            language: controls.language ? language : nil,
+            topP: controls.knobs.topP != nil ? qwenTopP : nil,
+            topK: controls.knobs.topK != nil ? qwenTopK : nil,
+            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil)
         let raw = try await engine.synthesize(backend: backend, request: request)
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
@@ -240,6 +263,10 @@ final class AppModel {
             return "Generation failed: \(message)"
         case .invalidSpeed(let s):
             return "Invalid speed \(s)."
+        case .instructRequired:
+            return "This model needs a Direction (instruct)."
+        case .speakerRequired:
+            return "Pick a preset speaker for this model."
         }
     }
 
@@ -249,7 +276,7 @@ final class AppModel {
         if serverEnabled {
             if server == nil {
                 server = LocalAPIServer(deps: APIDependencies(
-                    engine: engine, voices: voices, defaultBackend: backend))
+                    engine: engine, voices: voices, defaultBackend: backend, log: apiLog))
             }
             try? await server?.start(port: serverPort)
         } else {
