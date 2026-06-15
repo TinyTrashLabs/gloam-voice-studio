@@ -14,10 +14,22 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var temperatureOverride: Float?
     /// Override emotion's chatterboxExaggeration when present (Chatterbox only).
     public var exaggerationOverride: Float?
+    /// Qwen natural-language voice direction (instruct). Honored per backend.
+    public var instruct: String?
+    /// Qwen CustomVoice preset speaker name.
+    public var speaker: String?
+    /// Language hint ("auto" or one of the 10 languages); nil = auto.
+    public var language: String?
+    /// Qwen sampling overrides (nil = model default).
+    public var topP: Float?
+    public var topK: Int?
+    public var repetitionPenalty: Float?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, speed: Float = 1.0,
-                temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil) {
+                temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
+                instruct: String? = nil, speaker: String? = nil, language: String? = nil,
+                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText
@@ -25,6 +37,12 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.speed = speed
         self.temperatureOverride = temperatureOverride
         self.exaggerationOverride = exaggerationOverride
+        self.instruct = instruct
+        self.speaker = speaker
+        self.language = language
+        self.topP = topP
+        self.topK = topK
+        self.repetitionPenalty = repetitionPenalty
     }
 }
 
@@ -33,10 +51,30 @@ public struct ProviderRequest: Sendable, Equatable {
     public var text: String
     public var refAudioPath: String?
     public var refText: String?
-    /// Fish only: sampling temperature.
+    /// Fish only: sampling temperature. Also used by Qwen.
     public var temperature: Float?
     /// Chatterbox (regular) only: emotion exaggeration.
     public var exaggeration: Float?
+    /// Qwen natural-language direction.
+    public var instruct: String?
+    /// Qwen CustomVoice preset speaker.
+    public var speaker: String?
+    /// Qwen language hint (nil = auto).
+    public var language: String?
+    /// Qwen sampling overrides.
+    public var topP: Float?
+    public var topK: Int?
+    public var repetitionPenalty: Float?
+
+    public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
+                temperature: Float? = nil, exaggeration: Float? = nil,
+                instruct: String? = nil, speaker: String? = nil, language: String? = nil,
+                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
+        self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
+        self.temperature = temperature; self.exaggeration = exaggeration
+        self.instruct = instruct; self.speaker = speaker; self.language = language
+        self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
+    }
 }
 
 public struct SynthesisResult: Sendable {
@@ -57,6 +95,8 @@ public enum EngineError: Error, Equatable, Sendable {
     case refAudioRequired(BackendID)
     case generationFailed(backend: BackendID, message: String)
     case invalidSpeed(Float)
+    case instructRequired(BackendID)
+    case speakerRequired(BackendID)
 }
 
 /// Pure translation from user request to provider request, with validation.
