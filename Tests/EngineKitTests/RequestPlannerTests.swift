@@ -108,4 +108,50 @@ final class RequestPlannerTests: XCTestCase {
                                       exaggerationOverride: 0.9))
         XCTAssertNil(plan.exaggeration)
     }
+
+    func testQwenBasePassesInstructAndLanguageAndKnobs() throws {
+        let req = SynthesisRequest(text: "hi", instruct: "warm radio", language: "english",
+                                   topP: 0.9, topK: 40, repetitionPenalty: 1.1)
+        let p = try RequestPlanner.plan(backend: .qwen17B, request: req)
+        XCTAssertEqual(p.instruct, "warm radio")
+        XCTAssertEqual(p.language, "english")
+        XCTAssertEqual(p.topP, 0.9)
+        XCTAssertEqual(p.topK, 40)
+        XCTAssertEqual(p.repetitionPenalty, 1.1)
+    }
+
+    func testQwenBaseCloneWinsDropsInstruct() throws {
+        let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", instruct: "angry")
+        let p = try RequestPlanner.plan(backend: .qwen17B, request: req)
+        XCTAssertEqual(p.refAudioPath, "/tmp/r.wav")
+        XCTAssertNil(p.instruct, "clone path ignores instruct")
+    }
+
+    func testDesignRequiresInstruct() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .qwenDesign, request: SynthesisRequest(text: "hi"))) { error in
+            XCTAssertEqual(error as? EngineError, .instructRequired(.qwenDesign))
+        }
+    }
+
+    func testCustomRequiresSpeakerAndComposesInstruct() throws {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .qwenCustom, request: SynthesisRequest(text: "hi", instruct: "calm"))) { error in
+            XCTAssertEqual(error as? EngineError, .speakerRequired(.qwenCustom))
+        }
+        let p = try RequestPlanner.plan(
+            backend: .qwenCustom,
+            request: SynthesisRequest(text: "hi", instruct: "calm", speaker: "Dylan"))
+        XCTAssertEqual(p.speaker, "Dylan")
+        XCTAssertEqual(p.instruct, "calm")
+    }
+
+    func testNonQwenDropsInstructSpeakerLanguage() throws {
+        let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                   instruct: "x", speaker: "Dylan", language: "english")
+        let p = try RequestPlanner.plan(backend: .chatterboxTurbo, request: req)
+        XCTAssertNil(p.instruct)
+        XCTAssertNil(p.speaker)
+        XCTAssertNil(p.language)
+    }
 }

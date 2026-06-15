@@ -104,15 +104,52 @@ enum RequestPlanner {
     static func plan(backend: BackendID, request: SynthesisRequest) throws -> ProviderRequest {
         guard request.speed > 0 else { throw EngineError.invalidSpeed(request.speed) }
         let spec = backend.spec
-        if spec.needsRefAudio && request.refAudioPath == nil {
+        let controls = backend.controls
+        let hasRef = request.refAudioPath != nil
+
+        if spec.needsRefAudio && !hasRef {
             throw EngineError.refAudioRequired(backend)
         }
+
+        func clean(_ s: String?) -> String? {
+            guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return s
+        }
+
+        // Instruct: honored only when the backend allows it AND (on clone-capable
+        // backends) no reference voice is selected — the library ignores instruct on
+        // the clone path, so the plan drops it to stay honest.
+        let wantsInstruct = controls.instruct != .none && !(controls.voiceClone != .none && hasRef)
+        let instruct = wantsInstruct ? clean(request.instruct) : nil
+        if controls.instruct == .required && instruct == nil {
+            throw EngineError.instructRequired(backend)
+        }
+
+        // Speaker: CustomVoice only; required.
+        let speaker = controls.presetSpeakers.isEmpty ? nil : clean(request.speaker)
+        if !controls.presetSpeakers.isEmpty && speaker == nil {
+            throw EngineError.speakerRequired(backend)
+        }
+
+        let language = controls.language ? clean(request.language) : nil
+        let knobs = controls.knobs
+
         return ProviderRequest(
             text: request.text,
             refAudioPath: request.refAudioPath,
             refText: request.refText,
-            temperature: spec.honorsTags ? (request.temperatureOverride ?? request.emotion.fishTemperature) : nil,
-            exaggeration: backend == .chatterbox ? (request.exaggerationOverride ?? request.emotion.chatterboxExaggeration) : nil
+            temperature: knobs.temperature != nil
+                ? (request.temperatureOverride ?? (spec.honorsTags ? request.emotion.fishTemperature : nil))
+                : nil,
+            exaggeration: knobs.exaggeration != nil
+                ? (request.exaggerationOverride ?? request.emotion.chatterboxExaggeration)
+                : nil,
+            instruct: instruct,
+            speaker: speaker,
+            language: language,
+            topP: knobs.topP != nil ? request.topP : nil,
+            topK: knobs.topK != nil ? request.topK : nil,
+            repetitionPenalty: knobs.repetitionPenalty != nil ? request.repetitionPenalty : nil
         )
     }
 }
