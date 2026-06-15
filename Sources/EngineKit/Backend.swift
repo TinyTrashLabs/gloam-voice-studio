@@ -71,6 +71,79 @@ extension BackendID {
     }
 }
 
+/// Which sampling sliders a backend exposes in the Advanced disclosure.
+/// A nil range hides that knob.
+public struct Knobs: Sendable, Equatable {
+    public var temperature: ClosedRange<Float>?
+    public var topP: ClosedRange<Float>?
+    public var topK: ClosedRange<Int>?
+    public var repetitionPenalty: ClosedRange<Float>?
+    public var exaggeration: ClosedRange<Float>?
+
+    public init(temperature: ClosedRange<Float>? = nil, topP: ClosedRange<Float>? = nil,
+                topK: ClosedRange<Int>? = nil, repetitionPenalty: ClosedRange<Float>? = nil,
+                exaggeration: ClosedRange<Float>? = nil) {
+        self.temperature = temperature; self.topP = topP; self.topK = topK
+        self.repetitionPenalty = repetitionPenalty; self.exaggeration = exaggeration
+    }
+}
+
+/// Data-driven description of a backend's Direct-pane controls. The UI renders
+/// from this; the request planner validates/gates against it.
+public struct ControlSurface: Sendable, Equatable {
+    public enum Requirement: Sendable, Equatable { case none, optional, required }
+    public var voiceClone: Requirement
+    public var presetSpeakers: [String]
+    public var instruct: Requirement
+    public var language: Bool
+    public var emotionChips: Bool
+    public var knobs: Knobs
+
+    public init(voiceClone: Requirement, presetSpeakers: [String] = [],
+                instruct: Requirement, language: Bool, emotionChips: Bool, knobs: Knobs) {
+        self.voiceClone = voiceClone; self.presetSpeakers = presetSpeakers
+        self.instruct = instruct; self.language = language
+        self.emotionChips = emotionChips; self.knobs = knobs
+    }
+}
+
+extension BackendID {
+    /// Documented CustomVoice preset speakers (1.7B). Authoritative source is the
+    /// loaded model's `talkerConfig.spkId`; this is the picker list.
+    public static let qwenPresetSpeakers =
+        ["Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee"]
+
+    /// Shared Qwen sampling knob ranges (Base/Design/Custom).
+    private static let qwenKnobs = Knobs(
+        temperature: 0.5...1.2, topP: 0.5...1.0, topK: 0...100, repetitionPenalty: 1.0...1.5)
+
+    public var controls: ControlSurface {
+        switch self {
+        case .qwen06B, .qwen17B:
+            ControlSurface(voiceClone: .optional, instruct: .optional,
+                           language: true, emotionChips: false, knobs: Self.qwenKnobs)
+        case .qwenDesign:
+            ControlSurface(voiceClone: .none, instruct: .required,
+                           language: true, emotionChips: false, knobs: Self.qwenKnobs)
+        case .qwenCustom:
+            ControlSurface(voiceClone: .none, presetSpeakers: Self.qwenPresetSpeakers,
+                           instruct: .optional, language: true, emotionChips: false,
+                           knobs: Self.qwenKnobs)
+        case .fishS2Pro:
+            ControlSurface(voiceClone: .optional, instruct: .none,
+                           language: false, emotionChips: true,
+                           knobs: Knobs(temperature: 0.3...1.2))
+        case .chatterbox:
+            ControlSurface(voiceClone: .required, instruct: .none,
+                           language: false, emotionChips: true,
+                           knobs: Knobs(exaggeration: 0...1))
+        case .chatterboxTurbo:
+            ControlSurface(voiceClone: .required, instruct: .none,
+                           language: false, emotionChips: true, knobs: Knobs())
+        }
+    }
+}
+
 public struct BackendSpec: Sendable, Equatable {
     public let modelRepo: String
     public let defaultSampleRate: Int

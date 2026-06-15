@@ -90,4 +90,39 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.diskFolder(quantRaw: nil), "qwen3-1.7b@8bit") // defaults q8
         XCTAssertEqual(BackendID.fishS2Pro.diskFolder(quantRaw: "8bit"), "fish-s2-pro")
     }
+
+    func testControlSurfaces() {
+        let base = BackendID.qwen17B.controls
+        XCTAssertEqual(base.voiceClone, .optional)
+        XCTAssertEqual(base.instruct, .optional)
+        XCTAssertTrue(base.language)
+        XCTAssertFalse(base.emotionChips)
+        XCTAssertNotNil(base.knobs.temperature)
+        XCTAssertNotNil(base.knobs.topP)
+        XCTAssertTrue(base.presetSpeakers.isEmpty)
+
+        let design = BackendID.qwenDesign.controls
+        XCTAssertEqual(design.voiceClone, .none)
+        XCTAssertEqual(design.instruct, .required)
+
+        let custom = BackendID.qwenCustom.controls
+        XCTAssertEqual(custom.voiceClone, .none)
+        XCTAssertEqual(custom.instruct, .optional)
+        XCTAssertFalse(custom.presetSpeakers.isEmpty)
+        XCTAssertEqual(custom.presetSpeakers.first, "Vivian")
+
+        let fish = BackendID.fishS2Pro.controls
+        XCTAssertTrue(fish.emotionChips)
+        XCTAssertNotNil(fish.knobs.temperature)
+        XCTAssertNil(fish.knobs.topP)
+
+        let cb = BackendID.chatterbox.controls
+        XCTAssertEqual(cb.voiceClone, .required)
+        XCTAssertNotNil(cb.knobs.exaggeration)
+
+        let turbo = BackendID.chatterboxTurbo.controls
+        XCTAssertEqual(turbo.voiceClone, .required)
+        XCTAssertNil(turbo.knobs.exaggeration)
+        XCTAssertNil(turbo.knobs.temperature)
+    }
 }
