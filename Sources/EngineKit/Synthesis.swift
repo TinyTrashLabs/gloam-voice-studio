@@ -112,8 +112,9 @@ enum RequestPlanner {
         }
 
         func clean(_ s: String?) -> String? {
-            guard let s, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return s
+            guard let s else { return nil }
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
         }
 
         // Instruct: honored only when the backend allows it AND (on clone-capable

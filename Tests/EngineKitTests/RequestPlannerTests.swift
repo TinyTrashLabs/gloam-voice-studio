@@ -154,4 +154,17 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(p.speaker)
         XCTAssertNil(p.language)
     }
+
+    func testDesignWhitespaceInstructThrows() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .qwenDesign, request: SynthesisRequest(text: "hi", instruct: "   "))) { error in
+            XCTAssertEqual(error as? EngineError, .instructRequired(.qwenDesign))
+        }
+    }
+
+    func testInstructIsTrimmed() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwen17B, request: SynthesisRequest(text: "hi", instruct: "  warm radio  "))
+        XCTAssertEqual(p.instruct, "warm radio")
+    }
 }
