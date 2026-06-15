@@ -162,10 +162,6 @@ public enum APIRouter {
                                 topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                     }
                 } catch is RequestGate.Busy {
-                    deps.log.record(.init(
-                        method: "POST", path: "/v1/audio/speech", status: 503,
-                        model: backend.rawValue, voice: req.voice, instruct: req.instruct,
-                        note: "busy"))
                     throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
                 }
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
@@ -244,9 +240,10 @@ struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
             }
             return response
         } catch {
-            let status = (error as? APIError)?.status.code ?? 500
+            let apiError = error as? APIError
+            let status = apiError?.status.code ?? 500
             log.record(.init(method: "\(request.method)", path: request.uri.path,
-                             status: Int(status), note: "\(error)"))
+                             status: Int(status), note: apiError?.detail ?? "\(error)"))
             throw error
         }
     }

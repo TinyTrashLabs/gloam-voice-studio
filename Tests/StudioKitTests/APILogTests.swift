@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class APILogTests: XCTestCase {
-    func testRingBufferCapsAt500() {
+    func testRingBufferCapsAtCapacity() {
         let log = APILog(capacity: 3)
         for i in 0..<5 { log.append(.init(method: "GET", path: "/x\(i)", status: 200)) }
         XCTAssertEqual(log.entries.count, 3)

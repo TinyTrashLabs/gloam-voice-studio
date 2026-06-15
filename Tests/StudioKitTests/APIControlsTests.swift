@@ -74,6 +74,44 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testSpeechLogsExactlyOneEntryPerRequest() async throws {
+        let provider = CapturingProvider()
+        let log = APILog()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("log1-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B, log: log)
+        let app = Application(router: APIRouter.build(deps))
+
+        @Sendable func entryCount() async -> Int { await MainActor.run { log.entries.count } }
+        @Sendable func waitForEntries(_ n: Int) async throws {
+            for _ in 0..<50 { if await entryCount() >= n { return }; try await Task.sleep(for: .milliseconds(10)) }
+        }
+
+        try await app.test(.router) { client in
+            // success → 1 entry
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                body: ByteBuffer(string: #"{"input":"hi","model":"qwen3-1.7b","instruct":"warm"}"#)) { r in
+                XCTAssertEqual(r.status, .ok)
+            }
+            try await waitForEntries(1)
+            // a 400 (design model needs instruct) → 1 more entry
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                body: ByteBuffer(string: #"{"input":"hi","model":"qwen3-design"}"#)) { r in
+                XCTAssertEqual(r.status, .badRequest)
+            }
+            try await waitForEntries(2)
+        }
+        // Give any stray async hops a beat; then assert EXACTLY 2 (no duplicates).
+        try await Task.sleep(for: .milliseconds(50))
+        let count = await entryCount()
+        let describe = await MainActor.run { log.entries.map { "\($0.path) \($0.status)" } }
+        XCTAssertEqual(count, 2, "expected exactly one entry per request, got \(count): \(describe)")
+        // The success entry is status 200, the error entry 400 — verify no duplicate statuses sneaked in.
+        let statuses = await MainActor.run { log.entries.map(\.status).sorted() }
+        XCTAssertEqual(statuses, [200, 400])
+    }
+
     func testBusyReturns503() async throws {
         final class SlowModel: SpeechModel, @unchecked Sendable {
             let sampleRate = 24000
