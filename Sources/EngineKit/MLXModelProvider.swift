@@ -43,8 +43,6 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         do {
             var refAudio: MLXArray?
             if let path = request.refAudioPath {
-                // Resample on load: fish refs must hit the 44.1 kHz codec rate,
-                // chatterbox refs its 24 kHz — both equal model.sampleRate here.
                 (_, refAudio) = try loadAudioArray(
                     from: URL(fileURLWithPath: path), sampleRate: model.sampleRate)
             }
@@ -52,13 +50,31 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 chatterbox.emotionAdvOverride = request.exaggeration
             }
             var params = model.defaultGenerationParameters
-            if let temperature = request.temperature {
-                params.temperature = temperature
+            if let temperature = request.temperature { params.temperature = temperature }
+            if let topP = request.topP { params.topP = topP }
+            if let topK = request.topK { params.topK = topK }
+            if let rep = request.repetitionPenalty { params.repetitionPenalty = rep }
+
+            let audio: MLXArray
+            if backend == .qwenCustom, let qwen = model as? Qwen3TTSModel {
+                // CustomVoice: stable preset speaker + optional instruct compose.
+                audio = try await qwen.generateCustomVoice(
+                    text: request.text,
+                    speaker: request.speaker ?? "",
+                    instruct: request.instruct,
+                    language: request.language,
+                    generationParameters: params)
+            } else {
+                // Base/VoiceDesign/Fish/Chatterbox. For Qwen, `voice:` carries the
+                // instruct (honored only on the no-ref path — planner already enforced this).
+                audio = try await model.generate(
+                    text: request.text,
+                    voice: backend.isQwen ? request.instruct : nil,
+                    refAudio: refAudio,
+                    refText: request.refText,
+                    language: request.language,
+                    generationParameters: params)
             }
-            let audio = try await model.generate(
-                text: request.text, voice: nil, refAudio: refAudio,
-                refText: request.refText, language: nil,
-                generationParameters: params)
             return audio.asArray(Float.self)
         } catch let error as EngineError {
             throw error
