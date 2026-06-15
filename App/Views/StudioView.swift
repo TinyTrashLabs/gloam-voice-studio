@@ -113,6 +113,68 @@ struct StudioView: View {
         }
     }
 
+    static let languages: [(String, String)] = [
+        ("auto", "Auto"), ("english", "English"), ("chinese", "Chinese"),
+        ("japanese", "Japanese"), ("korean", "Korean"), ("german", "German"),
+        ("french", "French"), ("russian", "Russian"), ("portuguese", "Portuguese"),
+        ("spanish", "Spanish"), ("italian", "Italian"),
+    ]
+
+    private func hasAnyKnob(_ k: Knobs) -> Bool {
+        k.temperature != nil || k.topP != nil || k.topK != nil
+            || k.repetitionPenalty != nil || k.exaggeration != nil
+    }
+
+    @ViewBuilder
+    private func advancedKnobs(_ knobs: Knobs) -> some View {
+        @Bindable var model = model
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                if let r = knobs.temperature {
+                    knobRow("Temperature", $model.temperatureOverride, r,
+                            help: "Sampling temperature — higher = more dynamic")
+                }
+                if let r = knobs.topP {
+                    knobRow("Top-p", $model.qwenTopP, r, help: "Nucleus sampling cutoff")
+                }
+                if let r = knobs.topK {
+                    HStack {
+                        Text("Top-k")
+                        Slider(value: Binding(
+                            get: { Float(model.qwenTopK) },
+                            set: { model.qwenTopK = Int($0) }),
+                            in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                        Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
+                    }
+                }
+                if let r = knobs.repetitionPenalty {
+                    knobRow("Repetition", $model.qwenRepetitionPenalty, r,
+                            help: "Penalize repeated tokens")
+                }
+                if let r = knobs.exaggeration {
+                    knobRow("Exaggeration", $model.exaggerationOverride, r,
+                            help: "Drive Chatterbox's intensity")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6)
+        } label: {
+            Label("Advanced", systemImage: "slider.horizontal.3")
+        }
+        .font(.callout)
+    }
+
+    @ViewBuilder
+    private func knobRow(_ label: String, _ value: Binding<Float>,
+                         _ range: ClosedRange<Float>, help: String) -> some View {
+        HStack {
+            Text(label)
+            Slider(value: value, in: range).frame(width: 160).help(help)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.system(.caption, design: .monospaced))
+        }
+    }
+
     @ViewBuilder
     private var benchControls: some View {
         @Bindable var model = model
@@ -177,54 +239,57 @@ struct StudioView: View {
         // ── DIRECT zone (inset card) ─────────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
         zoneLabel("DIRECT")
-        VStack(alignment: .leading, spacing: 8) {
-            // Emotion chips wrap naturally — no ViewThatFits needed
-            HStack {
-                Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim)
-                Spacer()
-            }
-            emotionPicker
-            speedControls
-
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Replace the emotion presets with manual knobs: Temperature controls how adventurous Fish's delivery is; Exaggeration drives Chatterbox's intensity.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Use manual knobs", isOn: $model.useDirectionOverrides)
-                        .help("Enable manual temperature and exaggeration controls")
-                    if model.useDirectionOverrides {
-                        if model.backend.spec.honorsTags {
-                            HStack {
-                                Text("Temperature")
-                                Slider(value: $model.temperatureOverride,
-                                       in: 0.3...1.2).frame(width: 160)
-                                    .help("How adventurous Fish's delivery is")
-                                Text(String(format: "%.2f", model.temperatureOverride))
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                        }
-                        if model.backend == .chatterbox {
-                            HStack {
-                                Text("Exaggeration")
-                                Slider(value: $model.exaggerationOverride,
-                                       in: 0...1).frame(width: 160)
-                                    .help("Drive Chatterbox's intensity")
-                                Text(String(format: "%.2f", model.exaggerationOverride))
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                        }
-                        if !model.backend.spec.honorsTags && model.backend != .chatterbox {
-                            Text("chatterbox-turbo ignores direction knobs — emotion comes from acted reference variants.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+        let controls = model.backend.controls
+        VStack(alignment: .leading, spacing: 10) {
+            // Speaker (CustomVoice)
+            if !controls.presetSpeakers.isEmpty {
+                HStack {
+                    Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
+                    Picker("", selection: $model.speaker) {
+                        ForEach(controls.presetSpeakers, id: \.self) { Text($0).tag($0) }
+                    }.labelsHidden().frame(width: 160)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 6)
-            } label: {
-                Label("Fine-tune delivery (advanced)", systemImage: "slider.horizontal.3")
             }
-            .font(.callout)
+            // Direction (instruct)
+            if controls.instruct != .none {
+                HStack {
+                    Text(controls.instruct == .required ? "Direction (required)" : "Direction")
+                        .font(.caption).foregroundStyle(Brand.fgDim)
+                    Spacer()
+                }
+                TextEditor(text: $model.instruct)
+                    .font(.system(.callout, design: .default))
+                    .frame(height: 54)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
+                    .accessibilityIdentifier("instruct-editor")
+                if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
+                    Text("A reference voice is selected — Direction is ignored (clone takes priority). "
+                         + "Clear the voice to design by description.")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            // Language
+            if controls.language {
+                HStack {
+                    Text("Language").font(.caption).foregroundStyle(Brand.fgDim)
+                    Picker("", selection: $model.language) {
+                        ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
+                    }.labelsHidden().frame(width: 160)
+                }
+            }
+            // Emotion chips (fish/chatterbox/turbo)
+            if controls.emotionChips {
+                HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
+                emotionPicker
+            }
+            speedControls
+            // Advanced knob sliders
+            if hasAnyKnob(controls.knobs) {
+                advancedKnobs(controls.knobs)
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.02)))
