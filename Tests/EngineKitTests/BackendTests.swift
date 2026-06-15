@@ -94,7 +94,7 @@ final class BackendTests: XCTestCase {
     func testControlSurfaces() {
         let base = BackendID.qwen17B.controls
         XCTAssertEqual(base.voiceClone, .optional)
-        XCTAssertEqual(base.instruct, .optional)
+        XCTAssertEqual(base.instruct, .none, "Base is a clone model — no natural-language instruct")
         XCTAssertTrue(base.language)
         XCTAssertFalse(base.emotionChips)
         XCTAssertNotNil(base.knobs.temperature)

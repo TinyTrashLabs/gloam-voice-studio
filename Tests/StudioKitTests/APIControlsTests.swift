@@ -29,10 +29,11 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
     }
 
     func testInstructAndLanguageReachEngine() async throws {
+        // Direction (instruct) is honored on the design model, not Base (clone-only).
         let provider = CapturingProvider()
-        let app = Application(router: APIRouter.build(makeDeps(provider)))
+        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwenDesign)))
         try await app.test(.router) { client in
-            let body = #"{"input":"hello","model":"qwen3-1.7b","instruct":"warm radio","language":"english","top_p":0.9}"#
+            let body = #"{"input":"hello","model":"qwen3-design","instruct":"warm radio","language":"english","top_p":0.9}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
                                      body: ByteBuffer(string: body)) { resp in
                 XCTAssertEqual(resp.status, .ok)
@@ -40,6 +41,21 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(provider.model.last?.instruct, "warm radio")
             XCTAssertEqual(provider.model.last?.language, "english")
             XCTAssertEqual(provider.model.last?.topP, 0.9)
+        }
+    }
+
+    func testBaseDoesNotForwardInstruct() async throws {
+        // Base is clone-only: instruct in the request must not reach the engine.
+        let provider = CapturingProvider()
+        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwen17B)))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","instruct":"warm radio","language":"english"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+            XCTAssertNil(provider.model.last?.instruct)
+            XCTAssertEqual(provider.model.last?.language, "english")
         }
     }
 

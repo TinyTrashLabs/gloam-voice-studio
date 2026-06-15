@@ -109,22 +109,28 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(plan.exaggeration)
     }
 
-    func testQwenBasePassesInstructAndLanguageAndKnobs() throws {
+    func testQwenBasePassesLanguageAndKnobsButNotInstruct() throws {
+        // Base is a clone model: it honors language + sampling knobs, but NOT instruct.
         let req = SynthesisRequest(text: "hi", instruct: "warm radio", language: "english",
                                    topP: 0.9, topK: 40, repetitionPenalty: 1.1)
         let p = try RequestPlanner.plan(backend: .qwen17B, request: req)
-        XCTAssertEqual(p.instruct, "warm radio")
+        XCTAssertNil(p.instruct, "Base does not take instruct")
         XCTAssertEqual(p.language, "english")
         XCTAssertEqual(p.topP, 0.9)
         XCTAssertEqual(p.topK, 40)
         XCTAssertEqual(p.repetitionPenalty, 1.1)
     }
 
-    func testQwenBaseCloneWinsDropsInstruct() throws {
-        let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", instruct: "angry")
-        let p = try RequestPlanner.plan(backend: .qwen17B, request: req)
-        XCTAssertEqual(p.refAudioPath, "/tmp/r.wav")
-        XCTAssertNil(p.instruct, "clone path ignores instruct")
+    func testQwenBaseNeverPassesInstruct() throws {
+        // With or without a reference clip, Base never forwards instruct.
+        let withRef = try RequestPlanner.plan(
+            backend: .qwen17B,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", instruct: "angry"))
+        XCTAssertEqual(withRef.refAudioPath, "/tmp/r.wav")
+        XCTAssertNil(withRef.instruct)
+        let noRef = try RequestPlanner.plan(
+            backend: .qwen17B, request: SynthesisRequest(text: "hi", instruct: "angry"))
+        XCTAssertNil(noRef.instruct)
     }
 
     func testDesignRequiresInstruct() {
@@ -164,7 +170,7 @@ final class RequestPlannerTests: XCTestCase {
 
     func testInstructIsTrimmed() throws {
         let p = try RequestPlanner.plan(
-            backend: .qwen17B, request: SynthesisRequest(text: "hi", instruct: "  warm radio  "))
+            backend: .qwenDesign, request: SynthesisRequest(text: "hi", instruct: "  warm radio  "))
         XCTAssertEqual(p.instruct, "warm radio")
     }
 

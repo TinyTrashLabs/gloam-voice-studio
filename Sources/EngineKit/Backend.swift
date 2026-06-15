@@ -120,7 +120,9 @@ extension BackendID {
     public var controls: ControlSurface {
         switch self {
         case .qwen06B, .qwen17B:
-            ControlSurface(voiceClone: .optional, instruct: .optional,
+            // Base is a voice-cloning model (text + reference audio). It does NOT
+            // take a natural-language instruct — that's VoiceDesign/CustomVoice only.
+            ControlSurface(voiceClone: .optional, instruct: .none,
                            language: true, emotionChips: false, knobs: Self.qwenKnobs)
         case .qwenDesign:
             ControlSurface(voiceClone: .none, instruct: .required,

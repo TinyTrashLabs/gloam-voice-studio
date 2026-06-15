@@ -23,22 +23,25 @@ Returns `audio/wav`. Errors are `{"detail": "..."}` with status 400/403/503.
 
 | model | clone (`voice`) | `speaker` | `instruct` | `language` | sampling |
 |---|---|---|---|---|---|
-| `qwen3-0.6b` / `qwen3-1.7b` (Base) | optional | — | optional* | yes | temp/top_p/top_k/rep |
+| `qwen3-0.6b` / `qwen3-1.7b` (Base) | optional | — | **✗** | yes | temp/top_p/top_k/rep |
 | `qwen3-design` (VoiceDesign) | ✗ | — | **required** | yes | temp/top_p/top_k/rep |
 | `qwen3-custom` (CustomVoice) | ✗ | **required** | optional | yes | temp/top_p/top_k/rep |
 | `fish-s2-pro` | optional | — | ✗ | ✗ | temperature |
 | `chatterbox-turbo` / `chatterbox` | required | — | ✗ | ✗ | exaggeration (regular only) |
 
-\* **Clone-vs-instruct exclusivity (Base):** if you send `voice` (clone), `instruct` is **ignored** — the
-model clones and disregards the direction. To design by description, send `instruct` and **omit** `voice`.
+**Base is clone-only.** The 0.6B/1.7B Base models are voice-cloning checkpoints (text + reference audio);
+they do **not** take `instruct`. Any `instruct` sent with a Base model is **ignored** by the server (gated
+off before the engine). Natural-language direction lives only on `qwen3-design` and `qwen3-custom`.
 
 ## Choosing a model
 
 - **Direct a stable, known voice** (keep identity, change delivery) → `qwen3-custom` with `speaker` +
-  `instruct`. Best fit for a DJ persona you reuse across lines.
-- **Invent a voice from a description** → `qwen3-design` with `instruct` (no voice-identity guarantee
-  across calls).
-- **Clone a library voice** → Base (`qwen3-0.6b` / `qwen3-1.7b`) with `voice`.
+  `instruct`. Best fit for a DJ persona you reuse across lines. Note: only `Ryan` and `Aiden` are English
+  presets (both male); the rest are tuned for Chinese/Japanese/Korean.
+- **Invent a voice from a description** → `qwen3-design` with `instruct` (no stable identity across calls —
+  the description *is* the voice each time).
+- **Clone a specific voice** → Base (`qwen3-0.6b` / `qwen3-1.7b`) with `voice`. No `instruct`; for emotional
+  variation on a clone, use `fish-s2-pro` or `chatterbox` (Emotion presets), not Qwen Base.
 
 ## Writing `instruct`
 
