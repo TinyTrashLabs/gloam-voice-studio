@@ -56,6 +56,31 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testMiddlewareLogsHealthRequest() async throws {
+        let log = await APILog(capacity: 50)
+        let logDeps = APIDependencies(
+            engine: GloamEngine(provider: FakeProvider()),
+            voices: VoiceLibrary(directory: dir),
+            defaultBackend: .chatterboxTurbo,
+            log: log)
+        let app = Application(router: APIRouter.build(logDeps))
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/health", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+            }
+        }
+        // The middleware's `record` hops to @MainActor via Task; poll briefly.
+        var entry: APILogEntry?
+        for _ in 0..<50 {
+            entry = await MainActor.run { log.entries.first(where: { $0.path == "/health" }) }
+            if entry != nil { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(entry?.path, "/health")
+        XCTAssertEqual(entry?.method, "GET")
+        XCTAssertEqual(entry?.status, 200)
+    }
+
     func testVoiceCRUDAndErrorContract() async throws {
         try await app().test(.router) { client in
             // create

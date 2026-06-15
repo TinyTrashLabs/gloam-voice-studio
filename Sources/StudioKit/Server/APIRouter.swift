@@ -27,6 +27,8 @@ public enum APIRouter {
             allowHeaders: [.contentType],
             allowMethods: [.get, .post, .patch, .delete, .options]))
 
+        router.add(middleware: APILogMiddleware(log: deps.log))
+
         router.get("health") { _, _ in
             let loaded = await deps.engine.loadedBackend()
             return HealthResponse(
@@ -116,6 +118,7 @@ public enum APIRouter {
         }
 
         router.post("v1/audio/speech") { request, context in
+            let start = Date()
             let req = try await request.decode(as: SpeechRequest.self, context: context)
             if (req.response_format ?? "wav") != "wav" {
                 throw APIError(status: .badRequest,
@@ -159,10 +162,18 @@ public enum APIRouter {
                                 topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                     }
                 } catch is RequestGate.Busy {
+                    deps.log.record(.init(
+                        method: "POST", path: "/v1/audio/speech", status: 503,
+                        model: backend.rawValue, voice: req.voice, instruct: req.instruct,
+                        note: "busy"))
                     throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
                 }
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
                                             sampleRate: result.sampleRate)
+                deps.log.record(.init(
+                    method: "POST", path: "/v1/audio/speech", status: 200,
+                    model: backend.rawValue, voice: req.voice, instruct: req.instruct,
+                    durationMs: Int(Date().timeIntervalSince(start) * 1000)))
                 return Response(status: .ok,
                                 headers: [.contentType: "audio/wav"],
                                 body: .init(byteBuffer: ByteBuffer(data: wav)))
@@ -211,6 +222,32 @@ public enum APIRouter {
             case .invalidRefAudio(let message):
                 throw APIError(status: .badRequest, detail: message)
             }
+        }
+    }
+}
+
+/// Logs method/path/status/duration for every request. The speech handler adds a
+/// richer entry on success/503; this catches everything else (errors, health, CRUD)
+/// and speech-endpoint errors (4xx/5xx thrown as APIError).
+struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
+    let log: APILog
+    func handle(_ request: Request, context: Context,
+                next: (Request, Context) async throws -> Response) async throws -> Response {
+        let start = ContinuousClock.now
+        let isSpeech = request.uri.path == "/v1/audio/speech"
+        do {
+            let response = try await next(request, context)
+            if !isSpeech {
+                let ms = Int(start.duration(to: .now) / .milliseconds(1))
+                log.record(.init(method: "\(request.method)", path: request.uri.path,
+                                 status: Int(response.status.code), durationMs: ms))
+            }
+            return response
+        } catch {
+            let status = (error as? APIError)?.status.code ?? 500
+            log.record(.init(method: "\(request.method)", path: request.uri.path,
+                             status: Int(status), note: "\(error)"))
+            throw error
         }
     }
 }
