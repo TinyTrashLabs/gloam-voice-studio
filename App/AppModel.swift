@@ -67,8 +67,8 @@ final class AppModel {
     var generationError: String?
     var voicesVersion = 0   // bump to refresh voice lists after library mutations
 
-    // Direction overrides (Task 6 wires the UI)
-    var useDirectionOverrides = false
+    // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
+    // gated per backend by ControlSurface.knobs).
     var temperatureOverride: Float = 0.7
     var exaggerationOverride: Float = 0.5
 
