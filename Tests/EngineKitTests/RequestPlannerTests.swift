@@ -167,4 +167,24 @@ final class RequestPlannerTests: XCTestCase {
             backend: .qwen17B, request: SynthesisRequest(text: "hi", instruct: "  warm radio  "))
         XCTAssertEqual(p.instruct, "warm radio")
     }
+
+    func testDesignDropsRefAudioAndKeepsInstruct() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwenDesign,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      refText: "ref", instruct: "old wise narrator"))
+        XCTAssertNil(p.refAudioPath, "design must not clone")
+        XCTAssertNil(p.refText)
+        XCTAssertEqual(p.instruct, "old wise narrator")
+    }
+
+    func testCustomDropsRefAudio() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwenCustom,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      instruct: "calm", speaker: "Dylan"))
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertEqual(p.speaker, "Dylan")
+        XCTAssertEqual(p.instruct, "calm")
+    }
 }

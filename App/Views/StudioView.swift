@@ -180,43 +180,47 @@ struct StudioView: View {
         @Bindable var model = model
 
         // ── VOICE picker ────────────────────────────────────────────────────
-        zoneLabel("VOICE")
-        let voices = model.voices.list()
-        // Custom popover dropdown (not a native Menu): AppKit menus flatten
-        // custom SwiftUI views, so VoiceAvatarView collapsed to a bare monogram
-        // and names dropped. A popover renders full SwiftUI, avatars included.
-        Button {
-            voicePickerOpen.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                if let slug = model.selectedVoiceSlug,
-                   let voice = voices.first(where: { $0.slug == slug }) {
-                    VoiceAvatarView(
-                        slug: voice.slug,
-                        name: voice.name,
-                        avatarURL: model.voices.avatarURL(voice.slug),
-                        size: 22)
-                    Text(voice.name)
-                        .font(.system(.callout, design: .default))
-                        .foregroundStyle(Brand.fg)
-                } else {
-                    Text("Choose a voice")
-                        .foregroundStyle(Brand.fgDim)
+        // Spec §C.1: only show the Voice picker for clone-capable backends.
+        // Hide it for voiceClone == .none (qwen3-design/custom).
+        if model.backend.controls.voiceClone != .none {
+            zoneLabel("VOICE")
+            let voices = model.voices.list()
+            // Custom popover dropdown (not a native Menu): AppKit menus flatten
+            // custom SwiftUI views, so VoiceAvatarView collapsed to a bare monogram
+            // and names dropped. A popover renders full SwiftUI, avatars included.
+            Button {
+                voicePickerOpen.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    if let slug = model.selectedVoiceSlug,
+                       let voice = voices.first(where: { $0.slug == slug }) {
+                        VoiceAvatarView(
+                            slug: voice.slug,
+                            name: voice.name,
+                            avatarURL: model.voices.avatarURL(voice.slug),
+                            size: 22)
+                        Text(voice.name)
+                            .font(.system(.callout, design: .default))
+                            .foregroundStyle(Brand.fg)
+                    } else {
+                        Text("Choose a voice")
+                            .foregroundStyle(Brand.fgDim)
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(Brand.fgFaint)
                 }
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(Brand.fgFaint)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 1))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.12), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .accessibilityIdentifier("voice-picker")
-        .popover(isPresented: $voicePickerOpen, arrowEdge: .bottom) {
-            voicePickerList(voices)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .accessibilityIdentifier("voice-picker")
+            .popover(isPresented: $voicePickerOpen, arrowEdge: .bottom) {
+                voicePickerList(voices)
+            }
         }
 
         // ── WRITE zone ──────────────────────────────────────────────────────

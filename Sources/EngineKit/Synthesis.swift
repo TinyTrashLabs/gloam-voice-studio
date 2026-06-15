@@ -105,7 +105,13 @@ enum RequestPlanner {
         guard request.speed > 0 else { throw EngineError.invalidSpeed(request.speed) }
         let spec = backend.spec
         let controls = backend.controls
-        let hasRef = request.refAudioPath != nil
+        // Reference voice is only meaningful for clone-capable backends; for
+        // voiceClone == .none (qwen3-design/custom) drop it so the model never
+        // takes the clone path and ignores a required instruct.
+        let allowsClone = controls.voiceClone != .none
+        let refAudioPath = allowsClone ? request.refAudioPath : nil
+        let refText = allowsClone ? request.refText : nil
+        let hasRef = refAudioPath != nil
 
         if spec.needsRefAudio && !hasRef {
             throw EngineError.refAudioRequired(backend)
@@ -137,8 +143,8 @@ enum RequestPlanner {
 
         return ProviderRequest(
             text: request.text,
-            refAudioPath: request.refAudioPath,
-            refText: request.refText,
+            refAudioPath: refAudioPath,
+            refText: refText,
             temperature: knobs.temperature != nil
                 ? (request.temperatureOverride ?? (spec.honorsTags ? request.emotion.fishTemperature : nil))
                 : nil,
