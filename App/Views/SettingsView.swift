@@ -32,7 +32,8 @@ struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
     @State private var fishSheetShown = false
 
-    private let backends: [BackendID] = [.qwen3, .chatterboxTurbo, .fishS2Pro, .chatterbox]
+    private let backends: [BackendID] =
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
 
     var body: some View {
         @Bindable var model = model
@@ -58,6 +59,17 @@ struct BackendsSettings: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(backend.rawValue)
                 Text(sizeLabel(backend)).font(.caption).foregroundStyle(.secondary)
+                if backend.isQwen {
+                    Picker("Precision", selection: Binding(
+                        get: { model.downloads.quant(for: backend) },
+                        set: { model.downloads.setQuant($0, for: backend) })) {
+                        ForEach(QwenQuant.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(width: 110)
+                    .disabled({ if case .downloading = state { true } else { false } }())
+                }
             }
             Spacer()
             switch state {
@@ -89,7 +101,7 @@ struct BackendsSettings: View {
     }
 
     private func sizeLabel(_ backend: BackendID) -> String {
-        let bytes = ModelDownloadManager.approxBytes[backend] ?? 0
+        let bytes = model.downloads.approxBytes(for: backend)
         return "≈ " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
             + (backend.spec.needsLicenseAck ? " · research/personal license" : "")
     }
@@ -137,8 +149,37 @@ struct ServerSettings: View {
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
             }
+            Section("Request console") {
+                if model.apiLog.entries.isEmpty {
+                    Text("No requests yet.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button("Clear") { model.apiLog.clear() }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(model.apiLog.entries) { e in
+                                Text(consoleLine(e))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(e.status >= 400 ? .orange : Brand.fgDim)
+                                    .textSelection(.enabled)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 180)
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func consoleLine(_ e: APILogEntry) -> String {
+        let t = e.timestamp.formatted(date: .omitted, time: .standard)
+        var parts = ["\(t)  \(e.method) \(e.path) → \(e.status)"]
+        if let ms = e.durationMs { parts.append("\(ms)ms") }
+        if let m = e.model { parts.append(m) }
+        if let v = e.voice { parts.append("voice=\(v)") }
+        if let i = e.instruct, !i.isEmpty { parts.append("instruct=\"\(i.prefix(40))\"") }
+        if let n = e.note { parts.append("(\(n))") }
+        return parts.joined(separator: "  ")
     }
 }
 
