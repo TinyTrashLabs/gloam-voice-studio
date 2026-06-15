@@ -146,13 +146,21 @@ public enum APIRouter {
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
             }
             do {
-                let result = try await deps.engine.synthesize(
-                    backend: backend,
-                    request: SynthesisRequest(
-                        text: req.input, refAudioPath: refPath, refText: refText,
-                        temperatureOverride: req.temperature,
-                        instruct: req.instruct, speaker: req.speaker, language: req.language,
-                        topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
+                let result: SynthesisResult
+                let synthRefPath = refPath, synthRefText = refText
+                do {
+                    result = try await deps.gate.run {
+                        try await deps.engine.synthesize(
+                            backend: backend,
+                            request: SynthesisRequest(
+                                text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
+                                temperatureOverride: req.temperature,
+                                instruct: req.instruct, speaker: req.speaker, language: req.language,
+                                topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
+                    }
+                } catch is RequestGate.Busy {
+                    throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+                }
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
                                             sampleRate: result.sampleRate)
                 return Response(status: .ok,

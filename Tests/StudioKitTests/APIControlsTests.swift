@@ -73,4 +73,46 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             }
         }
     }
+
+    func testBusyReturns503() async throws {
+        final class SlowModel: SpeechModel, @unchecked Sendable {
+            let sampleRate = 24000
+            func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+                try await Task.sleep(for: .milliseconds(400)); return [0.0]
+            }
+        }
+        final class SlowProvider: ModelProviding, @unchecked Sendable {
+            func loadModel(backend: BackendID) async throws -> any SpeechModel { SlowModel() }
+            func didEvictModel() {}
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("busy-\(UUID())")
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: SlowProvider()),
+            voices: VoiceLibrary(directory: dir), defaultBackend: .qwen17B,
+            gate: RequestGate(maxConcurrent: 1, maxQueued: 1))
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.live) { client in
+            // The server processes one request at a time per connection, so each
+            // concurrent request needs its own TCP connection for the gate to see
+            // them overlap. `client.port` is the live server's bound port.
+            let port = try XCTUnwrap(client.port)
+            let body = #"{"input":"hello","model":"qwen3-1.7b","instruct":"warm"}"#
+            func fire() -> Task<Int, Error> {
+                Task {
+                    try await TestClient.withClient(host: "localhost", port: port) { c in
+                        let req = TestClient.Request("/v1/audio/speech", method: .post,
+                                                     authority: "localhost",
+                                                     body: ByteBuffer(string: body))
+                        let r = try await c.execute(req)
+                        return Int(r.status.code)
+                    }
+                }
+            }
+            let a = fire(); try await Task.sleep(for: .milliseconds(30))
+            let b = fire(); try await Task.sleep(for: .milliseconds(30))
+            let c = fire()
+            let codes = [try await a.value, try await b.value, try await c.value]
+            XCTAssertTrue(codes.contains(503), "expected at least one 503, got \(codes)")
+        }
+    }
 }
