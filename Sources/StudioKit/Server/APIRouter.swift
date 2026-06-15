@@ -124,10 +124,21 @@ public enum APIRouter {
             guard !req.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw APIError(status: .badRequest, detail: "input is empty")
             }
-            // OpenAI clients send voices like "alloy" — a matching library slug
-            // clones that voice; unknown names fall through to no reference so
-            // off-the-shelf clients work without config (server.py parity).
             let backend = req.model.flatMap(BackendID.init(rawValue:)) ?? deps.defaultBackend
+            let controls = backend.controls
+
+            func blank(_ s: String?) -> Bool {
+                (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if controls.instruct == .required && blank(req.instruct) {
+                throw APIError(status: .badRequest, detail: "\(backend.rawValue) requires 'instruct'")
+            }
+            if !controls.presetSpeakers.isEmpty,
+               blank(req.speaker) || !controls.presetSpeakers.contains(req.speaker ?? "") {
+                throw APIError(status: .badRequest,
+                               detail: "\(backend.rawValue) requires a preset 'speaker'")
+            }
+
             var refPath: String? = nil
             var refText: String? = nil
             if let voice = req.voice, let found = try? deps.voices.get(voice) {
@@ -137,8 +148,11 @@ public enum APIRouter {
             do {
                 let result = try await deps.engine.synthesize(
                     backend: backend,
-                    request: SynthesisRequest(text: req.input, refAudioPath: refPath,
-                                              refText: refText))
+                    request: SynthesisRequest(
+                        text: req.input, refAudioPath: refPath, refText: refText,
+                        temperatureOverride: req.temperature,
+                        instruct: req.instruct, speaker: req.speaker, language: req.language,
+                        topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
                                             sampleRate: result.sampleRate)
                 return Response(status: .ok,
@@ -149,6 +163,10 @@ public enum APIRouter {
             } catch EngineError.refAudioRequired(let b) {
                 throw APIError(status: .badRequest,
                                detail: "backend '\(b.rawValue)' requires reference audio")
+            } catch EngineError.instructRequired(let b) {
+                throw APIError(status: .badRequest, detail: "\(b.rawValue) requires 'instruct'")
+            } catch EngineError.speakerRequired(let b) {
+                throw APIError(status: .badRequest, detail: "\(b.rawValue) requires a preset 'speaker'")
             } catch let error as EngineError {
                 throw APIError(status: .internalServerError, detail: "\(error)")
             }

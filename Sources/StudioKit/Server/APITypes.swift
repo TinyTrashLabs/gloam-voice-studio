@@ -58,8 +58,15 @@ struct VoiceImportRequest: Codable {
 
 struct SpeechRequest: Codable {
     let input: String
-    let model: String?            // backend name; anything else = default backend
-    let voice: String?            // library slug; unknown names fall through
+    let model: String?
+    let voice: String?
+    let speaker: String?
+    let instruct: String?
+    let language: String?
+    let temperature: Float?
+    let top_p: Float?
+    let top_k: Int?
+    let repetition_penalty: Float?
     let response_format: String?
 }
 
@@ -69,11 +76,14 @@ public struct APIDependencies: Sendable {
     public let engine: GloamEngine
     public let voices: VoiceLibrary
     public let defaultBackend: BackendID
+    public let log: APILog
 
-    public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID) {
+    public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
+                log: APILog = APILog()) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
+        self.log = log
     }
 }
 
