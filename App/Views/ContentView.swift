@@ -33,6 +33,13 @@ struct ContentView: View {
         .sheet(isPresented: .constant(!model.didAcceptCloneConsent)) {
             ConsentSheet()
         }
+        .sheet(isPresented: Binding(
+            get: { model.downloadPrompt != nil },
+            set: { if !$0 { model.downloadPrompt = nil } })) {
+            if let backend = model.downloadPrompt {
+                DownloadPromptSheet(backend: backend)
+            }
+        }
     }
 
     // macOS merges all automatic toolbar items into ONE "Liquid Glass" capsule.
@@ -43,6 +50,23 @@ struct ContentView: View {
     // the items share one capsule (acceptable fallback).
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
+        // 0. Global download progress — appears only while a model is downloading,
+        //    so a background fetch is always visible no matter which screen you're on.
+        if let dl = model.downloads.activeDownload {
+            ToolbarItem(placement: .automatic) {
+                HStack(spacing: 6) {
+                    ProgressView(value: dl.fraction).frame(width: 56)
+                    Text("\(dl.backend.rawValue) \(Int(dl.fraction * 100))%")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(Brand.fgDim)
+                        .lineLimit(1).fixedSize()
+                }
+                .padding(.horizontal, 9).padding(.vertical, 2)
+                .help("Downloading \(dl.backend.rawValue)…")
+            }
+            if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
+        }
+
         // 1+2. Model chooser — a Button + popover, NOT a native Menu. Menus
         //      rescale the status dot to the default control icon size (so it
         //      never matched the API dot) and flatten custom views. A popover
@@ -106,10 +130,10 @@ struct ContentView: View {
     /// Display name (+ honest flag for regular chatterbox's doubling bug).
     private func modelDisplayName(_ b: BackendID) -> String {
         switch b {
-        case .qwen06B: "qwen3-0.6b (clone + instruct)"
-        case .qwen17B: "qwen3-1.7b (clone + instruct)"
-        case .qwenDesign: "qwen3-design (design a voice)"
-        case .qwenCustom: "qwen3-custom (preset + instruct)"
+        case .qwen06B: "qwen3-0.6b · clone a voice"
+        case .qwen17B: "qwen3-1.7b · clone a voice"
+        case .qwenDesign: "qwen3-design · design from text"
+        case .qwenCustom: "qwen3-custom · direct a preset voice"
         case .chatterbox: "chatterbox (legacy — doubles)"
         default: b.rawValue
         }
@@ -325,6 +349,41 @@ struct ModelManagerView: View {
         case .notDownloaded: "not downloaded"
         case .failed(let message): message
         }
+    }
+}
+
+/// Offered when Generate hits a model that isn't downloaded yet. Confirming
+/// starts a background download (progress shows in the toolbar) and generates
+/// automatically once the model is ready.
+struct DownloadPromptSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let backend: BackendID
+
+    private var sizeText: String {
+        ByteCountFormatter.string(
+            fromByteCount: model.downloads.approxBytes(for: backend), countStyle: .file)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Download “\(backend.rawValue)”?").font(.title3.bold())
+            Text("This model isn’t on your Mac yet (about \(sizeText)). It’ll download in "
+                 + "the background — you’ll see progress in the toolbar — and generate "
+                 + "automatically once it’s ready.")
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Not Now") { model.cancelDownloadPrompt(); dismiss() }
+                Button("Download & Generate") {
+                    model.confirmDownloadFromPrompt(); dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("confirm-download")
+            }
+        }
+        .padding(22)
+        .frame(width: 440)
     }
 }
 

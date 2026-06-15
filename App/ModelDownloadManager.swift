@@ -38,6 +38,17 @@ final class ModelDownloadManager {
         refresh()
     }
 
+    /// The first backend currently downloading, with its progress fraction —
+    /// drives the global download indicator in the toolbar. nil when idle.
+    var activeDownload: (backend: BackendID, fraction: Double)? {
+        for backend in BackendID.allCases {
+            if case .downloading(let fraction) = states[backend] {
+                return (backend, fraction)
+            }
+        }
+        return nil
+    }
+
     func state(for backend: BackendID) -> State {
         uiTest ? .ready : (states[backend] ?? .notDownloaded)
     }

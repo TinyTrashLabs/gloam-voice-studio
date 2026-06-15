@@ -13,6 +13,8 @@ struct StudioView: View {
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var voicePickerOpen = false
+    @State private var showSaveDirection = false
+    @State private var saveDirectionName = ""
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
 
     private var mode: StudioMode {
@@ -44,6 +46,32 @@ struct StudioView: View {
                                          set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .wav,
                       defaultFilename: "gloam-take") { _ in exportDoc = nil }
+        .sheet(isPresented: $showSaveDirection) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Save Direction").font(.title3.bold())
+                Text("Save the current Direction text as a reusable preset (saving over a "
+                     + "matching name updates it).")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Name (e.g. Excited deep DJ)", text: $saveDirectionName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { commitSaveDirection() }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showSaveDirection = false; saveDirectionName = "" }
+                    Button("Save") { commitSaveDirection() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(saveDirectionName.trimmingCharacters(
+                            in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(22).frame(width: 420)
+        }
+    }
+
+    private func commitSaveDirection() {
+        model.saveDirection(named: saveDirectionName)
+        saveDirectionName = ""
+        showSaveDirection = false
     }
 
     /// The whole bench scrolls: expanded disclosures (tags, fine-tune) must
@@ -113,6 +141,25 @@ struct StudioView: View {
         }
     }
 
+    /// CustomVoice preset character + language, from the model's spk_id table.
+    static let speakerInfo: [String: (desc: String, lang: String)] = [
+        "Vivian": ("Bright, slightly edgy young female", "Chinese"),
+        "Serena": ("Warm, gentle young female", "Chinese"),
+        "Uncle_Fu": ("Seasoned male, low mellow timbre", "Chinese"),
+        "Dylan": ("Youthful, clear male", "Beijing dialect"),
+        "Eric": ("Lively, slightly husky male", "Sichuan dialect"),
+        "Ryan": ("Dynamic male, strong rhythmic drive", "English"),
+        "Aiden": ("Sunny American male, clear midrange", "English"),
+        "Ono_Anna": ("Playful, light female", "Japanese"),
+        "Sohee": ("Warm, emotional female", "Korean"),
+    ]
+
+    /// Picker label: "Ryan · English" so the language is visible at a glance.
+    static func speakerLabel(_ name: String) -> String {
+        if let info = speakerInfo[name] { return "\(name) · \(info.lang)" }
+        return name
+    }
+
     static let languages: [(String, String)] = [
         ("auto", "Auto"), ("english", "English"), ("chinese", "Chinese"),
         ("japanese", "Japanese"), ("korean", "Korean"), ("german", "German"),
@@ -129,49 +176,82 @@ struct StudioView: View {
     private func advancedKnobs(_ knobs: Knobs) -> some View {
         @Bindable var model = model
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let r = knobs.temperature {
                     knobRow("Temperature", $model.temperatureOverride, r,
-                            help: "Sampling temperature — higher = more dynamic")
+                            desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
                 }
                 if let r = knobs.topP {
-                    knobRow("Top-p", $model.qwenTopP, r, help: "Nucleus sampling cutoff")
+                    knobRow("Top-p", $model.qwenTopP, r,
+                            desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
                 }
                 if let r = knobs.topK {
-                    HStack {
-                        Text("Top-k")
-                        Slider(value: Binding(
-                            get: { Float(model.qwenTopK) },
-                            set: { model.qwenTopK = Int($0) }),
-                            in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
-                        Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Top-k")
+                            Slider(value: Binding(
+                                get: { Float(model.qwenTopK) },
+                                set: { model.qwenTopK = Int($0) }),
+                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                            Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
+                        }
+                        Text("How many options it considers each step. Lower = constrained; higher = varied.")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 if let r = knobs.repetitionPenalty {
                     knobRow("Repetition", $model.qwenRepetitionPenalty, r,
-                            help: "Penalize repeated tokens")
+                            desc: "Higher values reduce stutters and looping artifacts.")
                 }
                 if let r = knobs.exaggeration {
                     knobRow("Exaggeration", $model.exaggerationOverride, r,
-                            help: "Drive Chatterbox's intensity")
+                            desc: "Drives Chatterbox's emotional intensity.")
+                }
+                HStack {
+                    Spacer()
+                    Button("Reset to defaults") { model.resetDeliveryKnobs() }
+                        .font(.caption)
+                        .accessibilityIdentifier("reset-knobs")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
         } label: {
-            Label("Advanced", systemImage: "slider.horizontal.3")
+            Label("Advanced — fine-tune the delivery", systemImage: "slider.horizontal.3")
         }
         .font(.callout)
     }
 
     @ViewBuilder
     private func knobRow(_ label: String, _ value: Binding<Float>,
-                         _ range: ClosedRange<Float>, help: String) -> some View {
-        HStack {
-            Text(label)
-            Slider(value: value, in: range).frame(width: 160).help(help)
-            Text(String(format: "%.2f", value.wrappedValue))
-                .font(.system(.caption, design: .monospaced))
+                         _ range: ClosedRange<Float>, desc: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(label)
+                Slider(value: value, in: range).frame(width: 160)
+                Text(String(format: "%.2f", value.wrappedValue))
+                    .font(.system(.caption, design: .monospaced))
+            }
+            Text(desc).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    /// One-line "what this model does" explainer shown under the DIRECT label,
+    /// so the available controls make sense for the selected model.
+    private func directExplainer(_ b: BackendID) -> String {
+        switch b {
+        case .qwen06B, .qwen17B:
+            "Clones a voice from a reference clip — pick one above. (To steer delivery with words, use qwen3-design or qwen3-custom instead.)"
+        case .qwenDesign:
+            "Invent a brand-new voice purely from your description — there's no voice to pick or clone."
+        case .qwenCustom:
+            "Pick a built-in Speaker, then describe how it should talk. The identity stays fixed; your Direction shapes the delivery."
+        case .fishS2Pro:
+            "Clone a voice (optional) and shape delivery with Emotion + Temperature. Free-text Direction isn't supported here."
+        case .chatterbox:
+            "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
+        case .chatterboxTurbo:
+            "Clone a voice; the emotional read comes from the reference clip. No manual delivery knobs."
         }
     }
 
@@ -245,34 +325,87 @@ struct StudioView: View {
         zoneLabel("DIRECT")
         let controls = model.backend.controls
         VStack(alignment: .leading, spacing: 10) {
+            // Per-model explainer so the controls below make sense.
+            Text(directExplainer(model.backend))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             // Speaker (CustomVoice)
             if !controls.presetSpeakers.isEmpty {
-                HStack {
-                    Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                    Picker("", selection: $model.speaker) {
-                        ForEach(controls.presetSpeakers, id: \.self) { Text($0).tag($0) }
-                    }.labelsHidden().frame(width: 160)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
+                        Picker("", selection: $model.speaker) {
+                            ForEach(controls.presetSpeakers, id: \.self) { name in
+                                Text(Self.speakerLabel(name)).tag(name)
+                            }
+                        }.labelsHidden().frame(width: 220)
+                    }
+                    // Description of the currently-selected speaker (names alone are opaque).
+                    if let info = Self.speakerInfo[model.speaker] {
+                        Text("\(info.desc) · \(info.lang)")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
+                         + "Aiden are English. Your Direction below shapes how it speaks.")
+                        .font(.caption2).foregroundStyle(Brand.fgFaint)
                 }
             }
             // Direction (instruct)
             if controls.instruct != .none {
-                HStack {
-                    Text(controls.instruct == .required ? "Direction (required)" : "Direction")
-                        .font(.caption).foregroundStyle(Brand.fgDim)
-                    Spacer()
-                }
-                TextEditor(text: $model.instruct)
-                    .font(.system(.callout, design: .default))
-                    .frame(height: 54)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
-                    .accessibilityIdentifier("instruct-editor")
-                if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
-                    Text("A reference voice is selected — Direction is ignored (clone takes priority). "
-                         + "Clear the voice to design by description.")
-                        .font(.caption2).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(controls.instruct == .required ? "Direction (required)" : "Direction")
+                            .font(.caption).foregroundStyle(Brand.fgDim)
+                        Spacer()
+                        Menu {
+                            Section("Examples") {
+                                ForEach(AppModel.seededDirections) { preset in
+                                    Button(preset.name) { model.instruct = preset.text }
+                                }
+                            }
+                            if !model.savedDirections.isEmpty {
+                                Section("Saved") {
+                                    ForEach(model.savedDirections) { preset in
+                                        Menu(preset.name) {
+                                            Button("Use") { model.instruct = preset.text }
+                                            Button("Delete", role: .destructive) {
+                                                model.deleteSavedDirection(preset)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Divider()
+                            Button("Save current…") { showSaveDirection = true }
+                                .disabled(model.instruct.trimmingCharacters(
+                                    in: .whitespacesAndNewlines).isEmpty)
+                        } label: {
+                            Label("Presets", systemImage: "text.badge.plus").font(.caption)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .accessibilityIdentifier("direction-presets")
+                    }
+                    Text("Describe HOW it should sound — character, mood, pace, accent. Plain English, ~1–3 sentences.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    TextEditor(text: $model.instruct)
+                        .font(.system(.callout, design: .default))
+                        .frame(height: 54)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
+                        .accessibilityIdentifier("instruct-editor")
+                    if model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(#"e.g. "warm, slightly breathy, unhurried late-night radio host""#)
+                            .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
+                    }
+                    if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
+                        Text("A reference voice is selected — Direction is ignored (clone takes priority). "
+                             + "Clear the voice to design by description.")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
                 }
             }
             // Language
@@ -282,6 +415,7 @@ struct StudioView: View {
                     Picker("", selection: $model.language) {
                         ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
                     }.labelsHidden().frame(width: 160)
+                        .help("Language of your text. Auto detects it.")
                 }
             }
             // Emotion chips (fish/chatterbox/turbo)
@@ -298,6 +432,9 @@ struct StudioView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.02)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.05), lineWidth: 1))
+        // Rebuild the whole pane on model change so the controls (and any retained
+        // disclosure/field state) always match the selected model.
+        .id(model.backend)
 
         // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))

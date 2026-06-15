@@ -19,6 +19,13 @@ struct Variant: Identifiable, Equatable {
     var rtf: Double { wallSeconds > 0 ? seconds / wallSeconds : 0 }
 }
 
+/// A saved/seeded Direction (instruct) description the user can reuse.
+struct DirectionPreset: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String
+    var text: String
+}
+
 @MainActor @Observable
 final class AppModel {
     let voices: VoiceLibrary
@@ -68,17 +75,51 @@ final class AppModel {
     var voicesVersion = 0   // bump to refresh voice lists after library mutations
 
     // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
-    // gated per backend by ControlSurface.knobs).
-    var temperatureOverride: Float = 0.7
-    var exaggerationOverride: Float = 0.5
+    // gated per backend by ControlSurface.knobs). Initial values == knobDefaults
+    // (the Qwen model's own generation defaults), so a fresh app and the Reset
+    // button both reproduce the model's stock delivery.
+    var temperatureOverride: Float = AppModel.knobDefaults.temperature
+    var exaggerationOverride: Float = AppModel.knobDefaults.exaggeration
 
     // Qwen natural-language controls
     var instruct: String = ""
     var speaker: String = BackendID.qwenPresetSpeakers.first ?? "Vivian"
     var language: String = "auto"
-    var qwenTopP: Float = 1.0
-    var qwenTopK: Int = 50
-    var qwenRepetitionPenalty: Float = 1.05
+    var qwenTopP: Float = AppModel.knobDefaults.topP
+    var qwenTopK: Int = AppModel.knobDefaults.topK
+    var qwenRepetitionPenalty: Float = AppModel.knobDefaults.repetitionPenalty
+
+    // Download-on-demand: set when Generate hits a model that isn't downloaded,
+    // so the UI can offer to fetch it (instead of a red error). Drives a sheet.
+    var downloadPrompt: BackendID?
+
+    // Saved Direction (instruct) descriptions, persisted as JSON in UserDefaults.
+    var savedDirections: [DirectionPreset] = [] {
+        didSet {
+            if let data = try? JSONEncoder().encode(savedDirections) {
+                UserDefaults.standard.set(data, forKey: "savedDirections")
+            }
+        }
+    }
+
+    /// Built-in starter descriptions, always available alongside saved ones.
+    static let seededDirections: [DirectionPreset] = [
+        .init(name: "Excited deep DJ",
+              text: "A high-energy radio DJ with a deep, resonant chest voice — booming and warm, "
+                  + "fast-paced and hyped, with punchy emphasis and a big confident grin you can hear."),
+        .init(name: "Warm late-night host",
+              text: "Warm, slightly breathy, unhurried late-night radio host — intimate and calm, "
+                  + "with a gentle smile in the voice."),
+        .init(name: "Wise old narrator",
+              text: "An elderly storyteller, gravelly and slow, with a knowing warmth and "
+                  + "deliberate, measured pacing."),
+        .init(name: "Hype announcer",
+              text: "Explosive arena announcer — huge, punchy and breathless, shouting over the "
+                  + "crowd with rising intensity."),
+        .init(name: "Soft meditation guide",
+              text: "A soft, soothing meditation guide — very calm and slow, low and breathy, "
+                  + "with long gentle pauses."),
+    ]
 
     // API request console (shared with the server)
     let apiLog = APILog()
@@ -109,6 +150,10 @@ final class AppModel {
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
+        if let data = defaults.data(forKey: "savedDirections"),
+           let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
+            savedDirections = decoded
+        }
 
         if uiTest {
             engine = GloamEngine(provider: UITestFakeProvider())
@@ -141,6 +186,12 @@ final class AppModel {
             generationError = "Enter some text first."
             return
         }
+        // Model not on disk yet → offer to download it (no red error). The sheet's
+        // confirm starts a background download and generates once it's ready.
+        if downloads.state(for: backend) != .ready {
+            downloadPrompt = backend
+            return
+        }
         isGenerating = true
         defer { isGenerating = false }
         variants = []
@@ -167,6 +218,63 @@ final class AppModel {
                 return
             }
         }
+    }
+
+    /// Confirm the download offered by `downloadPrompt`: start a background
+    /// download (progress shows in the toolbar) and auto-generate once ready.
+    func confirmDownloadFromPrompt() {
+        guard let pending = downloadPrompt else { return }
+        downloadPrompt = nil
+        downloads.download(pending)
+        Task {
+            while true {
+                try? await Task.sleep(for: .milliseconds(400))
+                switch downloads.state(for: pending) {
+                case .ready:
+                    if backend == pending { await generate(takes: 1) }
+                    return
+                case .failed, .notDownloaded:
+                    return   // user cancelled or download failed; surfaced in Settings
+                case .downloading:
+                    continue
+                }
+            }
+        }
+    }
+
+    func cancelDownloadPrompt() { downloadPrompt = nil }
+
+    // MARK: Direction presets
+
+    /// Save the current Direction text under `name` (replacing any same-named entry).
+    func saveDirection(named name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = instruct.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !text.isEmpty else { return }
+        if let i = savedDirections.firstIndex(where: { $0.name == trimmedName }) {
+            savedDirections[i].text = text
+        } else {
+            savedDirections.append(DirectionPreset(name: trimmedName, text: text))
+        }
+    }
+
+    func deleteSavedDirection(_ preset: DirectionPreset) {
+        savedDirections.removeAll { $0.id == preset.id }
+    }
+
+    /// Default delivery-knob values = the Qwen3-TTS model's own generation defaults
+    /// (temperature 0.9, top-p 1.0, top-k 0 = off, repetition 1.05) — i.e. the stock
+    /// delivery used when no overrides are sent. exaggeration 0.5 is Chatterbox neutral.
+    static let knobDefaults = (temperature: Float(0.9), exaggeration: Float(0.5),
+                               topP: Float(1.0), topK: 0, repetitionPenalty: Float(1.05))
+
+    /// Restore the Advanced fine-tune sliders to their defaults.
+    func resetDeliveryKnobs() {
+        temperatureOverride = Self.knobDefaults.temperature
+        exaggerationOverride = Self.knobDefaults.exaggeration
+        qwenTopP = Self.knobDefaults.topP
+        qwenTopK = Self.knobDefaults.topK
+        qwenRepetitionPenalty = Self.knobDefaults.repetitionPenalty
     }
 
     // MARK: model residency
