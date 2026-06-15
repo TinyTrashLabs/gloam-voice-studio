@@ -14,17 +14,27 @@ final class ModelDownloadManager {
     private(set) var states: [BackendID: State] = [:]
     private var downloadTasks: [BackendID: Task<Void, Never>] = [:]
 
-    /// Approximate full download sizes, for the disk preflight (bytes).
-    static let approxBytes: [BackendID: Int64] = [
-        .qwen3: 1_200_000_000,
+    /// Approximate 8-bit download sizes; scaled by the selected quant.
+    static let approxBytes8bit: [BackendID: Int64] = [
+        .qwen06B: 1_200_000_000,
+        .qwen17B: 1_900_000_000,
+        .qwenDesign: 1_900_000_000,
+        .qwenCustom: 1_900_000_000,
         .chatterbox: 2_300_000_000,
         .chatterboxTurbo: 2_300_000_000,
         .fishS2Pro: 11_100_000_000,
     ]
 
+    func approxBytes(for backend: BackendID) -> Int64 {
+        let base = Self.approxBytes8bit[backend] ?? 3_000_000_000
+        guard backend.isQwen else { return base }
+        return Int64(Double(base) * quant(for: backend).sizeMultiplier)
+    }
+
     init(root: URL, uiTest: Bool) {
         self.root = root
         self.uiTest = uiTest
+        Self.migrateLegacyQwenDir(root: root)
         refresh()
     }
 
@@ -32,8 +42,32 @@ final class ModelDownloadManager {
         uiTest ? .ready : (states[backend] ?? .notDownloaded)
     }
 
+    /// Per-Qwen selected precision (persisted). Non-Qwen ignore this.
+    func quant(for backend: BackendID) -> QwenQuant {
+        guard backend.isQwen else { return .q8 }
+        let raw = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
+        return raw.flatMap(QwenQuant.init(rawValue:)) ?? .q8
+    }
+
+    func setQuant(_ quant: QwenQuant, for backend: BackendID) {
+        guard backend.isQwen else { return }
+        UserDefaults.standard.set(quant.rawValue, forKey: "qwenQuant.\(backend.rawValue)")
+        refresh()   // selected dir may differ → recompute state
+    }
+
     func directory(for backend: BackendID) -> URL {
-        root.appendingPathComponent(backend.rawValue)
+        root.appendingPathComponent(backend.diskFolder(quantRaw: quant(for: backend).rawValue))
+    }
+
+    /// The retired `.qwen3` backend (0.6B-Base-8bit) downloaded to `Models/qwen3`.
+    /// Move it to the new quant-suffixed location so it isn't re-downloaded.
+    private static func migrateLegacyQwenDir(root: URL) {
+        let old = root.appendingPathComponent("qwen3")
+        let new = root.appendingPathComponent(BackendID.qwen06B.diskFolder(quantRaw: "8bit"))
+        let fm = FileManager.default
+        if fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) {
+            try? fm.moveItem(at: old, to: new)
+        }
     }
 
     func refresh() {
@@ -66,7 +100,7 @@ final class ModelDownloadManager {
         }
         states[backend] = .downloading(0)
         let dest = directory(for: backend)
-        let repo = backend.spec.modelRepo
+        let repo = backend.modelRepo(quant: quant(for: backend))
         downloadTasks[backend] = Task {
             do {
                 try await downloadRepoSnapshot(repo: repo, to: dest, backend: backend)
@@ -145,7 +179,7 @@ final class ModelDownloadManager {
     }
 
     private func preflight(_ backend: BackendID) throws {
-        let needed = Int64(Double(Self.approxBytes[backend] ?? 3_000_000_000) * 1.1)
+        let needed = Int64(Double(approxBytes(for: backend)) * 1.1)
         let values = try root.deletingLastPathComponent()
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         if let available = values.volumeAvailableCapacityForImportantUsage,
