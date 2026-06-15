@@ -64,4 +64,30 @@ final class BackendTests: XCTestCase {
         // Fish's S1-DAC codec requires refs at 44.1 kHz (backends.py FISH_CODEC_SAMPLE_RATE).
         XCTAssertEqual(BackendID.fishCodecSampleRate, 44100)
     }
+
+    func testQwenQuantSuffixes() {
+        XCTAssertEqual(QwenQuant.q8.rawValue, "8bit")
+        XCTAssertEqual(QwenQuant.bf16.rawValue, "bf16")
+        XCTAssertEqual(QwenQuant.allCases.count, 5)
+    }
+
+    func testQwenRepoResolution() {
+        XCTAssertEqual(BackendID.qwen06B.modelRepo(quant: .q8),
+                       "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit")
+        XCTAssertEqual(BackendID.qwen17B.modelRepo(quant: .q4),
+                       "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit")
+        XCTAssertEqual(BackendID.qwenDesign.modelRepo(quant: .bf16),
+                       "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16")
+        XCTAssertEqual(BackendID.qwenCustom.modelRepo(quant: .q6),
+                       "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
+        // Non-Qwen ignores quant and returns the static repo.
+        XCTAssertEqual(BackendID.fishS2Pro.modelRepo(quant: .q8),
+                       "mlx-community/fish-audio-s2-pro-bf16")
+    }
+
+    func testDiskFolderName() {
+        XCTAssertEqual(BackendID.qwen06B.diskFolder(quantRaw: "8bit"), "qwen3-0.6b@8bit")
+        XCTAssertEqual(BackendID.qwen17B.diskFolder(quantRaw: nil), "qwen3-1.7b@8bit") // defaults q8
+        XCTAssertEqual(BackendID.fishS2Pro.diskFolder(quantRaw: "8bit"), "fish-s2-pro")
+    }
 }

@@ -30,6 +30,47 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     }
 }
 
+/// User-selectable Qwen3-TTS precision. Raw value is the HF repo suffix.
+public enum QwenQuant: String, CaseIterable, Sendable {
+    case q4 = "4bit", q5 = "5bit", q6 = "6bit", q8 = "8bit", bf16
+
+    /// Rough size multiplier vs the 8-bit reference, for the disk preflight.
+    public var sizeMultiplier: Double {
+        switch self {
+        case .q4: 0.6
+        case .q5: 0.72
+        case .q6: 0.82
+        case .q8: 1.0
+        case .bf16: 2.0
+        }
+    }
+}
+
+extension BackendID {
+    /// Qwen repo base (everything before the quant suffix); nil for non-Qwen.
+    public var qwenRepoBase: String? {
+        switch self {
+        case .qwen06B: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-"
+        case .qwen17B: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-"
+        case .qwenDesign: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-"
+        case .qwenCustom: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-"
+        default: nil
+        }
+    }
+
+    /// Resolved HF repo id. Qwen: base + quant suffix (defaults 8-bit).
+    /// Non-Qwen: the static `spec.modelRepo` (quant ignored).
+    public func modelRepo(quant: QwenQuant?) -> String {
+        if let base = qwenRepoBase { return base + (quant ?? .q8).rawValue }
+        return spec.modelRepo
+    }
+
+    /// On-disk folder name. Qwen embeds the quant so precisions coexist.
+    public func diskFolder(quantRaw: String?) -> String {
+        isQwen ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)" : rawValue
+    }
+}
+
 public struct BackendSpec: Sendable, Equatable {
     public let modelRepo: String
     public let defaultSampleRate: Int
