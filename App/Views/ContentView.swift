@@ -99,11 +99,20 @@ struct ContentView: View {
     // Qwen3 (multilingual cloning) and turbo/Fish up top; regular chatterbox is
     // demoted to last — its MLX port doesn't emit the stop token so it doubles
     // the line. Kept available but clearly flagged.
-    private var pickerBackends: [BackendID] { [.qwen3, .chatterboxTurbo, .fishS2Pro, .chatterbox] }
+    private var pickerBackends: [BackendID] {
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
+    }
 
     /// Display name (+ honest flag for regular chatterbox's doubling bug).
     private func modelDisplayName(_ b: BackendID) -> String {
-        b == .chatterbox ? "\(b.rawValue) (legacy — doubles)" : b.rawValue
+        switch b {
+        case .qwen06B: "qwen3-0.6b (clone + instruct)"
+        case .qwen17B: "qwen3-1.7b (clone + instruct)"
+        case .qwenDesign: "qwen3-design (design a voice)"
+        case .qwenCustom: "qwen3-custom (preset + instruct)"
+        case .chatterbox: "chatterbox (legacy — doubles)"
+        default: b.rawValue
+        }
     }
 
     /// Short status phrase for a backend, shown under its name in the popover.
@@ -252,7 +261,8 @@ struct ContentView: View {
 struct ModelManagerView: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] = [.chatterboxTurbo, .fishS2Pro]
+    private let backends: [BackendID] =
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
