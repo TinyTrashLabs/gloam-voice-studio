@@ -3,9 +3,11 @@ import Foundation
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
-        ("usage: spike --backend <chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> "
+        ("usage: spike --backend <qwen3-0.6b|qwen3-1.7b|qwen3-design|qwen3-custom|"
+         + "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> "
          + "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] "
-         + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license]\n").utf8))
+         + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] "
+         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n").utf8))
     exit(2)
 }
 
@@ -30,7 +32,10 @@ do {
         refAudioPath: args["ref"],
         refText: args["ref-text"],
         emotion: args["emotion"].flatMap(Emotion.init(rawValue:)) ?? .neutral,
-        speed: args["speed"].flatMap(Float.init) ?? 1.0)
+        speed: args["speed"].flatMap(Float.init) ?? 1.0,
+        instruct: args["instruct"],
+        speaker: args["speaker"],
+        language: args["language"])
     let result = try await engine.synthesize(backend: backend, request: request)
     try WAVWriter.write(samples: result.samples, sampleRate: result.sampleRate,
                         to: URL(fileURLWithPath: out))
