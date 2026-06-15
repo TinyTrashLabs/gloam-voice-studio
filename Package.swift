@@ -14,7 +14,7 @@ let package = Package(
         // flow-matching steps (chatterbox quality fix). See TinyTrashLabs/mlx-audio-swift.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "ff45ab3e5189d74250be26ca438afb9d5f108f5b"),
+            revision: "d3ebde025ba86d1a3e678d7454df4d2f2cbab80e"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
