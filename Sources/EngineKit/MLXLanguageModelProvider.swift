@@ -55,10 +55,18 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         if request.disableThinking { additionalContext["enable_thinking"] = false }
 
         var turns = request.messages
-        let systemText = turns.first(where: { $0.role == .system })?.content
+        // Concatenate ALL system turns (not just the first) so none are silently lost.
+        let systemText: String? = {
+            let systems = turns.filter { $0.role == .system }.map(\.content)
+            return systems.isEmpty ? nil : systems.joined(separator: "\n\n")
+        }()
         turns.removeAll { $0.role == .system }
 
-        // 2. (Gemma) reinforce "no reasoning" in the system instructions.
+        // 2. Belt-and-suspenders "no reasoning" reinforcement, applied for ALL families
+        //    when disableThinking is true. This catches models that ignore the chat-template
+        //    flag (step 1) or don't honour /no_think / prefix tricks.
+        //    Qwen additionally gets " /no_think" appended to the final user turn (below).
+        //    Gemma additionally gets an "Answer directly…" prefix on the final user turn.
         var instructions = systemText
         if request.disableThinking {
             let noThink = "Answer directly. Do not produce any reasoning, planning, or <think> content."
@@ -110,6 +118,11 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             case .chunk(let t):
                 rawText += t
             case .toolCall(let call):
+                // NOTE: mlx-swift-lm v3.31.3 (issue #259) does NOT parse Gemma-4 tool calls —
+                // ToolCallFormat.infer() exact-matches "gemma" and misses "gemma4", so on Gemma
+                // backends tool syntax leaks into the .chunk text and this branch never fires.
+                // Qwen tool-calling works. Until fixed upstream, prefer Qwen for native tool-call
+                // use, or parse JSON-from-text for Gemma.
                 let argsData = (try? JSONSerialization.data(
                     withJSONObject: jsonObject(call.function.arguments))) ?? Data("{}".utf8)
                 toolCalls.append(LLMToolCall(
