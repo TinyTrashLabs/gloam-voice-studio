@@ -56,8 +56,12 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
         .appendingPathComponent(backend.diskFolder)
 
     do {
-        if !FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("config.json").path) {
+        let configPresent = FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path)
+        let weightsPresent = ((try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .contains { $0.pathExtension == "safetensors" }
+        if !configPresent || !weightsPresent {
             print("downloading \(backend.repoId) → \(dir.path)")
             let tracker = PctTracker()
             try await downloadHFSnapshot(repo: backend.repoId, to: dir) { p in
@@ -78,8 +82,20 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
             defaultLLM: backend)
         let server = LocalAPIServer(deps: deps)
         try await server.start(port: port)
-        print("serving /v1/chat/completions on http://127.0.0.1:\(port)  "
-            + "(model: \(backend.rawValue))")
+
+        // Confirm the listener is actually accepting connections (catches port-in-use).
+        try await Task.sleep(for: .milliseconds(700))
+        do {
+            var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+            req.timeoutInterval = 5
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+                die("server did not return 200 from /health on port \(port)")
+            }
+        } catch {
+            die("server failed to start on port \(port) (is it already in use?): \(error)")
+        }
+        print("serving /v1/chat/completions on http://127.0.0.1:\(port)  (model: \(backend.rawValue))")
 
         // Keep the process alive — start() spawns the server on a detached task.
         while true { try await Task.sleep(for: .seconds(86_400)) }
