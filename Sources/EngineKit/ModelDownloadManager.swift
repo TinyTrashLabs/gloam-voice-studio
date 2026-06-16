@@ -1,17 +1,16 @@
-import EngineKit
 import Foundation
 import HuggingFace
 import Observation
 
 @MainActor @Observable
-final class ModelDownloadManager {
-    enum State: Equatable {
+public final class ModelDownloadManager {
+    public enum State: Equatable {
         case notDownloaded, downloading(Double), ready, failed(String)
     }
 
-    let root: URL
-    let uiTest: Bool
-    private(set) var states: [BackendID: State] = [:]
+    public let root: URL
+    public let uiTest: Bool
+    public private(set) var states: [BackendID: State] = [:]
     private var downloadTasks: [BackendID: Task<Void, Never>] = [:]
 
     /// Approximate 8-bit download sizes; scaled by the selected quant.
@@ -25,13 +24,13 @@ final class ModelDownloadManager {
         .fishS2Pro: 11_100_000_000,
     ]
 
-    func approxBytes(for backend: BackendID) -> Int64 {
+    public func approxBytes(for backend: BackendID) -> Int64 {
         let base = Self.approxBytes8bit[backend] ?? 3_000_000_000
         guard backend.isQwen else { return base }
         return Int64(Double(base) * quant(for: backend).sizeMultiplier)
     }
 
-    init(root: URL, uiTest: Bool) {
+    public init(root: URL, uiTest: Bool) {
         self.root = root
         self.uiTest = uiTest
         Self.migrateLegacyQwenDir(root: root)
@@ -40,7 +39,7 @@ final class ModelDownloadManager {
 
     /// The first backend currently downloading, with its progress fraction —
     /// drives the global download indicator in the toolbar. nil when idle.
-    var activeDownload: (backend: BackendID, fraction: Double)? {
+    public var activeDownload: (backend: BackendID, fraction: Double)? {
         for backend in BackendID.allCases {
             if case .downloading(let fraction) = states[backend] {
                 return (backend, fraction)
@@ -49,24 +48,24 @@ final class ModelDownloadManager {
         return nil
     }
 
-    func state(for backend: BackendID) -> State {
+    public func state(for backend: BackendID) -> State {
         uiTest ? .ready : (states[backend] ?? .notDownloaded)
     }
 
     /// Per-Qwen selected precision (persisted). Non-Qwen ignore this.
-    func quant(for backend: BackendID) -> QwenQuant {
+    public func quant(for backend: BackendID) -> QwenQuant {
         guard backend.isQwen else { return .q8 }
         let raw = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
         return raw.flatMap(QwenQuant.init(rawValue:)) ?? .q8
     }
 
-    func setQuant(_ quant: QwenQuant, for backend: BackendID) {
+    public func setQuant(_ quant: QwenQuant, for backend: BackendID) {
         guard backend.isQwen else { return }
         UserDefaults.standard.set(quant.rawValue, forKey: "qwenQuant.\(backend.rawValue)")
         refresh()   // selected dir may differ → recompute state
     }
 
-    func directory(for backend: BackendID) -> URL {
+    public func directory(for backend: BackendID) -> URL {
         root.appendingPathComponent(backend.diskFolder(quantRaw: quant(for: backend).rawValue))
     }
 
@@ -81,7 +80,7 @@ final class ModelDownloadManager {
         }
     }
 
-    func refresh() {
+    public func refresh() {
         for backend in BackendID.allCases {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
@@ -103,7 +102,7 @@ final class ModelDownloadManager {
         return contents.contains { $0.pathExtension == "safetensors" }
     }
 
-    func download(_ backend: BackendID) {
+    public func download(_ backend: BackendID) {
         if case .downloading = states[backend] { return }   // already in flight
         do { try preflight(backend) } catch {
             states[backend] = .failed(error.localizedDescription)
@@ -125,9 +124,9 @@ final class ModelDownloadManager {
         }
     }
 
-    struct DownloadError: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    public struct DownloadError: LocalizedError {
+        public let message: String
+        public var errorDescription: String? { message }
     }
 
     /// Downloads every file in a HuggingFace repo to `dir`, preserving any
@@ -170,19 +169,19 @@ final class ModelDownloadManager {
         }
     }
 
-    func cancelDownload(_ backend: BackendID) {
+    public func cancelDownload(_ backend: BackendID) {
         downloadTasks[backend]?.cancel()
     }
 
-    func delete(_ backend: BackendID) {
+    public func delete(_ backend: BackendID) {
         downloadTasks[backend]?.cancel()
         try? FileManager.default.removeItem(at: directory(for: backend))
         states[backend] = .notDownloaded
     }
 
-    struct InsufficientDiskSpace: LocalizedError {
-        let needed: Int64
-        var errorDescription: String? {
+    public struct InsufficientDiskSpace: LocalizedError {
+        public let needed: Int64
+        public var errorDescription: String? {
             "Not enough free disk space — about "
             + ByteCountFormatter.string(fromByteCount: needed, countStyle: .file)
             + " is needed."
