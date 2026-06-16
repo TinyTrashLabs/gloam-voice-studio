@@ -10,7 +10,9 @@ func usage() -> Never {
          + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] "
          + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n"
          + "   or: spike serve-llm <llm-backend-id> [port]   "
-         + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n").utf8))
+         + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n"
+         + "   or: spike bakeoff [outPath] [--dry]   "
+         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n").utf8))
     exit(2)
 }
 
@@ -102,6 +104,21 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
     } catch {
         die("\(error)")
     }
+}
+
+// MARK: - bakeoff subcommand
+//
+// `spike bakeoff [outPath] [--dry]` — scores the four catalog LLMs on the DJ
+// pick-JSON contract grid (4 models × 3 variants × 5 scenarios = 60 cells).
+// `--dry` prints the planned matrix + resolved model dirs and exits without
+// loading or downloading anything (wiring check). See Bakeoff.swift.
+if CommandLine.arguments.dropFirst().first == "bakeoff" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    let dryRun = sub.contains("--dry")
+    let outPath = sub.first(where: { !$0.hasPrefix("--") }) ?? "./bakeoff-results.md"
+    let models: [LLMBackendID] = [.qwen3_1_7b, .gemma4_e2b, .gemma4_e4b, .qwen3_8b]
+    await Bakeoff.run(models: models, outPath: outPath, dryRun: dryRun)
+    exit(0)
 }
 
 var args: [String: String] = [:]
