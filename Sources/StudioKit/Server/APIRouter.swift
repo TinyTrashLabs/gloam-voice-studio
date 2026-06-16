@@ -117,6 +117,41 @@ public enum APIRouter {
                 body: .init(byteBuffer: ByteBuffer(data: data)))
         }
 
+        router.post("v1/chat/completions") { request, context in
+            let start = Date()
+            let req = try await request.decode(as: ChatCompletionRequest.self, context: context)
+            guard let backend = req.model.flatMap(LLMBackendID.init(rawValue:)) ?? deps.defaultLLM else {
+                throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
+            }
+            let chatReq = req.toChatRequest()
+            guard !chatReq.messages.isEmpty else {
+                throw APIError(status: .badRequest, detail: "messages is empty")
+            }
+            do {
+                let result = try await deps.gate.run {
+                    try await deps.engine.chat(backend: backend, request: chatReq)
+                }
+                deps.log.record(.init(
+                    method: "POST", path: "/v1/chat/completions", status: 200,
+                    model: backend.rawValue, voice: nil, instruct: nil,
+                    durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                let resp = ChatCompletionResponse(
+                    model: backend.rawValue, content: result.text,
+                    promptTokens: result.usage.promptTokens,
+                    completionTokens: result.usage.completionTokens)
+                let data = try JSONEncoder().encode(resp)
+                return Response(status: .ok,
+                                headers: [.contentType: "application/json"],
+                                body: .init(byteBuffer: ByteBuffer(data: data)))
+            } catch is RequestGate.Busy {
+                throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+            } catch EngineError.languageProviderUnavailable {
+                throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
+            } catch let error as EngineError {
+                throw APIError(status: .internalServerError, detail: "\(error)")
+            }
+        }
+
         router.post("v1/audio/speech") { request, context in
             let start = Date()
             let req = try await request.decode(as: SpeechRequest.self, context: context)
@@ -230,10 +265,11 @@ struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
     func handle(_ request: Request, context: Context,
                 next: (Request, Context) async throws -> Response) async throws -> Response {
         let start = ContinuousClock.now
-        let isSpeech = request.uri.path == "/v1/audio/speech"
+        let isManagedRoute = request.uri.path == "/v1/audio/speech"
+            || request.uri.path == "/v1/chat/completions"
         do {
             let response = try await next(request, context)
-            if !isSpeech {
+            if !isManagedRoute {
                 let ms = Int(start.duration(to: .now) / .milliseconds(1))
                 log.record(.init(method: "\(request.method)", path: request.uri.path,
                                  status: Int(response.status.code), durationMs: ms))
