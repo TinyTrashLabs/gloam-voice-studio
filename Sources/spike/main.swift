@@ -1,5 +1,6 @@
 import EngineKit
 import Foundation
+import StudioKit
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
@@ -7,8 +8,84 @@ func usage() -> Never {
          + "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> "
          + "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] "
          + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] "
-         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n").utf8))
+         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n"
+         + "   or: spike serve-llm <llm-backend-id> [port]   "
+         + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n").utf8))
     exit(2)
+}
+
+func die(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+    exit(1)
+}
+
+/// Thread-safe last-printed-percent tracker, so the @Sendable progress closure
+/// can throttle prints to whole-percent steps without capturing a mutable var.
+final class PctTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = -1
+    /// Returns the percent to print, or nil if unchanged since the last print.
+    func step(_ fraction: Double) -> Int? {
+        let pct = Int(fraction * 100)
+        lock.lock(); defer { lock.unlock() }
+        guard pct != last else { return nil }
+        last = pct
+        return pct
+    }
+}
+
+// MARK: - serve-llm subcommand
+//
+// `spike serve-llm <llm-backend-id> [port]` — downloads the LLM if missing,
+// then runs the local OpenAI-compatible server on 127.0.0.1:<port> (default
+// 8790) so it can be smoke-tested / driven by the Phase 2 bake-off.
+if CommandLine.arguments.dropFirst().first == "serve-llm" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    guard let backendRaw = sub.first else {
+        die("serve-llm needs a backend id "
+            + "(\(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))")
+    }
+    guard let backend = LLMBackendID(rawValue: backendRaw) else {
+        die("unknown llm backend '\(backendRaw)' "
+            + "(\(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))")
+    }
+    let port = sub.count > 1 ? (Int(sub[1]) ?? 8790) : 8790
+
+    let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Models")
+        .appendingPathComponent(backend.diskFolder)
+
+    do {
+        if !FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path) {
+            print("downloading \(backend.repoId) → \(dir.path)")
+            let tracker = PctTracker()
+            try await downloadHFSnapshot(repo: backend.repoId, to: dir) { p in
+                if let pct = tracker.step(p) { print("  \(pct)%") }
+            }
+            print("download complete")
+        } else {
+            print("model present: \(dir.path)")
+        }
+
+        let provider = MLXLanguageModelProvider(modelDirectoryResolver: { _ in dir })
+        let voicesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spike-voices")
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: MLXModelProvider(), languageProvider: provider),
+            voices: VoiceLibrary(directory: voicesDir),
+            defaultBackend: .chatterboxTurbo,
+            defaultLLM: backend)
+        let server = LocalAPIServer(deps: deps)
+        try await server.start(port: port)
+        print("serving /v1/chat/completions on http://127.0.0.1:\(port)  "
+            + "(model: \(backend.rawValue))")
+
+        // Keep the process alive — start() spawns the server on a detached task.
+        while true { try await Task.sleep(for: .seconds(86_400)) }
+    } catch {
+        die("\(error)")
+    }
 }
 
 var args: [String: String] = [:]

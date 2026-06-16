@@ -49,7 +49,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit"],
+            dependencies: ["EngineKit", "StudioKit"],
             path: "Sources/spike"
         ),
         .target(
