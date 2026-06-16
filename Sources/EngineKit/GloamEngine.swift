@@ -11,9 +11,12 @@ public actor GloamEngine {
     /// await points, so without this two synthesize calls could interleave and
     /// run concurrent GPU work.
     private var tail: Task<Void, Never>?
+    private let languageProvider: LanguageModelProviding?
+    private var residentLLM: (backend: LLMBackendID, model: any LanguageModel)?
 
-    public init(provider: ModelProviding) {
+    public init(provider: ModelProviding, languageProvider: LanguageModelProviding? = nil) {
         self.provider = provider
+        self.languageProvider = languageProvider
     }
 
     public func acknowledgeLicense(for backend: BackendID) {
@@ -30,6 +33,36 @@ public actor GloamEngine {
         guard resident != nil else { return }
         resident = nil
         provider.didEvictModel()
+    }
+
+    public func loadedLLM() -> LLMBackendID? { residentLLM?.backend }
+
+    /// Evicts the resident language model and releases accelerator memory.
+    public func unloadLLM() {
+        guard residentLLM != nil else { return }
+        residentLLM = nil
+        languageProvider?.didEvictModel()
+    }
+
+    public func chat(backend: LLMBackendID, request: ChatRequest) async throws -> ChatResult {
+        guard languageProvider != nil else { throw EngineError.languageProviderUnavailable }
+        let previous = tail
+        let work = Task<ChatResult, Error> { [self] in
+            await previous?.value
+            let model = try await self.residentLanguageModel(for: backend)
+            return try await model.complete(request)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    private func residentLanguageModel(for backend: LLMBackendID) async throws -> any LanguageModel {
+        if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
+        guard let languageProvider else { throw EngineError.languageProviderUnavailable }
+        unloadLLM()
+        let model = try await languageProvider.loadModel(backend: backend)
+        residentLLM = (backend, model)
+        return model
     }
 
     /// Loads the model for `backend` (evicting any other resident model)
