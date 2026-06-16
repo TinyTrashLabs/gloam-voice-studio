@@ -127,6 +127,9 @@ public enum APIRouter {
             guard !chatReq.messages.isEmpty else {
                 throw APIError(status: .badRequest, detail: "messages is empty")
             }
+            guard chatReq.messages.contains(where: { $0.role == .user }) else {
+                throw APIError(status: .badRequest, detail: "no user message")
+            }
             do {
                 let result = try await deps.gate.run {
                     try await deps.engine.chat(backend: backend, request: chatReq)

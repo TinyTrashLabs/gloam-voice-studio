@@ -41,6 +41,25 @@ final class ChatRouteTests: XCTestCase, @unchecked Sendable {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    func testChatCompletionWithNoUserMessageIs400() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chat-\(UUID().uuidString)")
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: FakeProvider(), languageProvider: StubLangProvider()),
+            voices: VoiceLibrary(directory: dir),
+            defaultBackend: .chatterboxTurbo,
+            defaultLLM: .qwen3_1_7b)
+        let app = Application(router: APIRouter.build(deps))
+        // messages present, but no user turn → must be 400, not 503
+        let body = ByteBuffer(string: #"{"messages":[{"role":"system","content":"be brief"}]}"#)
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/v1/chat/completions", method: .post,
+                                     headers: [.contentType: "application/json"], body: body) { response in
+                XCTAssertEqual(response.status, .badRequest)
+            }
+        }
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     func testChatCompletionWithoutLLMConfigured() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chat-\(UUID().uuidString)")
         let deps = APIDependencies(
