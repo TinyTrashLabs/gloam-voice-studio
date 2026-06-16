@@ -122,6 +122,7 @@ final class BackendTests: XCTestCase {
 
         let turbo = BackendID.chatterboxTurbo.controls
         XCTAssertEqual(turbo.voiceClone, .required)
+        XCTAssertFalse(turbo.emotionChips, "turbo has no emotion control — clone + speed only")
         XCTAssertNil(turbo.knobs.exaggeration)
         XCTAssertNil(turbo.knobs.temperature)
     }

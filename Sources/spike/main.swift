@@ -33,9 +33,13 @@ do {
         refText: args["ref-text"],
         emotion: args["emotion"].flatMap(Emotion.init(rawValue:)) ?? .neutral,
         speed: args["speed"].flatMap(Float.init) ?? 1.0,
+        temperatureOverride: args["temperature"].flatMap(Float.init),
         instruct: args["instruct"],
         speaker: args["speaker"],
-        language: args["language"])
+        language: args["language"],
+        topP: args["top-p"].flatMap(Float.init),
+        topK: args["top-k"].flatMap(Int.init),
+        repetitionPenalty: args["rep"].flatMap(Float.init))
     let result = try await engine.synthesize(backend: backend, request: request)
     try WAVWriter.write(samples: result.samples, sampleRate: result.sampleRate,
                         to: URL(fileURLWithPath: out))
