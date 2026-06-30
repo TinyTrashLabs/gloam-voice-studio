@@ -7,10 +7,18 @@ public actor GloamEngine {
     private let provider: ModelProviding
     private var resident: (backend: BackendID, model: any SpeechModel)?
     private var ackedLicenses: Set<BackendID> = []
-    /// Serializes all model work (loads + generations). Actors are reentrant at
-    /// await points, so without this two synthesize calls could interleave and
-    /// run concurrent GPU work.
-    private var tail: Task<Void, Never>?
+    /// Separate generation lanes for the language model and the speech model.
+    /// MLX safely INTERLEAVES two resident-model generations on one GPU (empirically
+    /// verified on M5/32GB: 0 corruption, and a short LLM "select" completes in ~2.3s
+    /// even while a long TTS synth keeps running) — so a track-select never has to
+    /// wait behind a 20s+ voice synth. Each lane still serializes its own kind so two
+    /// synths (or two chats) never overlap.
+    private var tailLLM: Task<Void, Never>?
+    private var tailTTS: Task<Void, Never>?
+    /// Model LOADS, by contrast, are NOT safe to overlap (two multi-GB GPU loads
+    /// compete and one silently yields nothing — SPIKE-RESULTS.md). This gate
+    /// serializes every load across both lanes; generations run free once resident.
+    private var loadGate: Task<Void, Never>?
     private let languageProvider: LanguageModelProviding?
     private var residentLLM: (backend: LLMBackendID, model: any LanguageModel)?
 
@@ -46,17 +54,32 @@ public actor GloamEngine {
 
     public func chat(backend: LLMBackendID, request: ChatRequest) async throws -> ChatResult {
         guard languageProvider != nil else { throw EngineError.languageProviderUnavailable }
-        let previous = tail
+        let previous = tailLLM   // serialize chats against each other, not against synths
         let work = Task<ChatResult, Error> { [self] in
             await previous?.value
             let model = try await self.residentLanguageModel(for: backend)
             return try await model.complete(request)
         }
-        tail = Task { _ = try? await work.value }
+        tailLLM = Task { _ = try? await work.value }
         return try await work.value
     }
 
     private func residentLanguageModel(for backend: LLMBackendID) async throws -> any LanguageModel {
+        if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
+        guard languageProvider != nil else { throw EngineError.languageProviderUnavailable }
+        // Serialize the load against any other in-flight load (LLM or TTS).
+        let previous = loadGate
+        let work = Task<any LanguageModel, Error> { [self] in
+            _ = await previous?.value
+            return try await self.loadLLM(backend)
+        }
+        loadGate = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    /// Actor-isolated load body — re-checks residency after the load-gate wait
+    /// (another waiter may have just loaded the same backend) then loads + stores.
+    private func loadLLM(_ backend: LLMBackendID) async throws -> any LanguageModel {
         if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
         guard let languageProvider else { throw EngineError.languageProviderUnavailable }
         unloadLLM()
@@ -73,12 +96,12 @@ public actor GloamEngine {
         if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
             throw EngineError.licenseAckRequired(backend)
         }
-        let previous = tail
+        let previous = tailTTS
         let work = Task<Void, Error> { [self] in
             await previous?.value
             _ = try await self.residentModel(for: backend)
         }
-        tail = Task { _ = try? await work.value }
+        tailTTS = Task { _ = try? await work.value }
         return try await work.value
     }
 
@@ -91,8 +114,9 @@ public actor GloamEngine {
         }
         let plan = try RequestPlanner.plan(backend: backend, request: request)
 
-        // Chain model work so concurrent calls never overlap at await points.
-        let previous = tail
+        // Chain synths against each other (never two synths at once), but NOT against
+        // chats — a track-select runs concurrently with this synth (see tailLLM/tailTTS).
+        let previous = tailTTS
         let work = Task<SynthesisResult, Error> { [self] in
             await previous?.value
             let model = try await self.residentModel(for: backend)
@@ -104,14 +128,25 @@ public actor GloamEngine {
                 sampleRate: model.sampleRate,
                 wallSeconds: wall)
         }
-        tail = Task { _ = try? await work.value }
+        tailTTS = Task { _ = try? await work.value }
         return try await work.value
     }
 
     private func residentModel(for backend: BackendID) async throws -> any SpeechModel {
-        if let resident, resident.backend == backend {
-            return resident.model
+        if let resident, resident.backend == backend { return resident.model }
+        // Serialize the load against any other in-flight load (LLM or TTS).
+        let previous = loadGate
+        let work = Task<any SpeechModel, Error> { [self] in
+            _ = await previous?.value
+            return try await self.loadSpeech(backend)
         }
+        loadGate = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    /// Actor-isolated load body — re-checks residency after the load-gate wait, loads + stores.
+    private func loadSpeech(_ backend: BackendID) async throws -> any SpeechModel {
+        if let resident, resident.backend == backend { return resident.model }
         unload()
         let model = try await provider.loadModel(backend: backend)
         resident = (backend, model)

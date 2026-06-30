@@ -131,7 +131,8 @@ public enum APIRouter {
                 throw APIError(status: .badRequest, detail: "no user message")
             }
             do {
-                let result = try await deps.gate.run {
+                // LLM lane — separate gate from TTS so a select isn't blocked behind a synth.
+                let result = try await deps.llmGate.run {
                     try await deps.engine.chat(backend: backend, request: chatReq)
                 }
                 deps.log.record(.init(
