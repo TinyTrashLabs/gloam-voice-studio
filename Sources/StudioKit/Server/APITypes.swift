@@ -78,25 +78,18 @@ public struct APIDependencies: Sendable {
     public let defaultBackend: BackendID
     public let defaultLLM: LLMBackendID?
     public let log: APILog
-    /// Bounds TTS (and other GPU) work. Separate from `llmGate` so a chat and a synth
-    /// can be admitted at once — the engine then interleaves them safely on the GPU
-    /// (a track-select no longer waits behind a 20s voice synth). Each gate still
-    /// serializes its own kind (never two synths or two chats concurrently).
     public let gate: RequestGate
-    public let llmGate: RequestGate
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
                 log: APILog = APILog(),
-                gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
-                llmGate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3)) {
+                gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3)) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
         self.defaultLLM = defaultLLM
         self.log = log
         self.gate = gate
-        self.llmGate = llmGate
     }
 }
 
