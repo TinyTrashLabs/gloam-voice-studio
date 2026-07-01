@@ -225,7 +225,10 @@ struct ContentView: View {
             ForEach(pickerBackends, id: \.self) { b in
                 let loaded = model.loadedBackend == b
                 Button {
-                    model.selectModel(b)   // loads if ready, else offers to download
+                    model.backend = b
+                    if model.downloads.state(for: b) == .ready {
+                        Task { await model.loadModel(b) }
+                    }
                     modelPickerOpen = false
                 } label: {
                     HStack(spacing: 8) {
@@ -362,19 +365,17 @@ struct DownloadPromptSheet: View {
             fromByteCount: model.downloads.approxBytes(for: backend), countStyle: .file)
     }
 
-    private var generates: Bool { model.downloadIntent == .generate }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Download “\(backend.rawValue)”?").font(.title3.bold())
             Text("This model isn’t on your Mac yet (about \(sizeText)). It’ll download in "
-                 + "the background — you’ll see progress in the toolbar — and "
-                 + (generates ? "generate automatically" : "load") + " once it’s ready.")
+                 + "the background — you’ll see progress in the toolbar — and generate "
+                 + "automatically once it’s ready.")
                 .foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Not Now") { model.cancelDownloadPrompt(); dismiss() }
-                Button(generates ? "Download & Generate" : "Download & Load") {
+                Button("Download & Generate") {
                     model.confirmDownloadFromPrompt(); dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

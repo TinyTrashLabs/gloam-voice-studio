@@ -4,12 +4,11 @@ Native macOS voice cloning studio for Apple Silicon. Fast, private synthesis on-
 
 ## Overview
 
-Gloam Voice Studio is a SwiftUI macOS app that clones voices using optimized ML models on Apple Silicon (M-series chips). All processing happens locally—no audio leaves your Mac. Several synthesis backends are available:
+Gloam Voice Studio is a SwiftUI macOS app that clones voices using optimized ML models on Apple Silicon (M-series chips). All processing happens locally—no audio leaves your Mac. Three synthesis backends are available:
 
 - **Chatterbox** — Fast, lightweight real-time factor (RTF) ~2–3×
 - **Chatterbox-Turbo** — Higher quality, RTF ~1–2×
 - **Fish S2-Pro** — Premium quality, research/personal use license
-- **Qwen3-TTS** — A multilingual family: clone a voice (`qwen3-0.6b` / `qwen3-1.7b`), invent one from a natural-language description (`qwen3-design`), or direct a preset speaker with natural-language instructions (`qwen3-custom`). See [`docs/gloam-fm-qwen-controls-handoff.md`](docs/gloam-fm-qwen-controls-handoff.md) for the API control surface.
 
 Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights are under the Fish Audio Research License; the app downloads them from HuggingFace under your own acceptance of the license terms.
 
@@ -129,9 +128,7 @@ Model weights are licensed separately:
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
-build instructions and conventions, and note our [Code of
-Conduct](CODE_OF_CONDUCT.md). Open issues or pull requests on GitHub.
+Contributions are welcome. Please open issues or pull requests on GitHub.
 
 ## Acknowledgments
 

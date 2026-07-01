@@ -13,7 +13,6 @@ struct StudioView: View {
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var voicePickerOpen = false
-    @State private var lineSelection = NSRange(location: 0, length: 0)
     @State private var showSaveDirection = false
     @State private var saveDirectionName = ""
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
@@ -142,23 +141,22 @@ struct StudioView: View {
         }
     }
 
-    /// CustomVoice preset character, language, and Qwen's Chinese name, from the
-    /// model's spk_id table.
-    static let speakerInfo: [String: (desc: String, lang: String, cn: String)] = [
-        "Vivian": ("Bright, slightly edgy young female", "Chinese", "十三"),
-        "Serena": ("Warm, gentle young female", "Chinese", "苏瑶"),
-        "Uncle_Fu": ("Seasoned male, low mellow timbre", "Chinese", "福伯"),
-        "Dylan": ("Youthful, clear male", "Beijing dialect", "晓东"),
-        "Eric": ("Lively, slightly husky male", "Sichuan dialect", "程川"),
-        "Ryan": ("Dynamic male, strong rhythmic drive", "English", "甜茶"),
-        "Aiden": ("Sunny American male, clear midrange", "English", "艾登"),
-        "Ono_Anna": ("Playful, light female", "Japanese", "小野杏"),
-        "Sohee": ("Warm, emotional female", "Korean", "素熙"),
+    /// CustomVoice preset character + language, from the model's spk_id table.
+    static let speakerInfo: [String: (desc: String, lang: String)] = [
+        "Vivian": ("Bright, slightly edgy young female", "Chinese"),
+        "Serena": ("Warm, gentle young female", "Chinese"),
+        "Uncle_Fu": ("Seasoned male, low mellow timbre", "Chinese"),
+        "Dylan": ("Youthful, clear male", "Beijing dialect"),
+        "Eric": ("Lively, slightly husky male", "Sichuan dialect"),
+        "Ryan": ("Dynamic male, strong rhythmic drive", "English"),
+        "Aiden": ("Sunny American male, clear midrange", "English"),
+        "Ono_Anna": ("Playful, light female", "Japanese"),
+        "Sohee": ("Warm, emotional female", "Korean"),
     ]
 
-    /// Picker label: "Ryan · 甜茶 · English" so identity + language read at a glance.
+    /// Picker label: "Ryan · English" so the language is visible at a glance.
     static func speakerLabel(_ name: String) -> String {
-        if let info = speakerInfo[name] { return "\(name) · \(info.cn) · \(info.lang)" }
+        if let info = speakerInfo[name] { return "\(name) · \(info.lang)" }
         return name
     }
 
@@ -175,59 +173,46 @@ struct StudioView: View {
     }
 
     @ViewBuilder
-    private func advancedKnobs(_ controls: ControlSurface) -> some View {
+    private func advancedKnobs(_ knobs: Knobs) -> some View {
         @Bindable var model = model
-        let knobs = controls.knobs
-        // On emotion backends the knobs override the Emotion preset and are opt-in.
-        let emotionDriven = controls.emotionChips
-        let active = !emotionDriven || model.useDirectionOverrides
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
-                if emotionDriven {
-                    Toggle("Use manual knobs (overrides Emotion)", isOn: $model.useDirectionOverrides)
-                        .font(.caption)
-                        .accessibilityIdentifier("use-manual-knobs")
+                if let r = knobs.temperature {
+                    knobRow("Temperature", $model.temperatureOverride, r,
+                            desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
                 }
-                VStack(alignment: .leading, spacing: 12) {
-                    if let r = knobs.temperature {
-                        knobRow("Temperature", $model.temperatureOverride, r,
-                                desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
-                    }
-                    if let r = knobs.topP {
-                        knobRow("Top-p", $model.qwenTopP, r,
-                                desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
-                    }
-                    if let r = knobs.topK {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text("Top-k")
-                                Slider(value: Binding(
-                                    get: { Float(model.qwenTopK) },
-                                    set: { model.qwenTopK = Int($0) }),
-                                    in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
-                                Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
-                            }
-                            Text("How many options it considers each step. Lower = constrained; higher = varied.")
-                                .font(.caption2).foregroundStyle(.secondary)
+                if let r = knobs.topP {
+                    knobRow("Top-p", $model.qwenTopP, r,
+                            desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
+                }
+                if let r = knobs.topK {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Top-k")
+                            Slider(value: Binding(
+                                get: { Float(model.qwenTopK) },
+                                set: { model.qwenTopK = Int($0) }),
+                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                            Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
                         }
-                    }
-                    if let r = knobs.repetitionPenalty {
-                        knobRow("Repetition", $model.qwenRepetitionPenalty, r,
-                                desc: "Higher values reduce stutters and looping artifacts.")
-                    }
-                    if let r = knobs.exaggeration {
-                        knobRow("Exaggeration", $model.exaggerationOverride, r,
-                                desc: "Drives Chatterbox's emotional intensity.")
-                    }
-                    HStack {
-                        Spacer()
-                        Button("Reset to defaults") { model.resetDeliveryKnobs() }
-                            .font(.caption)
-                            .accessibilityIdentifier("reset-knobs")
+                        Text("How many options it considers each step. Lower = constrained; higher = varied.")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
-                .disabled(!active)
-                .opacity(active ? 1 : 0.45)
+                if let r = knobs.repetitionPenalty {
+                    knobRow("Repetition", $model.qwenRepetitionPenalty, r,
+                            desc: "Higher values reduce stutters and looping artifacts.")
+                }
+                if let r = knobs.exaggeration {
+                    knobRow("Exaggeration", $model.exaggerationOverride, r,
+                            desc: "Drives Chatterbox's emotional intensity.")
+                }
+                HStack {
+                    Spacer()
+                    Button("Reset to defaults") { model.resetDeliveryKnobs() }
+                        .font(.caption)
+                        .accessibilityIdentifier("reset-knobs")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
@@ -235,19 +220,6 @@ struct StudioView: View {
             Label("Advanced — fine-tune the delivery", systemImage: "slider.horizontal.3")
         }
         .font(.callout)
-    }
-
-    /// What the Emotion chips actually do on the selected backend.
-    private func emotionExplainer(_ b: BackendID) -> String {
-        switch b {
-        case .fishS2Pro:
-            "Sets the emotional delivery (sampling temperature). Flip “Use manual knobs” under Advanced to override."
-        case .chatterbox:
-            "Sets the emotional intensity (exaggeration). Flip “Use manual knobs” under Advanced to override."
-        case .chatterboxTurbo:
-            "Turbo has no manual delivery knobs — Emotion only switches to an acted reference clip if your voice has one (e.g. an “-excited” variant)."
-        default: ""
-        }
     }
 
     @ViewBuilder
@@ -262,83 +234,6 @@ struct StudioView: View {
             }
             Text(desc).font(.caption2).foregroundStyle(.secondary)
         }
-    }
-
-    /// The Direction (instruct) field: presets menu, freeform editor, hints, and
-    /// the Voice Design builder. Extracted so `benchControls` stays type-checkable.
-    @ViewBuilder
-    private var directionField: some View {
-        @Bindable var model = model
-        let controls = model.backend.controls
-        if controls.instruct != .none {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(controls.instruct == .required ? "Direction (required)" : "Direction")
-                        .font(.caption).foregroundStyle(Brand.fgDim)
-                    Spacer()
-                    directionPresetsMenu
-                }
-                Text("Describe HOW it should sound — character, mood, pace, accent. Plain English, ~1–3 sentences.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                TextEditor(text: $model.instruct)
-                    .font(.system(.callout, design: .default))
-                    .frame(height: 54)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
-                    .accessibilityIdentifier("instruct-editor")
-                if model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(#"e.g. "warm, slightly breathy, unhurried late-night radio host""#)
-                        .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
-                }
-                if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
-                    Text("A reference voice is selected — Direction is ignored (clone takes priority). "
-                         + "Clear the voice to design by description.")
-                        .font(.caption2).foregroundStyle(.orange)
-                }
-                VoiceDesignBuilder(instruct: $model.instruct)
-            }
-        }
-    }
-
-    /// Presets dropdown for the Direction field (seeded characters + quick styles + saved).
-    @ViewBuilder
-    private var directionPresetsMenu: some View {
-        @Bindable var model = model
-        Menu {
-            Section("Characters") {
-                ForEach(AppModel.seededDirections) { preset in
-                    Button(preset.name) { model.instruct = preset.text }
-                }
-            }
-            Section("Quick styles") {
-                ForEach(AppModel.seededStyles) { preset in
-                    Button(preset.name) { model.instruct = preset.text }
-                }
-            }
-            if !model.savedDirections.isEmpty {
-                Section("Saved") {
-                    ForEach(model.savedDirections) { preset in
-                        Menu(preset.name) {
-                            Button("Use") { model.instruct = preset.text }
-                            Button("Delete", role: .destructive) {
-                                model.deleteSavedDirection(preset)
-                            }
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button("Save current…") { showSaveDirection = true }
-                .disabled(model.instruct.trimmingCharacters(
-                    in: .whitespacesAndNewlines).isEmpty)
-        } label: {
-            Label("Presets", systemImage: "text.badge.plus").font(.caption)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .accessibilityIdentifier("direction-presets")
     }
 
     /// One-line "what this model does" explainer shown under the DIRECT label,
@@ -411,8 +306,10 @@ struct StudioView: View {
         // ── WRITE zone ──────────────────────────────────────────────────────
         zoneLabel("WRITE")
         HStack(alignment: .top, spacing: 8) {
-            CaretTextEditor(text: $model.text, selection: $lineSelection)
+            TextEditor(text: $model.text)
+                .font(.system(.body, design: .monospaced))
                 .frame(height: 110)
+                .scrollContentBackground(.hidden)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
@@ -420,7 +317,7 @@ struct StudioView: View {
             DictationButton(text: $model.text)
         }
         if model.backend.spec.honorsTags {
-            TagChipsView(text: $model.text, selection: $lineSelection)
+            TagChipsView(text: $model.text)
         }
 
         // ── DIRECT zone (inset card) ─────────────────────────────────────────
@@ -454,8 +351,63 @@ struct StudioView: View {
                         .font(.caption2).foregroundStyle(Brand.fgFaint)
                 }
             }
-            // Direction (instruct) — extracted to keep this stack type-checkable.
-            directionField
+            // Direction (instruct)
+            if controls.instruct != .none {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(controls.instruct == .required ? "Direction (required)" : "Direction")
+                            .font(.caption).foregroundStyle(Brand.fgDim)
+                        Spacer()
+                        Menu {
+                            Section("Examples") {
+                                ForEach(AppModel.seededDirections) { preset in
+                                    Button(preset.name) { model.instruct = preset.text }
+                                }
+                            }
+                            if !model.savedDirections.isEmpty {
+                                Section("Saved") {
+                                    ForEach(model.savedDirections) { preset in
+                                        Menu(preset.name) {
+                                            Button("Use") { model.instruct = preset.text }
+                                            Button("Delete", role: .destructive) {
+                                                model.deleteSavedDirection(preset)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Divider()
+                            Button("Save current…") { showSaveDirection = true }
+                                .disabled(model.instruct.trimmingCharacters(
+                                    in: .whitespacesAndNewlines).isEmpty)
+                        } label: {
+                            Label("Presets", systemImage: "text.badge.plus").font(.caption)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .accessibilityIdentifier("direction-presets")
+                    }
+                    Text("Describe HOW it should sound — character, mood, pace, accent. Plain English, ~1–3 sentences.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    TextEditor(text: $model.instruct)
+                        .font(.system(.callout, design: .default))
+                        .frame(height: 54)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
+                        .accessibilityIdentifier("instruct-editor")
+                    if model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(#"e.g. "warm, slightly breathy, unhurried late-night radio host""#)
+                            .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
+                    }
+                    if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
+                        Text("A reference voice is selected — Direction is ignored (clone takes priority). "
+                             + "Clear the voice to design by description.")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+            }
             // Language
             if controls.language {
                 HStack {
@@ -470,14 +422,11 @@ struct StudioView: View {
             if controls.emotionChips {
                 HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
                 emotionPicker
-                Text(emotionExplainer(model.backend))
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             speedControls
             // Advanced knob sliders
             if hasAnyKnob(controls.knobs) {
-                advancedKnobs(controls)
+                advancedKnobs(controls.knobs)
             }
         }
         .padding(12)

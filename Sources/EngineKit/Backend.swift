@@ -140,11 +140,8 @@ extension BackendID {
                            language: false, emotionChips: true,
                            knobs: Knobs(exaggeration: 0...1))
         case .chatterboxTurbo:
-            // Turbo has no emotion knob and doesn't honor acted-variant selection
-            // as a delivery control — the emotional read is baked into the cloned
-            // reference clip. So: clone + speed only, nothing it ignores.
             ControlSurface(voiceClone: .required, instruct: .none,
-                           language: false, emotionChips: false, knobs: Knobs())
+                           language: false, emotionChips: true, knobs: Knobs())
         }
     }
 }

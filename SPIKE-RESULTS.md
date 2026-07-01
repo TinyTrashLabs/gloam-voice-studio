@@ -6,7 +6,7 @@ RTF convention throughout: audio_seconds / wall_seconds (realtime multiple — H
 
 ## Quality (scored by ear, Swift vs Python)
 
-All pairs were evaluated by ear (2026-06-11) and judged holistically as acceptable — no per-line numeric scores recorded; no pair flagged as worse in Swift, no unintelligible or off-timbre clip reported.
+Listeners evaluated all pairs (2026-06-11) and judged them holistically: **"that all sound alright"** — no per-line numeric scores recorded; no pair flagged as worse in Swift, no unintelligible or off-timbre clip reported.
 
 ## Performance (cache-warm, release builds, line L2)
 
@@ -33,6 +33,6 @@ Python timings are server-side wall times from `say` (chatterbox-turbo L2: 6.70s
 PASS criteria: every line intelligible in the ref speaker's timbre; Swift quality within 1 point of Python on every line; no crashes; Swift RTF ≥ 0.5× Python RTF.
 
 Performance gate: MET (cbt 1.13×, fish 0.76× — both ≥ 0.5×).
-Quality gate: MET (holistic listening evaluation, approved).
+Quality gate: MET (the listening session, holistic approval).
 
 Decision: **PASS** — proceed with the native Swift rewrite on mlx-audio-swift, pinned at 10b7366204fd3991458de690f3d49651251055f5.

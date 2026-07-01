@@ -74,11 +74,6 @@ final class AppModel {
     var generationError: String?
     var voicesVersion = 0   // bump to refresh voice lists after library mutations
 
-    // On emotion-driven backends (fish/chatterbox) the Emotion chips set delivery
-    // by default; flipping this opts into the manual temperature/exaggeration knobs
-    // instead. On Qwen (no emotion chips) the knobs are always the control.
-    var useDirectionOverrides = false
-
     // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
     // gated per backend by ControlSurface.knobs). Initial values == knobDefaults
     // (the Qwen model's own generation defaults), so a fresh app and the Reset
@@ -88,19 +83,15 @@ final class AppModel {
 
     // Qwen natural-language controls
     var instruct: String = ""
-    var speaker: String = "Ryan"   // English male preset — sensible default
+    var speaker: String = BackendID.qwenPresetSpeakers.first ?? "Vivian"
     var language: String = "auto"
     var qwenTopP: Float = AppModel.knobDefaults.topP
     var qwenTopK: Int = AppModel.knobDefaults.topK
     var qwenRepetitionPenalty: Float = AppModel.knobDefaults.repetitionPenalty
 
-    // Download-on-demand: set when a not-downloaded model is chosen (load) or hit
-    // by Generate (generate), so the UI can offer to fetch it. Drives a sheet.
-    enum DownloadIntent { case load, generate }
+    // Download-on-demand: set when Generate hits a model that isn't downloaded,
+    // so the UI can offer to fetch it (instead of a red error). Drives a sheet.
     var downloadPrompt: BackendID?
-    var downloadIntent: DownloadIntent = .generate
-    /// Backends with a live download-poll task, so a re-prompt can't double-fire.
-    private var downloadPolling: Set<BackendID> = []
 
     // Saved Direction (instruct) descriptions, persisted as JSON in UserDefaults.
     var savedDirections: [DirectionPreset] = [] {
@@ -111,104 +102,23 @@ final class AppModel {
         }
     }
 
-    /// Built-in character descriptions in Qwen's recommended attribute-list format,
-    /// always available alongside saved ones (best for qwen3-design).
+    /// Built-in starter descriptions, always available alongside saved ones.
     static let seededDirections: [DirectionPreset] = [
-        .init(name: "DJ · Deep & Fun", text: """
-            gender: Male.
-            pitch: Deep and low in a warm bass register — lively but never high or thin.
-            speed: Fast and lively, upbeat and bouncy.
-            volume: Big and projecting, hyping the crowd.
-            age: Adult in his 30s.
-            accent: General American.
-            texture: Deep, warm, rich chest voice with a friendly rasp.
-            emotion: Excited, joyful and pumped — having a blast, celebratory.
-            tone: Upbeat party hype, fun and infectious — not angry, not theatrical.
-            personality: Warm, charismatic, fun-loving showman.
-            """),
-        .init(name: "DJ · Smooth Drive", text: """
-            gender: Male.
-            pitch: Deep, low and smooth — steady warm bass.
-            speed: Brisk but relaxed, riding the groove.
-            volume: Full and confident, easy projection.
-            age: Adult in his late 30s.
-            accent: General American.
-            texture: Rich, velvety, deep chest voice.
-            emotion: Upbeat and cool, having fun without forcing it.
-            tone: Smooth charismatic drive-time DJ — confident and easy.
-            personality: Cool, magnetic, effortlessly charming.
-            """),
-        .init(name: "DJ · Big Festival", text: """
-            gender: Male.
-            pitch: Deep and powerful, staying low even when the energy peaks.
-            speed: Fast and driving, punchy.
-            volume: Huge and booming, filling a stadium.
-            age: Adult in his 30s.
-            accent: General American.
-            texture: Thick, resonant, deep with a warm rasp.
-            emotion: Euphoric, fired-up fun — pure celebration, not aggression.
-            tone: Massive festival hype-man — joyful and electric.
-            personality: Larger-than-life, warm, crowd-loving showman.
-            """),
-        .init(name: "DJ · Gravelly Party", text: """
-            gender: Male.
-            pitch: Very low, deep gravelly bass.
-            speed: Fast and punchy, driving pace — no dragging.
-            volume: Loud and full, hyping the room.
-            age: Adult in his 30s to 40s.
-            accent: General American.
-            texture: Gritty, gravelly, deep and chesty.
-            emotion: Pumped, energetic and fun.
-            tone: Gritty party MC — rowdy good-time energy, never angry.
-            personality: Rugged, charismatic, fun-loving.
-            """),
-        .init(name: "Wise old narrator", text: """
-            gender: Male.
-            pitch: Low, steady register.
-            speed: Slow, deliberate, measured pacing with thoughtful pauses.
-            volume: Calm and even.
-            age: Elderly, in his 70s.
-            accent: General American English.
-            texture: Gravelly and warm.
-            emotion: Knowing and reflective.
-            tone: Intimate storytelling.
-            personality: Wise, patient, grandfatherly.
-            """),
-        .init(name: "Ogre", text: """
-            gender: Male.
-            pitch: Extremely low, sub-bass register.
-            speed: Slow and lumbering, dragging the vowels.
-            volume: Loud and rumbling.
-            age: Ageless monster.
-            texture: Gravelly, wet, growling rumble.
-            emotion: Menacing, dim, irritable.
-            tone: Threatening snarl.
-            personality: Hulking, brutish, dangerous.
-            """),
-        .init(name: "Warm late-night host", text: """
-            gender: Gender-neutral.
-            pitch: Mid-low and smooth.
-            speed: Unhurried and relaxed.
-            volume: Soft and intimate.
-            age: 30s to 40s.
-            accent: General American English.
-            texture: Warm, slightly breathy.
-            emotion: Calm and soothing.
-            tone: Intimate and friendly.
-            personality: Easygoing and comforting.
-            """),
-    ]
-
-    /// Quick single-attribute styles — great for layering on a CustomVoice timbre
-    /// (qwen3-custom) or as a fast tweak on qwen3-design.
-    static let seededStyles: [DirectionPreset] = [
-        .init(name: "Very happy", text: "Speak in a very happy, upbeat and cheerful tone."),
-        .init(name: "Sad & tearful", text: "Speak with a very sad, tearful voice — slow and trembling."),
-        .init(name: "Angry", text: "Speak in a particularly angry, sharp tone."),
-        .init(name: "Whisper", text: "Speak in an extremely quiet, secretive whisper."),
-        .init(name: "Very slow", text: "Speak at an extremely slow, deliberate pace."),
-        .init(name: "Low & deep", text: "Speak in a low, deep register."),
-        .init(name: "Excited & fast", text: "Speak fast and energetically, voice rising with excitement."),
+        .init(name: "Excited deep DJ",
+              text: "A high-energy radio DJ with a deep, resonant chest voice — booming and warm, "
+                  + "fast-paced and hyped, with punchy emphasis and a big confident grin you can hear."),
+        .init(name: "Warm late-night host",
+              text: "Warm, slightly breathy, unhurried late-night radio host — intimate and calm, "
+                  + "with a gentle smile in the voice."),
+        .init(name: "Wise old narrator",
+              text: "An elderly storyteller, gravelly and slow, with a knowing warmth and "
+                  + "deliberate, measured pacing."),
+        .init(name: "Hype announcer",
+              text: "Explosive arena announcer — huge, punchy and breathless, shouting over the "
+                  + "crowd with rising intensity."),
+        .init(name: "Soft meditation guide",
+              text: "A soft, soothing meditation guide — very calm and slow, low and breathy, "
+                  + "with long gentle pauses."),
     ]
 
     // API request console (shared with the server)
@@ -279,7 +189,6 @@ final class AppModel {
         // Model not on disk yet → offer to download it (no red error). The sheet's
         // confirm starts a background download and generates once it's ready.
         if downloads.state(for: backend) != .ready {
-            downloadIntent = .generate
             downloadPrompt = backend
             return
         }
@@ -311,42 +220,18 @@ final class AppModel {
         }
     }
 
-    /// Select a model from the chooser. Loads it if downloaded; otherwise offers
-    /// to download it (then loads once ready) instead of silently doing nothing.
-    func selectModel(_ backend: BackendID) {
-        self.backend = backend
-        if downloads.state(for: backend) == .ready {
-            Task { await loadModel(backend) }
-        } else {
-            downloadIntent = .load
-            downloadPrompt = backend
-        }
-    }
-
     /// Confirm the download offered by `downloadPrompt`: start a background
-    /// download (progress shows in the toolbar) and, once ready, either load it
-    /// or generate — depending on what triggered the prompt.
+    /// download (progress shows in the toolbar) and auto-generate once ready.
     func confirmDownloadFromPrompt() {
         guard let pending = downloadPrompt else { return }
-        let intent = downloadIntent
         downloadPrompt = nil
-        // Don't start a second poll for a model already downloading on our watch —
-        // otherwise a re-prompt could fire a duplicate generation when it lands.
-        guard !downloadPolling.contains(pending) else { return }
-        downloadPolling.insert(pending)
         downloads.download(pending)
         Task {
-            defer { downloadPolling.remove(pending) }
             while true {
                 try? await Task.sleep(for: .milliseconds(400))
                 switch downloads.state(for: pending) {
                 case .ready:
-                    if backend == pending {
-                        switch intent {
-                        case .generate: await generate(takes: 1)
-                        case .load: await loadModel(pending)
-                        }
-                    }
+                    if backend == pending { await generate(takes: 1) }
                     return
                 case .failed, .notDownloaded:
                     return   // user cancelled or download failed; surfaced in Settings
@@ -444,21 +329,17 @@ final class AppModel {
                 message: "This backend needs a voice — pick or create one in the sidebar.")
         }
         let controls = backend.controls
-        // On emotion backends the knobs are an opt-in override; on Qwen (no emotion
-        // chips) they're the primary control and always apply. Otherwise the manual
-        // values would silently override the Emotion presets.
-        let manualKnobs = !controls.emotionChips || useDirectionOverrides
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
             emotion: emotion, speed: speed,
-            temperatureOverride: (controls.knobs.temperature != nil && manualKnobs) ? temperatureOverride : nil,
-            exaggerationOverride: (controls.knobs.exaggeration != nil && manualKnobs) ? exaggerationOverride : nil,
+            temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
+            exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             instruct: controls.instruct != .none ? instruct : nil,
             speaker: controls.presetSpeakers.isEmpty ? nil : speaker,
             language: controls.language ? language : nil,
-            topP: (controls.knobs.topP != nil && manualKnobs) ? qwenTopP : nil,
-            topK: (controls.knobs.topK != nil && manualKnobs) ? qwenTopK : nil,
-            repetitionPenalty: (controls.knobs.repetitionPenalty != nil && manualKnobs) ? qwenRepetitionPenalty : nil)
+            topP: controls.knobs.topP != nil ? qwenTopP : nil,
+            topK: controls.knobs.topK != nil ? qwenTopK : nil,
+            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil)
         let raw = try await engine.synthesize(backend: backend, request: request)
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
