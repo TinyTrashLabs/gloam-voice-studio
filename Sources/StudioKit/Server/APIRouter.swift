@@ -14,6 +14,16 @@ public enum APIRouter {
         return (Double(usage.ru_maxrss) / 1e9 * 100).rounded() / 100
     }
 
+    /// Write a server-side error line to stderr with a direct, unbuffered write(2)
+    /// syscall. The host shell redirects the engine's stderr into a block-buffered
+    /// file, so `print`/NSLog lines can sit unflushed for a long time — a direct
+    /// FileHandle write bypasses that libc buffering and lands immediately. Every
+    /// 5xx path calls this, so an on-device engine failure is NEVER silent (that
+    /// invisibility is what made the brain's `gemma4-26b` 500s undiagnosable).
+    static func logError(_ message: String) {
+        FileHandle.standardError.write(Data("[studio] ERROR \(message)\n".utf8))
+    }
+
     public static func build(_ deps: APIDependencies) -> Router<BasicRequestContext> {
         let router = Router()
 
@@ -150,8 +160,16 @@ public enum APIRouter {
                 throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
             } catch EngineError.languageProviderUnavailable {
                 throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
-            } catch let error as EngineError {
-                throw APIError(status: .internalServerError, detail: "\(error)")
+            } catch {
+                // Catch-ALL. Previously only `EngineError` was caught, so a raw
+                // MLX/model-load error (NOT an EngineError) fell through to
+                // Hummingbird as a bodyless 500 with no server log — exactly why
+                // the on-device brain's `gemma4-26b` failure was undiagnosable.
+                // Now every failure is logged AND returns its real reason in the body.
+                let ms = Int(Date().timeIntervalSince(start) * 1000)
+                let detail = "chat failed for \(backend.rawValue): \(error)"
+                logError("\(detail) (\(ms)ms)")
+                throw APIError(status: .internalServerError, detail: detail)
             }
         }
 
