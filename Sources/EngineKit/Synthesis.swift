@@ -97,6 +97,7 @@ public enum EngineError: Error, Equatable, Sendable {
     case invalidSpeed(Float)
     case instructRequired(BackendID)
     case speakerRequired(BackendID)
+    case languageProviderUnavailable
 }
 
 /// Pure translation from user request to provider request, with validation.

@@ -1,5 +1,6 @@
 import EngineKit
 import Foundation
+import StudioKit
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
@@ -7,8 +8,117 @@ func usage() -> Never {
          + "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> "
          + "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] "
          + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] "
-         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n").utf8))
+         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n"
+         + "   or: spike serve-llm <llm-backend-id> [port]   "
+         + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n"
+         + "   or: spike bakeoff [outPath] [--dry]   "
+         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n").utf8))
     exit(2)
+}
+
+func die(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+    exit(1)
+}
+
+/// Thread-safe last-printed-percent tracker, so the @Sendable progress closure
+/// can throttle prints to whole-percent steps without capturing a mutable var.
+final class PctTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = -1
+    /// Returns the percent to print, or nil if unchanged since the last print.
+    func step(_ fraction: Double) -> Int? {
+        let pct = Int(fraction * 100)
+        lock.lock(); defer { lock.unlock() }
+        guard pct != last else { return nil }
+        last = pct
+        return pct
+    }
+}
+
+// MARK: - serve-llm subcommand
+//
+// `spike serve-llm <llm-backend-id> [port]` — downloads the LLM if missing,
+// then runs the local OpenAI-compatible server on 127.0.0.1:<port> (default
+// 8790) so it can be smoke-tested / driven by the Phase 2 bake-off.
+if CommandLine.arguments.dropFirst().first == "serve-llm" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    guard let backendRaw = sub.first else {
+        die("serve-llm needs a backend id "
+            + "(\(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))")
+    }
+    guard let backend = LLMBackendID(rawValue: backendRaw) else {
+        die("unknown llm backend '\(backendRaw)' "
+            + "(\(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))")
+    }
+    let port = sub.count > 1 ? (Int(sub[1]) ?? 8790) : 8790
+
+    let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Models")
+        .appendingPathComponent(backend.diskFolder)
+
+    do {
+        let configPresent = FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("config.json").path)
+        let weightsPresent = ((try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .contains { $0.pathExtension == "safetensors" }
+        if !configPresent || !weightsPresent {
+            print("downloading \(backend.repoId) → \(dir.path)")
+            let tracker = PctTracker()
+            try await downloadHFSnapshot(repo: backend.repoId, to: dir) { p in
+                if let pct = tracker.step(p) { print("  \(pct)%") }
+            }
+            print("download complete")
+        } else {
+            print("model present: \(dir.path)")
+        }
+
+        let provider = MLXLanguageModelProvider(modelDirectoryResolver: { _ in dir })
+        let voicesDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spike-voices")
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: MLXModelProvider(), languageProvider: provider),
+            voices: VoiceLibrary(directory: voicesDir),
+            defaultBackend: .chatterboxTurbo,
+            defaultLLM: backend)
+        let server = LocalAPIServer(deps: deps)
+        try await server.start(port: port)
+
+        // Confirm the listener is actually accepting connections (catches port-in-use).
+        try await Task.sleep(for: .milliseconds(700))
+        do {
+            var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+            req.timeoutInterval = 5
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
+                die("server did not return 200 from /health on port \(port)")
+            }
+        } catch {
+            die("server failed to start on port \(port) (is it already in use?): \(error)")
+        }
+        print("serving /v1/chat/completions on http://127.0.0.1:\(port)  (model: \(backend.rawValue))")
+
+        // Keep the process alive — start() spawns the server on a detached task.
+        while true { try await Task.sleep(for: .seconds(86_400)) }
+    } catch {
+        die("\(error)")
+    }
+}
+
+// MARK: - bakeoff subcommand
+//
+// `spike bakeoff [outPath] [--dry]` — scores the four catalog LLMs on the DJ
+// pick-JSON contract grid (4 models × 3 variants × 5 scenarios = 60 cells).
+// `--dry` prints the planned matrix + resolved model dirs and exits without
+// loading or downloading anything (wiring check). See Bakeoff.swift.
+if CommandLine.arguments.dropFirst().first == "bakeoff" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    let dryRun = sub.contains("--dry")
+    let outPath = sub.first(where: { !$0.hasPrefix("--") }) ?? "./bakeoff-results.md"
+    let models: [LLMBackendID] = [.qwen3_1_7b, .gemma4_e2b, .gemma4_e4b, .qwen3_8b]
+    await Bakeoff.run(models: models, outPath: outPath, dryRun: dryRun)
+    exit(0)
 }
 
 var args: [String: String] = [:]
@@ -33,9 +143,13 @@ do {
         refText: args["ref-text"],
         emotion: args["emotion"].flatMap(Emotion.init(rawValue:)) ?? .neutral,
         speed: args["speed"].flatMap(Float.init) ?? 1.0,
+        temperatureOverride: args["temperature"].flatMap(Float.init),
         instruct: args["instruct"],
         speaker: args["speaker"],
-        language: args["language"])
+        language: args["language"],
+        topP: args["top-p"].flatMap(Float.init),
+        topK: args["top-k"].flatMap(Int.init),
+        repetitionPenalty: args["rep"].flatMap(Float.init))
     let result = try await engine.synthesize(backend: backend, request: request)
     try WAVWriter.write(samples: result.samples, sampleRate: result.sampleRate,
                         to: URL(fileURLWithPath: out))

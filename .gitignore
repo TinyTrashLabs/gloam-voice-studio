@@ -4,3 +4,6 @@ build/
 xcuserdata/
 GloamVoiceStudio.xcodeproj/
 build-app/
+
+# Private working docs (brainstorming specs / implementation plans) — not published
+docs/superpowers/

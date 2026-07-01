@@ -14,6 +14,16 @@ public enum APIRouter {
         return (Double(usage.ru_maxrss) / 1e9 * 100).rounded() / 100
     }
 
+    /// Write a server-side error line to stderr with a direct, unbuffered write(2)
+    /// syscall. The host shell redirects the engine's stderr into a block-buffered
+    /// file, so `print`/NSLog lines can sit unflushed for a long time — a direct
+    /// FileHandle write bypasses that libc buffering and lands immediately. Every
+    /// 5xx path calls this, so an on-device engine failure is NEVER silent (that
+    /// invisibility is what made the brain's `gemma4-26b` 500s undiagnosable).
+    static func logError(_ message: String) {
+        FileHandle.standardError.write(Data("[studio] ERROR \(message)\n".utf8))
+    }
+
     public static func build(_ deps: APIDependencies) -> Router<BasicRequestContext> {
         let router = Router()
 
@@ -115,6 +125,52 @@ public enum APIRouter {
                 status: .ok,
                 headers: headers,
                 body: .init(byteBuffer: ByteBuffer(data: data)))
+        }
+
+        router.post("v1/chat/completions") { request, context in
+            let start = Date()
+            let req = try await request.decode(as: ChatCompletionRequest.self, context: context)
+            guard let backend = req.model.flatMap(LLMBackendID.init(rawValue:)) ?? deps.defaultLLM else {
+                throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
+            }
+            let chatReq = req.toChatRequest()
+            guard !chatReq.messages.isEmpty else {
+                throw APIError(status: .badRequest, detail: "messages is empty")
+            }
+            guard chatReq.messages.contains(where: { $0.role == .user }) else {
+                throw APIError(status: .badRequest, detail: "no user message")
+            }
+            do {
+                let result = try await deps.gate.run {
+                    try await deps.engine.chat(backend: backend, request: chatReq)
+                }
+                deps.log.record(.init(
+                    method: "POST", path: "/v1/chat/completions", status: 200,
+                    model: backend.rawValue, voice: nil, instruct: nil,
+                    durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                let resp = ChatCompletionResponse(
+                    model: backend.rawValue, content: result.text,
+                    promptTokens: result.usage.promptTokens,
+                    completionTokens: result.usage.completionTokens)
+                let data = try JSONEncoder().encode(resp)
+                return Response(status: .ok,
+                                headers: [.contentType: "application/json"],
+                                body: .init(byteBuffer: ByteBuffer(data: data)))
+            } catch is RequestGate.Busy {
+                throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+            } catch EngineError.languageProviderUnavailable {
+                throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
+            } catch {
+                // Catch-ALL. Previously only `EngineError` was caught, so a raw
+                // MLX/model-load error (NOT an EngineError) fell through to
+                // Hummingbird as a bodyless 500 with no server log — exactly why
+                // the on-device brain's `gemma4-26b` failure was undiagnosable.
+                // Now every failure is logged AND returns its real reason in the body.
+                let ms = Int(Date().timeIntervalSince(start) * 1000)
+                let detail = "chat failed for \(backend.rawValue): \(error)"
+                logError("\(detail) (\(ms)ms)")
+                throw APIError(status: .internalServerError, detail: detail)
+            }
         }
 
         router.post("v1/audio/speech") { request, context in
@@ -230,10 +286,11 @@ struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
     func handle(_ request: Request, context: Context,
                 next: (Request, Context) async throws -> Response) async throws -> Response {
         let start = ContinuousClock.now
-        let isSpeech = request.uri.path == "/v1/audio/speech"
+        let isManagedRoute = request.uri.path == "/v1/audio/speech"
+            || request.uri.path == "/v1/chat/completions"
         do {
             let response = try await next(request, context)
-            if !isSpeech {
+            if !isManagedRoute {
                 let ms = Int(start.duration(to: .now) / .milliseconds(1))
                 log.record(.init(method: "\(request.method)", path: request.uri.path,
                                  status: Int(response.status.code), durationMs: ms))

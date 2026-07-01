@@ -76,15 +76,18 @@ public struct APIDependencies: Sendable {
     public let engine: GloamEngine
     public let voices: VoiceLibrary
     public let defaultBackend: BackendID
+    public let defaultLLM: LLMBackendID?
     public let log: APILog
     public let gate: RequestGate
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
+                defaultLLM: LLMBackendID? = nil,
                 log: APILog = APILog(),
                 gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3)) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
+        self.defaultLLM = defaultLLM
         self.log = log
         self.gate = gate
     }
