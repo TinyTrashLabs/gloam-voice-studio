@@ -1,8 +1,8 @@
-# gloam.fm ↔ Gloam Voice Studio API — Qwen3-TTS Controls Handoff
+# Gloam Voice Studio Local API — Qwen3-TTS Controls
 
 The local Studio API (`http://127.0.0.1:<port>`, loopback only, CORS-allowed for
-`https://gloam.fm` and `https://gloam-app.pages.dev`) now exposes Qwen3-TTS natural-language controls.
-The DJ brain composes the spoken text **and** the delivery controls in a single `POST /v1/audio/speech`.
+`https://gloam.fm` and `https://gloam-app.pages.dev`) exposes Qwen3-TTS natural-language controls.
+A client composes the spoken text **and** the delivery controls in a single `POST /v1/audio/speech`.
 
 ## POST /v1/audio/speech
 
@@ -36,7 +36,7 @@ off before the engine). Natural-language direction lives only on `qwen3-design` 
 ## Choosing a model
 
 - **Direct a stable, known voice** (keep identity, change delivery) → `qwen3-custom` with `speaker` +
-  `instruct`. Best fit for a DJ persona you reuse across lines. Note: only `Ryan` and `Aiden` are English
+  `instruct`. Best fit for a persona you reuse across lines. Note: only `Ryan` and `Aiden` are English
   presets (both male); the rest are tuned for Chinese/Japanese/Korean.
 - **Invent a voice from a description** → `qwen3-design` with `instruct` (no stable identity across calls —
   the description *is* the voice each time).
@@ -81,10 +81,10 @@ A blank `instruct` on `qwen3-design` returns **400** `"qwen3-design requires 'in
 ## Concurrency & 503
 
 GPU work is serialized and **bounded** (1 running + 3 queued). Over capacity the API returns **503**
-`{"detail":"server busy — try again"}`. The DJ brain should retry with backoff (e.g. 250ms → 1s) on 503;
+`{"detail":"server busy — try again"}`. Clients should retry with backoff (e.g. 250ms → 1s) on 503;
 do not fire unbounded parallel requests.
 
 ## /health
 
-`GET /health` reports `loadedBackends` — the resident backend id (one Qwen variant or other), so the DJ
-app can tell which model is hot before sending controls that only some models honor.
+`GET /health` reports `loadedBackends` — the resident backend id (one Qwen variant or other), so a
+client can tell which model is hot before sending controls that only some models honor.
