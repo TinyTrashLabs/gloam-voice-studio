@@ -101,7 +101,7 @@ xcodebuild test -project GloamVoiceStudio.xcodeproj -scheme GloamVoiceStudio \
 
 ## Integration with gloam-voice-engine
 
-The Python sibling project [`gloam-voice-engine`](https://github.com/TinyTrashLabs/gloam-voice-engine) is a backend server and a source of voice data.
+The Python sibling project `gloam-voice-engine` (published separately) is a backend server and a source of voice data.
 
 **Interchange Format:** Both projects use `.gvoice` packs (ZIP archives containing `meta.json` and `ref.wav`). You can:
 - Export a voice from the macOS app and import it into the Python project.
