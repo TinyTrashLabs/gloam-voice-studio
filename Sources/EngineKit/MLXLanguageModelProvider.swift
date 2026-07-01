@@ -4,6 +4,7 @@ import MLX
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 import Tokenizers
 
 /// Production LanguageModelProviding backed by mlx-swift-lm.
@@ -21,14 +22,44 @@ public final class MLXLanguageModelProvider: LanguageModelProviding, @unchecked 
 
     public func loadModel(backend: LLMBackendID) async throws -> any LanguageModel {
         let dir = modelDirectoryResolver(backend)
-        let configuration = ModelConfiguration(directory: dir)
-        // `#huggingFaceLoadModelContainer` expands to `loadModelContainer(from:
-        // #hubDownloader(), using: #huggingFaceTokenizerLoader(), configuration:)`.
-        // For a `.directory` configuration the downloader is never invoked (resolve
-        // short-circuits to the local path); only the tokenizer loader runs against
-        // the on-disk folder.
-        let container = try await #huggingFaceLoadModelContainer(configuration: configuration)
+
+        // Mixture-of-Experts Gemma-4 (e.g. gemma-4-26b-a4b) ships as a
+        // `Gemma4ForConditionalGeneration`. Its MoE text stack — `num_experts`,
+        // `router`, the SwitchGLU experts, the extra pre/post-feedforward norms —
+        // is implemented ONLY in the VLM factory's Gemma4. The default LLM loader
+        // matches model_type "gemma4" to the DENSE Gemma4 first and then dies on the
+        // MoE weights (`unhandledKeys([experts, router, …])`). So route a MoE gemma
+        // through the VLM factory, which builds the correct architecture; text
+        // generation then runs identically (no images) via ChatSession. Dense
+        // gemmas (e2b/e4b) and non-gemma models keep the default LLM path.
+        let container: ModelContainer
+        if backend.family == .gemma, Self.isMoEConfig(dir) {
+            container = try await VLMModelFactory.shared.loadContainer(
+                from: dir, using: #huggingFaceTokenizerLoader())
+        } else {
+            // `#huggingFaceLoadModelContainer` expands to `loadModelContainer(from:
+            // #hubDownloader(), using: #huggingFaceTokenizerLoader(), configuration:)`.
+            // For a `.directory` configuration the downloader is never invoked (resolve
+            // short-circuits to the local path); only the tokenizer loader runs against
+            // the on-disk folder.
+            container = try await #huggingFaceLoadModelContainer(
+                configuration: ModelConfiguration(directory: dir))
+        }
         return MLXLanguageModel(container: container, family: backend.family)
+    }
+
+    /// Whether the model at `dir` declares a Mixture-of-Experts block in its
+    /// config.json (top-level or under `text_config`). MoE gemmas must load via
+    /// the VLM factory; dense ones use the LLM factory. Reads the small config
+    /// file only — no weights touched.
+    private static func isMoEConfig(_ dir: URL) -> Bool {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        if json["enable_moe_block"] as? Bool == true { return true }
+        if let text = json["text_config"] as? [String: Any],
+           text["enable_moe_block"] as? Bool == true { return true }
+        return false
     }
 
     public func didEvictModel() {
