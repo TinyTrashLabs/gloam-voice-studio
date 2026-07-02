@@ -7,3 +7,19 @@ build-app/
 
 # Private working docs (brainstorming specs / implementation plans) — not published
 docs/superpowers/
+
+# Local Claude Code / Tiny Trash Labs tooling config — not published, machine-specific
+.claude/
+CLAUDE.md
+
+# App Store build/signing config (Apple Team ID, Infisical org details) — local-only, not published
+app-build.config.json
+secrets/
+fastlane/
+ExportOptions.plist
+
+# Added by ios-android-builder setup-credentials.sh — never commit credentials
+*.p8
+*.jks
+*.keystore
+**/key.properties

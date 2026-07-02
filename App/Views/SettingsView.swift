@@ -6,7 +6,7 @@ import SwiftUI
 /// Stable tab identifiers so other UI (e.g. the toolbar API chip) can deep-link
 /// to a specific Settings tab via the shared "settingsTab" AppStorage key.
 enum SettingsTab: String {
-    case backends, speech, api, storage
+    case backends, speech, api, storage, about
 }
 
 struct SettingsView: View {
@@ -22,9 +22,31 @@ struct SettingsView: View {
                 .tag(SettingsTab.api.rawValue)
             StorageSettings().tabItem { Label("Storage", systemImage: "internaldrive") }
                 .tag(SettingsTab.storage.rawValue)
+            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
+                .tag(SettingsTab.about.rawValue)
         }
         .frame(width: 560)
         .padding(20)
+    }
+}
+
+struct AboutSettings: View {
+    var body: some View {
+        Form {
+            Section {
+                Text("Gloam Voice Studio processes everything on this Mac. There's no account, no analytics, and no data sent to us.")
+                    .font(.callout)
+            }
+            Section {
+                Link("Privacy Policy",
+                     destination: URL(string: "https://github.com/TinyTrashLabs/gloam-voice-studio/blob/main/PRIVACY.md")!)
+                Link("Support & Issues",
+                     destination: URL(string: "https://github.com/TinyTrashLabs/gloam-voice-studio/issues")!)
+                Link("Source Code",
+                     destination: URL(string: "https://github.com/TinyTrashLabs/gloam-voice-studio")!)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
