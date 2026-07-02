@@ -14,7 +14,7 @@ let package = Package(
         // flow-matching steps (chatterbox quality fix). See TinyTrashLabs/mlx-audio-swift.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "d3ebde025ba86d1a3e678d7454df4d2f2cbab80e"),
+            revision: "b85e44406ac86b5e82f355e38054014ae7b055ad"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         // HuggingFace Hub client + Tokenizers — back the mlx-swift-lm #huggingFace…
