@@ -40,6 +40,11 @@ struct ContentView: View {
                 DownloadPromptSheet(backend: backend)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { model.licensePromptBackend != nil },
+            set: { if !$0 { model.cancelLicensePrompt() } })) {
+            FishLicenseSheet()
+        }
     }
 
     // macOS merges all automatic toolbar items into ONE "Liquid Glass" capsule.
@@ -121,20 +126,20 @@ struct ContentView: View {
 
     // Models offered in the chooser, in priority order.
     // Qwen3 (multilingual cloning) and turbo/Fish up top; regular chatterbox is
-    // demoted to last — its MLX port doesn't emit the stop token so it doubles
-    // the line. Kept available but clearly flagged.
+    // demoted to last for historical reasons (it used to double the line —
+    // fixed 2026-07-02: CFG uncond-stream position embeddings, missing [SPACE]
+    // tokenization, and uninitialized S3Gen attention biases, all in the vendored
+    // mlx-audio-swift fork).
     private var pickerBackends: [BackendID] {
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
     }
 
-    /// Display name (+ honest flag for regular chatterbox's doubling bug).
     private func modelDisplayName(_ b: BackendID) -> String {
         switch b {
         case .qwen06B: "qwen3-0.6b · clone a voice"
         case .qwen17B: "qwen3-1.7b · clone a voice"
         case .qwenDesign: "qwen3-design · design from text"
         case .qwenCustom: "qwen3-custom · direct a preset voice"
-        case .chatterbox: "chatterbox (legacy — doubles)"
         default: b.rawValue
         }
     }

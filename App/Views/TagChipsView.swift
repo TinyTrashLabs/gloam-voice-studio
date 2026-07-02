@@ -2,10 +2,11 @@ import SwiftUI
 
 /// Click-to-insert delivery tags, mirroring the web studio's bench chips.
 /// Fish's documented tag vocabulary, grouped; the model also accepts
-/// free-form bracketed phrases — hence the custom field. Tags append to the
-/// end of the line (SwiftUI exposes no caret position at our target).
+/// free-form bracketed phrases — hence the custom field. Tags insert at the
+/// caret (via `CaretTextEditor`'s live selection), replacing any selected text.
 struct TagChipsView: View {
     @Binding var text: String
+    @Binding var selection: NSRange
     @AppStorage("tagChipsExpanded") private var expanded = true
     @State private var customTag = ""
 
@@ -54,7 +55,7 @@ struct TagChipsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
         } label: {
-            Label("Inject tags — click to append", systemImage: "tag")
+            Label("Inject tags — click to insert", systemImage: "tag")
         }
         .font(.callout)
     }
@@ -69,7 +70,7 @@ struct TagChipsView: View {
             .overlay(Capsule().stroke(color.opacity(0.5), lineWidth: 1))
             .foregroundStyle(color)
             .accessibilityIdentifier("tag-chip-\(tag)")
-            .help("Append [\(tag)] to the line")
+            .help("Insert [\(tag)] at the cursor")
     }
 
     private func insertCustom() {
@@ -83,11 +84,18 @@ struct TagChipsView: View {
 
     private func insert(_ tag: String) {
         let chip = "[\(tag)]"
-        if text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") {
-            text += chip + " "
-        } else {
-            text += " " + chip + " "
-        }
+        let ns = text as NSString
+        let loc = max(0, min(selection.location, ns.length))
+        let len = max(0, min(selection.length, ns.length - loc))
+        let range = NSRange(location: loc, length: len)
+
+        let precededByWhitespace = loc == 0
+            || ns.substring(with: NSRange(location: loc - 1, length: 1)) == " "
+            || ns.substring(with: NSRange(location: loc - 1, length: 1)) == "\n"
+        let insertion = (precededByWhitespace ? "" : " ") + chip + " "
+
+        text = ns.replacingCharacters(in: range, with: insertion)
+        selection = NSRange(location: loc + (insertion as NSString).length, length: 0)
     }
 }
 

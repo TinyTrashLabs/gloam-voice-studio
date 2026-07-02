@@ -15,6 +15,7 @@ struct StudioView: View {
     @State private var voicePickerOpen = false
     @State private var showSaveDirection = false
     @State private var saveDirectionName = ""
+    @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
 
     private var mode: StudioMode {
@@ -306,10 +307,8 @@ struct StudioView: View {
         // ── WRITE zone ──────────────────────────────────────────────────────
         zoneLabel("WRITE")
         HStack(alignment: .top, spacing: 8) {
-            TextEditor(text: $model.text)
-                .font(.system(.body, design: .monospaced))
+            CaretTextEditor(text: $model.text, selection: $lineSelection)
                 .frame(height: 110)
-                .scrollContentBackground(.hidden)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
@@ -317,7 +316,7 @@ struct StudioView: View {
             DictationButton(text: $model.text)
         }
         if model.backend.spec.honorsTags {
-            TagChipsView(text: $model.text)
+            TagChipsView(text: $model.text, selection: $lineSelection)
         }
 
         // ── DIRECT zone (inset card) ─────────────────────────────────────────

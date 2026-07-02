@@ -37,7 +37,14 @@ final class AppModel {
 
     // Persisted settings (raw UserDefaults so @Observable views update via model)
     var backend: BackendID {
-        didSet { UserDefaults.standard.set(backend.rawValue, forKey: "defaultBackend") }
+        didSet {
+            UserDefaults.standard.set(backend.rawValue, forKey: "defaultBackend")
+            // Surface the license prompt the moment an unacknowledged backend is
+            // picked — not just when Generate/Load later hits it as an error.
+            if backend.spec.needsLicenseAck && !didAckFishLicense {
+                licensePromptBackend = backend
+            }
+        }
     }
     var serverEnabled = false { didSet { Task { await syncServer() } } }
     var serverPort: Int {
@@ -92,6 +99,12 @@ final class AppModel {
     // Download-on-demand: set when Generate hits a model that isn't downloaded,
     // so the UI can offer to fetch it (instead of a red error). Drives a sheet.
     var downloadPrompt: BackendID?
+
+    // Set when Generate hits a backend that needs a license ack it doesn't have
+    // yet — regardless of download state (a backend can be downloaded already
+    // but never acknowledged, e.g. if it was fetched via `downloadPrompt` before
+    // this gate existed). Drives a sheet distinct from `downloadPrompt`.
+    var licensePromptBackend: BackendID?
 
     // Saved Direction (instruct) descriptions, persisted as JSON in UserDefaults.
     var savedDirections: [DirectionPreset] = [] {
@@ -186,6 +199,13 @@ final class AppModel {
             generationError = "Enter some text first."
             return
         }
+        // License needed but never acknowledged — regardless of download state,
+        // since a backend can already be downloaded (e.g. via the download-prompt
+        // path below, before this gate existed) yet still unacknowledged.
+        if backend.spec.needsLicenseAck && !didAckFishLicense {
+            licensePromptBackend = backend
+            return
+        }
         // Model not on disk yet → offer to download it (no red error). The sheet's
         // confirm starts a background download and generates once it's ready.
         if downloads.state(for: backend) != .ready {
@@ -219,6 +239,23 @@ final class AppModel {
             }
         }
     }
+
+    /// Confirm the license offered by `licensePromptBackend`: acknowledge it,
+    /// then either generate right away (already downloaded) or fall into the
+    /// same download-and-auto-generate flow as `confirmDownloadFromPrompt`.
+    func confirmLicensePrompt() {
+        guard let pending = licensePromptBackend else { return }
+        licensePromptBackend = nil
+        didAckFishLicense = true   // didSet also acks it with the engine
+        if downloads.state(for: pending) == .ready {
+            if backend == pending { Task { await generate(takes: 1) } }
+        } else {
+            downloadPrompt = pending
+            confirmDownloadFromPrompt()
+        }
+    }
+
+    func cancelLicensePrompt() { licensePromptBackend = nil }
 
     /// Confirm the download offered by `downloadPrompt`: start a background
     /// download (progress shows in the toolbar) and auto-generate once ready.
@@ -286,6 +323,10 @@ final class AppModel {
 
     func loadModel(_ backend: BackendID) async {
         guard downloads.state(for: backend) == .ready, !modelOpInFlight else { return }
+        if backend.spec.needsLicenseAck && !didAckFishLicense {
+            licensePromptBackend = backend
+            return
+        }
         modelOpInFlight = true
         loadingBackend = backend
         defer { modelOpInFlight = false; loadingBackend = nil }
