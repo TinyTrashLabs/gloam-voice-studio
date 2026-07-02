@@ -27,6 +27,15 @@ public actor GloamEngine {
         resident?.backend
     }
 
+    /// Waits for all queued model work (loads + generations) to drain. Lets an
+    /// external owner (e.g. the gloam.fm shell freeing RAM on a lane switch)
+    /// evict models without preempting an in-flight request: quiesce first,
+    /// then unload. Work queued AFTER quiesce returns isn't covered — for
+    /// eviction that race is benign (a post-eviction request reloads on demand).
+    public func quiesce() async {
+        await tail?.value
+    }
+
     /// Evicts the resident model and releases accelerator memory.
     /// Takes effect immediately; callers must not unload while a generation is in flight.
     public func unload() {
