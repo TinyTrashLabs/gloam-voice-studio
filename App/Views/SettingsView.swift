@@ -52,7 +52,6 @@ struct AboutSettings: View {
 
 struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
-    @State private var fishSheetShown = false
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
@@ -70,7 +69,11 @@ struct BackendsSettings: View {
             }
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $fishSheetShown) { FishLicenseSheet() }
+        .sheet(isPresented: Binding(
+            get: { model.licensePromptBackend != nil },
+            set: { if !$0 { model.cancelLicensePrompt() } })) {
+            FishLicenseSheet()
+        }
         .onAppear { model.downloads.refresh() }
     }
 
@@ -97,7 +100,7 @@ struct BackendsSettings: View {
             switch state {
             case .notDownloaded:
                 if backend.spec.needsLicenseAck && !model.didAckFishLicense {
-                    Button("Review License…") { fishSheetShown = true }
+                    Button("Review License…") { model.licensePromptBackend = backend }
                         .help("Review the research/personal-use license before downloading")
                 } else {
                     Button("Download") { model.downloads.download(backend) }
@@ -111,7 +114,13 @@ struct BackendsSettings: View {
                 Button("Cancel") { model.downloads.cancelDownload(backend) }
                     .help("Cancel the download")
             case .ready:
-                Text("Ready").foregroundStyle(.green)
+                if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                    Text("Needs license").foregroundStyle(.orange)
+                    Button("Review License…") { model.licensePromptBackend = backend }
+                        .help("Acknowledge the research/personal-use license to enable generation")
+                } else {
+                    Text("Ready").foregroundStyle(.green)
+                }
                 Button("Delete") { model.downloads.delete(backend) }
                     .help("Delete this model from disk")
             case .failed(let message):
@@ -131,7 +140,6 @@ struct BackendsSettings: View {
 
 struct FishLicenseSheet: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -141,13 +149,9 @@ struct FishLicenseSheet: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button("I Confirm — Personal Use") {
-                    model.didAckFishLicense = true
-                    model.downloads.download(.fishS2Pro)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Cancel") { model.cancelLicensePrompt() }
+                Button("I Confirm — Personal Use") { model.confirmLicensePrompt() }
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(22)
