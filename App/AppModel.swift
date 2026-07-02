@@ -375,6 +375,8 @@ final class AppModel {
             return "This model needs a Direction (instruct)."
         case .speakerRequired:
             return "Pick a preset speaker for this model."
+        case .languageProviderUnavailable:
+            return "This model's language provider isn't loaded yet."
         }
     }
 
