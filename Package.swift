@@ -10,11 +10,14 @@ let package = Package(
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
     ],
     dependencies: [
-        // Vendored fork of Blaizzy/mlx-audio-swift @ 10b7366204… with raised S3Gen
-        // flow-matching steps (chatterbox quality fix). See TinyTrashLabs/mlx-audio-swift.
+        // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
+        // reference-parity fixes (rounds 1–3): dropped S3Gen attn biases, RNG clobber,
+        // eval-mode, S3Tokenizer rotary, ODE steps, stft center, HiFT lrelu slope, the
+        // torchaudio-matching 16k/24k resampler, and fresh flow noise. Pinned to the
+        // PR #2 merge. See TinyTrashLabs/mlx-audio-swift and docs/chatterbox-quality-todo.md.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "b85e44406ac86b5e82f355e38054014ae7b055ad"),
+            revision: "bfe2455ab7e104378497175b26e5645cdded799e"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         // HuggingFace Hub client + Tokenizers — back the mlx-swift-lm #huggingFace…
@@ -32,6 +35,7 @@ let package = Package(
             name: "EngineKit",
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 // MoE Gemma-4 (gemma-4-26b-a4b) is a `Gemma4ForConditionalGeneration`

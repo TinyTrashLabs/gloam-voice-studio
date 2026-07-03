@@ -125,6 +125,7 @@ Gloam Voice Studio itself is published under the [MIT License](LICENSE).
 
 Model weights are licensed separately:
 - **Chatterbox & Chatterbox-Turbo:** MIT
+- **Qwen3-TTS:** [Apache-2.0](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) (commercial use permitted)
 - **Fish S2-Pro:** [Fish Audio Research License](https://huggingface.co/fishaudio/fish-speech-1.5) (personal/research use; commercial use requires a license from business@fish.audio)
 
 ## Contributing
