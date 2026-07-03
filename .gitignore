@@ -8,8 +8,11 @@ build-app/
 # Private working docs (brainstorming specs / implementation plans) — not published
 docs/superpowers/
 
-# Local Claude Code / Tiny Trash Labs tooling config — not published, machine-specific
-.claude/
+# Local Claude Code / Tiny Trash Labs tooling config — machine-specific bits stay local.
+# Exception: project skills are published (portable build/run knowledge, no secrets).
+# settings.json (local paths), the task lock, and output-styles are NOT published.
+.claude/*
+!.claude/skills/
 CLAUDE.md
 
 # App Store build/signing config (Apple Team ID, Infisical org details) — local-only, not published
