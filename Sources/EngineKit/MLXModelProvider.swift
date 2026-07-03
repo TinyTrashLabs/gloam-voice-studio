@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXAudioCore
 import MLXAudioTTS
+import MLXRandom
 
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
@@ -15,6 +16,11 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
 
     public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
         self.modelPathResolver = modelPathResolver
+        // MLX's global RNG starts from a fixed default seed, so every fresh
+        // process would sample the identical token sequence — the first take
+        // after app launch (or every spike run) is otherwise always the same
+        // performance for a given text + voice.
+        MLXRandom.seed(UInt64.random(in: .min ... .max))
     }
 
     public func loadModel(backend: BackendID) async throws -> any SpeechModel {

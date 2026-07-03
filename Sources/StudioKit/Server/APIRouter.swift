@@ -213,7 +213,10 @@ public enum APIRouter {
                             backend: backend,
                             request: SynthesisRequest(
                                 text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
+                                emotion: req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral,
+                                speed: req.speed ?? 1.0,
                                 temperatureOverride: req.temperature,
+                                exaggerationOverride: req.exaggeration,
                                 instruct: req.instruct, speaker: req.speaker, language: req.language,
                                 topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                     }

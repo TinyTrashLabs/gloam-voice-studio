@@ -63,6 +63,13 @@ struct SpeechRequest: Codable {
     let speaker: String?
     let instruct: String?
     let language: String?
+    // Chatterbox expressiveness. `emotion` picks a preset (flat|neutral|warm|
+    // excited|hype); `exaggeration` (0–1) overrides it directly. Both no-ops on
+    // backends without an emotion knob (Qwen). Extra fields, so the endpoint stays
+    // OpenAI-compatible for clients that don't send them.
+    let emotion: String?
+    let exaggeration: Float?
+    let speed: Float?
     let temperature: Float?
     let top_p: Float?
     let top_k: Int?
