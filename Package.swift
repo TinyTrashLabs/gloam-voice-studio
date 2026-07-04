@@ -13,11 +13,13 @@ let package = Package(
         // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
         // reference-parity fixes (rounds 1–3): dropped S3Gen attn biases, RNG clobber,
         // eval-mode, S3Tokenizer rotary, ODE steps, stft center, HiFT lrelu slope, the
-        // torchaudio-matching 16k/24k resampler, and fresh flow noise. Pinned to the
-        // PR #2 merge. See TinyTrashLabs/mlx-audio-swift and docs/chatterbox-quality-todo.md.
+        // torchaudio-matching 16k/24k resampler, and fresh flow noise; plus the
+        // T3 token cap on the reference-clip path so a high-exaggeration line can't
+        // run away past EOS (PR #3). See TinyTrashLabs/mlx-audio-swift and
+        // docs/chatterbox-quality-todo.md.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "bfe2455ab7e104378497175b26e5645cdded799e"),
+            revision: "f57346ace4ad8fd22e6d56f6e952c9afecce2df7"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
         // HuggingFace Hub client + Tokenizers — back the mlx-swift-lm #huggingFace…
