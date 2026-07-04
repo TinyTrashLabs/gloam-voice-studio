@@ -217,6 +217,7 @@ public enum APIRouter {
                                 speed: req.speed ?? 1.0,
                                 temperatureOverride: req.temperature,
                                 exaggerationOverride: req.exaggeration,
+                                exaggerationCeiling: req.exaggeration_ceiling,
                                 instruct: req.instruct, speaker: req.speaker, language: req.language,
                                 topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                     }

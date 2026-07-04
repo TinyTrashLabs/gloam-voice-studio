@@ -69,6 +69,11 @@ struct SpeechRequest: Codable {
     // OpenAI-compatible for clients that don't send them.
     let emotion: String?
     let exaggeration: Float?
+    // Upper bound on the resolved exaggeration (Chatterbox). Lets a client keep an
+    // expressive per-line `emotion` dial while capping the knob below the range
+    // where Chatterbox timbre degrades. nil = no cap. No-op on backends without an
+    // exaggeration knob.
+    let exaggeration_ceiling: Float?
     let speed: Float?
     let temperature: Float?
     let top_p: Float?

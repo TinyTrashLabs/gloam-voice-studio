@@ -14,6 +14,9 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var temperatureOverride: Float?
     /// Override emotion's chatterboxExaggeration when present (Chatterbox only).
     public var exaggerationOverride: Float?
+    /// Upper bound applied to the resolved exaggeration (Chatterbox only). Caps an
+    /// expressive emotion/override below the range where timbre degrades. nil = no cap.
+    public var exaggerationCeiling: Float?
     /// Qwen natural-language voice direction (instruct). Honored per backend.
     public var instruct: String?
     /// Qwen CustomVoice preset speaker name.
@@ -28,6 +31,7 @@ public struct SynthesisRequest: Sendable, Equatable {
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, speed: Float = 1.0,
                 temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
+                exaggerationCeiling: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
         self.text = text
@@ -37,6 +41,7 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.speed = speed
         self.temperatureOverride = temperatureOverride
         self.exaggerationOverride = exaggerationOverride
+        self.exaggerationCeiling = exaggerationCeiling
         self.instruct = instruct
         self.speaker = speaker
         self.language = language
@@ -150,7 +155,8 @@ enum RequestPlanner {
                 ? (request.temperatureOverride ?? (spec.honorsTags ? request.emotion.fishTemperature : nil))
                 : nil,
             exaggeration: knobs.exaggeration != nil
-                ? (request.exaggerationOverride ?? request.emotion.chatterboxExaggeration)
+                ? min(request.exaggerationCeiling ?? .greatestFiniteMagnitude,
+                      request.exaggerationOverride ?? request.emotion.chatterboxExaggeration)
                 : nil,
             instruct: instruct,
             speaker: speaker,
