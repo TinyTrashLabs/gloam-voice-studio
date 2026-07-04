@@ -20,6 +20,9 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var exaggerationOverride: Float?
     /// Chatterbox (regular) CFG guidance weight; nil = model default (0.5).
     public var cfgWeight: Float?
+    /// Upper bound applied to the resolved exaggeration (Chatterbox only). Caps an
+    /// expressive emotion/override below the range where timbre degrades. nil = no cap.
+    public var exaggerationCeiling: Float?
     /// Qwen natural-language voice direction (instruct). Honored per backend.
     public var instruct: String?
     /// Qwen CustomVoice preset speaker name.
@@ -34,7 +37,7 @@ public struct SynthesisRequest: Sendable, Equatable {
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
                 temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
-                cfgWeight: Float? = nil,
+                cfgWeight: Float? = nil, exaggerationCeiling: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
         self.text = text
@@ -46,6 +49,7 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.temperatureOverride = temperatureOverride
         self.exaggerationOverride = exaggerationOverride
         self.cfgWeight = cfgWeight
+        self.exaggerationCeiling = exaggerationCeiling
         self.instruct = instruct
         self.speaker = speaker
         self.language = language
@@ -180,6 +184,7 @@ enum RequestPlanner {
                 : nil,
             exaggeration: knobs.exaggeration != nil
                 ? (request.exaggerationOverride ?? emotionExaggeration)
+                    .map { min(request.exaggerationCeiling ?? .greatestFiniteMagnitude, $0) }
                 : nil,
             cfgWeight: knobs.cfgWeight != nil ? request.cfgWeight : nil,
             instruct: instruct,
