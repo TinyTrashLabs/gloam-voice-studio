@@ -78,7 +78,16 @@ final class ChatController {
     func newConversation() {
         guard let slug = app.selectedVoiceSlug else { return }
         stop()
-        let convo = Conversation.new(voiceSlug: slug)
+        var convo = Conversation.new(voiceSlug: slug)
+        // Seed the persona's greeting as the opening message, if any — but
+        // never auto-speak it (surprise audio on a voice click would be worse
+        // than a silent bubble; the replay button covers it).
+        if let greeting = (try? app.voices.get(slug).meta)?.persona?.greeting,
+           !greeting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            convo.messages.append(ChatMessage(
+                id: UUID().uuidString, role: "assistant", text: greeting,
+                createdAt: ChatStore.timestamp()))
+        }
         current = convo
         conversations.insert(convo, at: 0)
         // Not saved until the first message — empty chats shouldn't persist.
@@ -111,7 +120,11 @@ final class ChatController {
         draft = ""
         chatError = nil
         speechWarning = nil
-        if convo.messages.isEmpty { convo.title = Conversation.deriveTitle(from: text) }
+        // Title from the first *user* message — a seeded persona greeting
+        // shouldn't leave every new chat titled "New Chat".
+        if !convo.messages.contains(where: { $0.role == "user" }) {
+            convo.title = Conversation.deriveTitle(from: text)
+        }
         convo.messages.append(ChatMessage(
             id: UUID().uuidString, role: "user", text: text,
             createdAt: ChatStore.timestamp()))
