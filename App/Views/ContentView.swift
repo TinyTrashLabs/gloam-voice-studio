@@ -1,10 +1,21 @@
 import EngineKit
 import SwiftUI
 
+// NOTE: this branch (feature/llm-chat) predates the Create-Voice section work
+// landing on main, so this enum only carries the two cases this branch
+// actually has views for. When that other branch merges, add `.createVoice`
+// back and route it to `CreateVoiceView()` below.
+enum StudioSection: String { case studio, chat }
+
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var historyVisible = false
     @State private var modelPickerOpen = false
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+
+    private var section: StudioSection {
+        StudioSection(rawValue: sectionRaw) ?? .studio
+    }
 
     var body: some View {
         @Bindable var model = model
@@ -13,7 +24,12 @@ struct ContentView: View {
                 .frame(width: 248)
                 .background(Brand.ink2)
             Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
-            StudioView()
+            Group {
+                switch section {
+                case .chat: ChatView()
+                case .studio: StudioView()
+                }
+            }
                 .frame(maxWidth: .infinity)
                 .background(Brand.ink)
             if historyVisible {

@@ -19,6 +19,7 @@ struct VoiceSidebarView: View {
     @State private var variantBase: VoiceMeta?
     @State private var hoveredSlug: String?
     @State private var catalogPresented = false
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
 
     var body: some View {
         @Bindable var model = model
@@ -31,6 +32,19 @@ struct VoiceSidebarView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 12)
             Divider().overlay(Color.white.opacity(0.06))
+
+            Picker("Section", selection: Binding(
+                get: { StudioSection(rawValue: sectionRaw) ?? .studio },
+                set: { sectionRaw = $0.rawValue })) {
+                Text("Studio").tag(StudioSection.studio)
+                Text("Chat").tag(StudioSection.chat)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .accessibilityIdentifier("studio-section-picker")
+            .help("Switch between the recording studio and voice chat")
 
             HStack(alignment: .center) {
                 Text("VOICES")
