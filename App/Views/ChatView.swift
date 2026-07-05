@@ -101,10 +101,9 @@ struct ChatView: View {
                         }
                         if chat.isStreaming {
                             bubble(ChatMessage(id: "streaming", role: "assistant",
-                                               text: chat.streamingText.isEmpty
-                                                   ? "…" : chat.streamingText,
+                                               text: chat.streamingText,
                                                createdAt: ""),
-                                   voice: voice)
+                                   voice: voice, isStreamingBubble: true)
                                 .id("streaming-bubble")
                         }
                         if let error = chat.chatError {
@@ -132,8 +131,14 @@ struct ChatView: View {
         }
     }
 
-    private func bubble(_ message: ChatMessage, voice: VoiceMeta) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+    private func bubble(_ message: ChatMessage, voice: VoiceMeta, isStreamingBubble: Bool = false) -> some View {
+        // The last real (non-streaming) assistant message is the one whose replay
+        // icon should mirror "now speaking" — the streaming bubble has no replay
+        // button of its own.
+        let isLastAssistantMessage = !isStreamingBubble
+            && model.chat.current?.messages.last(where: { $0.role == "assistant" })?.id == message.id
+        let isSpeakingThis = isLastAssistantMessage && model.chat.speech.isSpeaking
+        return HStack(alignment: .top, spacing: 10) {
             if message.role == "assistant" {
                 VoiceAvatarView(slug: voice.slug, name: voice.name,
                                 avatarURL: model.voices.avatarURL(voice.slug), size: 26)
@@ -151,18 +156,34 @@ struct ChatView: View {
                             .font(.system(size: 9)).foregroundStyle(.orange)
                             .help("Reply was interrupted")
                     }
-                    if message.role == "assistant", message.id != "streaming" {
+                    // Mini spinner while tokens are actively flowing into this
+                    // bubble — mirrors the toolbar model chip's in-flight dot.
+                    if isStreamingBubble, model.chat.isStreaming, !message.text.isEmpty {
+                        ProgressView().controlSize(.mini)
+                    }
+                    if message.role == "assistant", !isStreamingBubble {
                         Button { model.chat.speak(message) } label: {
-                            Image(systemName: "speaker.wave.2")
+                            Image(systemName: isSpeakingThis ? "speaker.wave.2.fill" : "speaker.wave.2")
                                 .font(.system(size: 10))
                         }
-                        .buttonStyle(.plain).foregroundStyle(Brand.fgFaint)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isSpeakingThis ? Brand.accent : Brand.fgFaint)
                         .help("Speak this reply")
                     }
                 }
-                Text(message.text)
-                    .textSelection(.enabled)
-                    .foregroundStyle(Brand.fg)
+                if isStreamingBubble, message.text.isEmpty {
+                    // Nothing has streamed back yet — first-send model load can
+                    // take 10+ seconds, so show motion instead of a static "…".
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
+                    }
+                    .accessibilityIdentifier("chat-thinking")
+                } else {
+                    Text(message.text)
+                        .textSelection(.enabled)
+                        .foregroundStyle(Brand.fg)
+                }
             }
             Spacer(minLength: 40)
         }
@@ -180,6 +201,9 @@ struct ChatView: View {
                 .accessibilityIdentifier("chat-composer")
                 .onSubmit { model.chat.send() }
             if chat.isStreaming || chat.speech.isSpeaking {
+                // Busy cue alongside the stop control — covers both the
+                // generation and playback phases.
+                ProgressView().controlSize(.small)
                 Button { model.chat.stop() } label: {
                     Image(systemName: "stop.fill")
                 }
