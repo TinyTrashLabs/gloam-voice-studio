@@ -154,6 +154,12 @@ final class AppModel {
             ? UITestMode.tempRoot.appendingPathComponent("Session")
             : StoragePaths.appSupport.appendingPathComponent("Session")))
 
+    @ObservationIgnored lazy var chat: ChatController = ChatController(
+        app: self,
+        store: ChatStore(directory: UITestMode.isActive
+            ? UITestMode.tempRoot.appendingPathComponent("Chats")
+            : StoragePaths.appSupport.appendingPathComponent("Chats")))
+
     static let emotionOrder: [Emotion] = [.flat, .neutral, .warm, .excited, .hype]
 
     private var memoryPressureSource: DispatchSourceMemoryPressure?
