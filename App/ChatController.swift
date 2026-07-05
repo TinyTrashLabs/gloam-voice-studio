@@ -50,6 +50,15 @@ final class ChatController {
     /// if it hasn't been superseded by a newer one.
     private var speechGeneration = 0
 
+    // Speak-while-generating: sentences detected mid-stream flow through this
+    // channel into one sequential consumer, which synthesizes each through the
+    // engine's interleaved path (GPU-idle gaps between token pulls) and hands
+    // the audio to the playback queue — so the reply starts speaking while
+    // tokens are still generating.
+    private var liveSegmenter = LiveSpeechSegmenter()
+    private var liveSentenceFeed: AsyncStream<String>.Continuation?
+    private var liveSpokeAnything = false
+
     init(app: AppModel, store: ChatStore) {
         self.app = app
         self.store = store
@@ -134,6 +143,9 @@ final class ChatController {
         let convoID = convo.id
         isStreaming = true
         streamingText = ""
+        if app.chatAutoSpeak {
+            startLiveSpeech(voiceSlug: convo.voiceSlug)
+        }
         streamTask = Task { [weak self] in
             guard let self else { return }
             var sawFinished = false
@@ -144,6 +156,9 @@ final class ChatController {
                     switch event {
                     case .delta(let d):
                         self.streamingText += d
+                        for sentence in self.liveSegmenter.consume(d) {
+                            self.liveSentenceFeed?.yield(sentence)
+                        }
                     case .finished(let result):
                         sawFinished = true
                         self.finishReply(result, convoID: convoID)
@@ -162,6 +177,9 @@ final class ChatController {
             } catch {
                 self.failReply(self.app.describeAny(error), convoID: convoID)
             }
+            // Normal finishes close the feed in finishReply (after the final
+            // sentences are queued); this covers cancel/error exits.
+            self.endLiveSpeech()
             self.isStreaming = false
             self.streamingText = ""
             self.streamTask = nil
@@ -171,6 +189,7 @@ final class ChatController {
     /// Stop button: cancels the in-flight stream AND clears queued speech.
     func stop() {
         streamTask?.cancel()
+        endLiveSpeech()
         speechTask?.cancel()
         speech.stop()
     }
@@ -235,7 +254,21 @@ final class ChatController {
         // a background conversation is persisted silently.
         guard isCurrent else { return }
         lastStats = stats
-        if app.chatAutoSpeak {
+        guard app.chatAutoSpeak else { return }
+        if liveSentenceFeed != nil {
+            // Speak-while-generating was active: queue whatever the stream
+            // hadn't completed yet, then close the feed.
+            let rest = liveSegmenter.finish(finalText: result.text)
+            if liveSegmenter.derailed && !liveSpokeAnything {
+                // Live feed never proved trustworthy and nothing played —
+                // fall back to speaking the authoritative final text whole.
+                endLiveSpeech()
+                speakText(result.text, voiceSlug: convo.voiceSlug)
+            } else {
+                for sentence in rest { liveSentenceFeed?.yield(sentence) }
+                endLiveSpeech()
+            }
+        } else {
             speakText(result.text, voiceSlug: convo.voiceSlug)
         }
     }
@@ -271,6 +304,49 @@ final class ChatController {
         conversations.sort { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Speak-while-generating pipeline: one sequential consumer pulls sentences
+    /// off the feed as the segmenter completes them, synthesizes each through
+    /// the engine's interleaved path (it runs in the GPU-idle gaps between
+    /// token pulls), and hands audio to the playback queue in order.
+    private func startLiveSpeech(voiceSlug: String) {
+        speechTask?.cancel()
+        speech.stop()
+        liveSegmenter = LiveSpeechSegmenter()
+        liveSpokeAnything = false
+        let (feed, continuation) = AsyncStream<String>.makeStream()
+        liveSentenceFeed = continuation
+        speechGeneration += 1
+        let generation = speechGeneration
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.speechGeneration == generation { self.speechTask = nil } }
+            for await sentence in feed {
+                if Task.isCancelled { return }
+                do {
+                    let result = try await self.app.synthesizeLine(
+                        text: sentence, voiceSlug: voiceSlug,
+                        emotion: .neutral, speed: 1.0, recordHistory: false,
+                        interleaved: true)
+                    if Task.isCancelled { return }
+                    let wav = WAVEncoder.encode(
+                        pcm16: PCM16.data(from: result.samples),
+                        sampleRate: result.sampleRate)
+                    self.speech.enqueue(wav: wav)
+                    self.liveSpokeAnything = true
+                } catch {
+                    self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
+                    return
+                }
+            }
+        }
+    }
+
+    /// Closes the sentence feed; the consumer drains what's queued, then ends.
+    private func endLiveSpeech() {
+        liveSentenceFeed?.finish()
+        liveSentenceFeed = nil
+    }
+
     /// Sentence-chunked synthesis into the FIFO queue. Uses the current Studio
     /// TTS backend + the conversation's voice; skips history (chat replies
     /// would flood it). TTS problems warn — they never lose the text reply.
@@ -289,9 +365,13 @@ final class ChatController {
             for sentence in SentenceSplitter.split(text) {
                 if Task.isCancelled { return }
                 do {
+                    // Interleaved so a replay during an active stream plays in
+                    // the next token gap instead of queueing behind the whole
+                    // generation (identical to normal when nothing streams).
                     let result = try await self.app.synthesizeLine(
                         text: sentence, voiceSlug: voiceSlug,
-                        emotion: .neutral, speed: 1.0, recordHistory: false)
+                        emotion: .neutral, speed: 1.0, recordHistory: false,
+                        interleaved: true)
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
                     if Task.isCancelled { return }

@@ -424,8 +424,12 @@ final class AppModel {
     /// Shared engine path used by single-line mode and script mode.
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.
+    /// `interleaved: true` routes through the engine's interleaved path so a
+    /// chat sentence can synthesize in the GPU-idle gaps of an active LLM
+    /// stream (identical to the normal path when no stream is active).
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
-                        speed: Float, recordHistory: Bool = true) async throws -> SynthesisResult {
+                        speed: Float, recordHistory: Bool = true,
+                        interleaved: Bool = false) async throws -> SynthesisResult {
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings first.")
@@ -466,7 +470,9 @@ final class AppModel {
             topP: controls.knobs.topP != nil ? qwenTopP : nil,
             topK: controls.knobs.topK != nil ? qwenTopK : nil,
             repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil)
-        let raw = try await engine.synthesize(backend: backend, request: request)
+        let raw = interleaved
+            ? try await engine.synthesizeInterleaved(backend: backend, request: request)
+            : try await engine.synthesize(backend: backend, request: request)
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
         // so history, A/B variants, and script takes all stay consistent.

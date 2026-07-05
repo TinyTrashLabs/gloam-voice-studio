@@ -60,4 +60,35 @@ public enum SentenceSplitter {
         let word = lastWord.lowercased().replacingOccurrences(of: ".", with: "")
         return abbreviations.contains(word) || word.count == 1
     }
+
+    /// Streaming variant: splits a still-growing buffer into sentences that
+    /// are definitely complete plus the trailing remainder, returned verbatim
+    /// so callers can append the next delta to it. Unlike `split`, the end of
+    /// the buffer is NOT a boundary — "It costs 3." might become "It costs
+    /// 3.5" on the next delta — so a sentence only completes once whitespace
+    /// follows its terminator run.
+    public static func splitStreaming(_ text: String) -> (complete: [String], remainder: String) {
+        var sentences: [String] = []
+        var current = ""
+        let chars = Array(text)
+        var lastBoundary = 0
+        var i = 0
+        while i < chars.count {
+            current.append(chars[i])
+            if isTerminator(chars[i]) {
+                while i + 1 < chars.count, isTerminator(chars[i + 1]) {
+                    i += 1
+                    current.append(chars[i])
+                }
+                let atBoundary = i + 1 < chars.count && chars[i + 1].isWhitespace
+                if atBoundary, !endsWithAbbreviation(current) {
+                    appendTrimmed(current, to: &sentences)
+                    current = ""
+                    lastBoundary = i + 1
+                }
+            }
+            i += 1
+        }
+        return (sentences, String(chars[lastBoundary...]))
+    }
 }
