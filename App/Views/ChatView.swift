@@ -206,8 +206,3 @@ struct ChatView: View {
         model.selectedVoiceSlug.flatMap { try? model.voices.get($0).meta.name } ?? "voice"
     }
 }
-
-/// Replaced with the real inspector in the next task.
-struct ChatInspectorView: View {
-    var body: some View { Color.clear }
-}
