@@ -47,6 +47,16 @@ final class AppModel {
         }
     }
     var serverEnabled = false { didSet { Task { await syncServer() } } }
+    /// LLM used by the chat tab (and as the API server's default LLM).
+    var chatLLM: LLMBackendID {
+        didSet {
+            UserDefaults.standard.set(chatLLM.rawValue, forKey: "chatLLM")
+            Task { await syncServer() }   // keep the route's default in step
+        }
+    }
+    var chatAutoSpeak: Bool {
+        didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
+    }
     var serverPort: Int {
         didSet { UserDefaults.standard.set(serverPort, forKey: "serverPort") }
     }
@@ -163,26 +173,35 @@ final class AppModel {
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
+        chatLLM = defaults.string(forKey: "chatLLM")
+            .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
+        chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
             savedDirections = decoded
         }
 
         if uiTest {
-            engine = GloamEngine(provider: UITestFakeProvider())
+            engine = GloamEngine(provider: UITestFakeProvider(),
+                                 languageProvider: UITestFakeLanguageProvider())
         } else {
             let modelRoot = StoragePaths.models
-            engine = GloamEngine(provider: MLXModelProvider(modelPathResolver: { backend in
-                // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
-                // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
-                let quantRaw = backend.isQwen
-                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
-                    : nil
-                let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
-                let hasConfig = FileManager.default.fileExists(
-                    atPath: dir.appendingPathComponent("config.json").path)
-                return hasConfig ? dir.path : nil
-            }))
+            engine = GloamEngine(
+                provider: MLXModelProvider(modelPathResolver: { backend in
+                    // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
+                    // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
+                    let quantRaw = backend.isQwen
+                        ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
+                        : nil
+                    let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
+                    let hasConfig = FileManager.default.fileExists(
+                        atPath: dir.appendingPathComponent("config.json").path)
+                    return hasConfig ? dir.path : nil
+                }),
+                languageProvider: MLXLanguageModelProvider(modelDirectoryResolver: { backend in
+                    // Mirror ModelDownloadManager.llmDirectory(for:).
+                    modelRoot.appendingPathComponent(backend.diskFolder)
+                }))
         }
         if didAckFishLicense {
             let engine = engine
@@ -345,7 +364,7 @@ final class AppModel {
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
-                        speed: Float) async throws -> SynthesisResult {
+                        speed: Float, recordHistory: Bool = true) async throws -> SynthesisResult {
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings first.")
@@ -389,10 +408,12 @@ final class AppModel {
             samples: AudioAssembler.normalizePeak(floats: raw.samples),
             sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
-        _ = try? history.save(
-            pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
-            text: text, backend: backend.rawValue, voice: resolvedVoice,
-            emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+        if recordHistory {
+            _ = try? history.save(
+                pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
+                text: text, backend: backend.rawValue, voice: resolvedVoice,
+                emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+        }
         return result
     }
 
@@ -425,9 +446,15 @@ final class AppModel {
 
     private func syncServer() async {
         if serverEnabled {
+            // Deps are immutable — rebuild the server when settings change so
+            // defaultLLM/defaultBackend stay current.
+            await server?.stop()
+            server = nil
             if server == nil {
                 server = LocalAPIServer(deps: APIDependencies(
-                    engine: engine, voices: voices, defaultBackend: backend, log: apiLog))
+                    engine: engine, voices: voices, defaultBackend: backend,
+                    defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
+                    log: apiLog))
             }
             try? await server?.start(port: serverPort)
         } else {
