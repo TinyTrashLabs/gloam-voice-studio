@@ -46,6 +46,9 @@ final class ChatController {
 
     private var streamTask: Task<Void, Never>?
     private var speechTask: Task<Void, Never>?
+    /// Monotonic token so a finished speech task only clears `speechTask`
+    /// if it hasn't been superseded by a newer one.
+    private var speechGeneration = 0
 
     init(app: AppModel, store: ChatStore) {
         self.app = app
@@ -115,6 +118,7 @@ final class ChatController {
         commit(convo)
 
         let request = makeRequest(for: convo)
+        let convoID = convo.id
         isStreaming = true
         streamingText = ""
         streamTask = Task { [weak self] in
@@ -127,13 +131,13 @@ final class ChatController {
                     case .delta(let d):
                         self.streamingText += d
                     case .finished(let result):
-                        self.finishReply(result)
+                        self.finishReply(result, convoID: convoID)
                     }
                 }
             } catch is CancellationError {
-                self.keepPartialReply()
+                self.keepPartialReply(convoID: convoID)
             } catch {
-                self.failReply(self.app.describeAny(error))
+                self.failReply(self.app.describeAny(error), convoID: convoID)
             }
             self.isStreaming = false
             self.streamingText = ""
@@ -166,8 +170,9 @@ final class ChatController {
         turns += convo.messages.map {
             ChatTurn(role: $0.role == "user" ? .user : .assistant, content: $0.text)
         }
-        // Headroom: reply budget + 256 tokens of template/tool slack.
-        let budget = app.chatLLM.contextTokens - sampling.maxTokens - 256
+        // Headroom: reply budget + 256 tokens of template/tool slack. Floor
+        // keeps the budget sane if maxTokens approaches the context window.
+        let budget = max(app.chatLLM.contextTokens - sampling.maxTokens - 256, 512)
         let trimmed = ChatContextWindow.trim(turns: turns, budgetTokens: budget)
         return ChatRequest(
             messages: trimmed,
@@ -182,8 +187,17 @@ final class ChatController {
             disableThinking: true)
     }
 
-    private func finishReply(_ result: ChatResult) {
-        guard var convo = current else { return }
+    /// Resolve the conversation a stream was started for: prefer `current`,
+    /// then the sidebar list, then disk. nil = deleted mid-stream, in which
+    /// case the reply is dropped — deletion wins.
+    private func conversation(for id: String) -> Conversation? {
+        if let current, current.id == id { return current }
+        if let listed = conversations.first(where: { $0.id == id }) { return listed }
+        return store.load(id)
+    }
+
+    private func finishReply(_ result: ChatResult, convoID: String) {
+        guard var convo = conversation(for: convoID) else { return }
         let stats = ChatMessageStats(
             promptTokens: result.usage.promptTokens,
             completionTokens: result.usage.completionTokens,
@@ -192,7 +206,11 @@ final class ChatController {
         convo.messages.append(ChatMessage(
             id: UUID().uuidString, role: "assistant", text: result.text,
             createdAt: ChatStore.timestamp(), stats: stats))
+        let isCurrent = current?.id == convoID
         commit(convo)
+        // Stats + audio belong to the visible conversation only; a reply for
+        // a background conversation is persisted silently.
+        guard isCurrent else { return }
         lastStats = stats
         if app.chatAutoSpeak {
             speakText(result.text, voiceSlug: convo.voiceSlug)
@@ -200,29 +218,31 @@ final class ChatController {
     }
 
     /// Cancellation mid-stream: keep whatever text arrived, marked errored.
-    private func keepPartialReply() {
+    private func keepPartialReply(convoID: String) {
         let partial = streamingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !partial.isEmpty, var convo = current else { return }
+        guard !partial.isEmpty, var convo = conversation(for: convoID) else { return }
         convo.messages.append(ChatMessage(
             id: UUID().uuidString, role: "assistant", text: partial,
             createdAt: ChatStore.timestamp(), errored: true))
         commit(convo)
     }
 
-    private func failReply(_ message: String) {
+    private func failReply(_ message: String, convoID: String) {
         chatError = message
-        keepPartialReply()
+        keepPartialReply(convoID: convoID)
     }
 
-    /// Persist + refresh both `current` and its row in `conversations`.
+    /// Persist + refresh the row in `conversations`; reassign `current` only
+    /// when this is still the visible conversation (in-flight replies for a
+    /// switched-away conversation must not hijack the selection).
     private func commit(_ convo: Conversation) {
         var updated = convo
         updated.updatedAt = ChatStore.timestamp()
-        current = updated
+        if current?.id == updated.id { current = updated }
         try? store.save(updated)
         if let i = conversations.firstIndex(where: { $0.id == updated.id }) {
             conversations[i] = updated
-        } else {
+        } else if updated.voiceSlug == app.selectedVoiceSlug {
             conversations.insert(updated, at: 0)
         }
         conversations.sort { $0.updatedAt > $1.updatedAt }
@@ -232,8 +252,11 @@ final class ChatController {
     /// TTS backend + the conversation's voice; skips history (chat replies
     /// would flood it). TTS problems warn — they never lose the text reply.
     private func speakText(_ text: String, voiceSlug: String) {
+        speechGeneration += 1
+        let generation = speechGeneration
         speechTask = Task { [weak self] in
             guard let self else { return }
+            defer { if self.speechGeneration == generation { self.speechTask = nil } }
             for sentence in SentenceSplitter.split(text) {
                 if Task.isCancelled { return }
                 do {
