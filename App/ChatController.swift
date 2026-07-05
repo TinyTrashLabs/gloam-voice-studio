@@ -32,6 +32,9 @@ final class ChatController {
     var draft = ""
     var isStreaming = false
     var streamingText = ""
+    /// A sentence is currently rendering through the TTS model (drives the
+    /// voice-activity indicator before/while audio plays).
+    var isSynthesizing = false
     var chatError: String?
     /// Non-blocking: reply text arrived but speech synthesis had a problem.
     var speechWarning: String?
@@ -192,6 +195,7 @@ final class ChatController {
         endLiveSpeech()
         speechTask?.cancel()
         speech.stop()
+        isSynthesizing = false
     }
 
     /// Replay an assistant message (or speak it for the first time).
@@ -319,14 +323,21 @@ final class ChatController {
         let generation = speechGeneration
         speechTask = Task { [weak self] in
             guard let self else { return }
-            defer { if self.speechGeneration == generation { self.speechTask = nil } }
+            defer {
+                if self.speechGeneration == generation {
+                    self.speechTask = nil
+                    self.isSynthesizing = false
+                }
+            }
             for await sentence in feed {
                 if Task.isCancelled { return }
                 do {
+                    self.isSynthesizing = true
                     let result = try await self.app.synthesizeLine(
                         text: sentence, voiceSlug: voiceSlug,
                         emotion: .neutral, speed: 1.0, recordHistory: false,
                         interleaved: true)
+                    self.isSynthesizing = false
                     if Task.isCancelled { return }
                     let wav = WAVEncoder.encode(
                         pcm16: PCM16.data(from: result.samples),
@@ -334,6 +345,7 @@ final class ChatController {
                     self.speech.enqueue(wav: wav)
                     self.liveSpokeAnything = true
                 } catch {
+                    self.isSynthesizing = false
                     self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
                     return
                 }
@@ -361,17 +373,24 @@ final class ChatController {
         let generation = speechGeneration
         speechTask = Task { [weak self] in
             guard let self else { return }
-            defer { if self.speechGeneration == generation { self.speechTask = nil } }
+            defer {
+                if self.speechGeneration == generation {
+                    self.speechTask = nil
+                    self.isSynthesizing = false
+                }
+            }
             for sentence in SentenceSplitter.split(text) {
                 if Task.isCancelled { return }
                 do {
                     // Interleaved so a replay during an active stream plays in
                     // the next token gap instead of queueing behind the whole
                     // generation (identical to normal when nothing streams).
+                    self.isSynthesizing = true
                     let result = try await self.app.synthesizeLine(
                         text: sentence, voiceSlug: voiceSlug,
                         emotion: .neutral, speed: 1.0, recordHistory: false,
                         interleaved: true)
+                    self.isSynthesizing = false
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
                     if Task.isCancelled { return }
@@ -380,6 +399,7 @@ final class ChatController {
                         sampleRate: result.sampleRate)
                     self.speech.enqueue(wav: wav)
                 } catch {
+                    self.isSynthesizing = false
                     self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
                     return
                 }

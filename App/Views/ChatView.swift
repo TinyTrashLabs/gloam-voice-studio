@@ -152,26 +152,33 @@ struct ChatView: View {
                             .font(.system(size: 9)).foregroundStyle(.orange)
                             .help("Reply was interrupted")
                     }
-                    // Mini spinner while tokens are actively flowing into this
-                    // bubble — mirrors the toolbar model chip's in-flight dot.
+                    // Dancing dots while tokens are actively flowing into this
+                    // bubble — livelier than a spinner, and it reads as "the
+                    // model is talking".
                     if isStreamingBubble, model.chat.isStreaming, !message.text.isEmpty {
-                        ProgressView().controlSize(.mini)
+                        BouncingDots(color: Brand.fgFaint)
                     }
                     if message.role == "assistant", !isStreamingBubble {
                         Button { model.chat.speak(message) } label: {
-                            Image(systemName: isSpeakingThis ? "speaker.wave.2.fill" : "speaker.wave.2")
-                                .font(.system(size: 10))
+                            if isSpeakingThis {
+                                // Same EQ motif the sidebar uses for a playing
+                                // sample — "this voice is speaking now".
+                                EqualizerBars()
+                            } else {
+                                Image(systemName: "speaker.wave.2")
+                                    .font(.system(size: 10))
+                            }
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(isSpeakingThis ? Brand.accent : Brand.fgFaint)
-                        .help("Speak this reply")
+                        .help(isSpeakingThis ? "Speaking…" : "Speak this reply")
                     }
                 }
                 if isStreamingBubble, message.text.isEmpty {
                     // Nothing has streamed back yet — first-send model load can
                     // take 10+ seconds, so show motion instead of a static "…".
                     HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
+                        BouncingDots(color: Brand.fgDim)
                         Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
                     }
                     .accessibilityIdentifier("chat-thinking")
@@ -189,6 +196,11 @@ struct ChatView: View {
     private var composer: some View {
         @Bindable var chat = model.chat
         return HStack(alignment: .bottom, spacing: 10) {
+            // Push-to-talk: dictate into the draft, then send as usual.
+            // (Whisper emits its text after the mic stops — the button shows
+            // its own transcribing spinner meanwhile.)
+            DictationButton(text: $chat.draft)
+                .padding(.bottom, 10)
             TextField("Message \(voiceName())…", text: $chat.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -196,10 +208,20 @@ struct ChatView: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
                 .accessibilityIdentifier("chat-composer")
                 .onSubmit { model.chat.send() }
-            if chat.isStreaming || chat.speech.isSpeaking {
-                // Busy cue alongside the stop control — covers both the
-                // generation and playback phases.
-                ProgressView().controlSize(.small)
+            if chat.isStreaming || chat.speech.isSpeaking || chat.isSynthesizing {
+                // Busy cue alongside the stop control: EQ bars while the voice
+                // model renders or audio plays, dancing dots while the LLM
+                // generates. Both can be true (speak-while-generating) — audio
+                // wins, it's the more tangible activity.
+                Group {
+                    if chat.speech.isSpeaking || chat.isSynthesizing {
+                        EqualizerBars()
+                    } else {
+                        BouncingDots(color: Brand.fgDim)
+                    }
+                }
+                .accessibilityIdentifier("chat-activity")
+                .padding(.bottom, 12)
                 Button { model.chat.stop() } label: {
                     Image(systemName: "stop.fill")
                 }
@@ -224,5 +246,30 @@ struct ChatView: View {
 
     private func voiceName() -> String {
         model.selectedVoiceSlug.flatMap { try? model.voices.get($0).meta.name } ?? "voice"
+    }
+}
+
+/// Three dots bobbing in a staggered wave — the chat's "model is working"
+/// motion, sibling to the sidebar's EqualizerBars (which stays the audio cue).
+struct BouncingDots: View {
+    var color: Color = Brand.fgDim
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(color)
+                    .frame(width: 5, height: 5)
+                    .offset(y: animating ? -3 : 2)
+                    .animation(
+                        .easeInOut(duration: 0.45)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.15),
+                        value: animating)
+            }
+        }
+        .frame(width: 24, height: 14)
+        .onAppear { animating = true }
     }
 }
