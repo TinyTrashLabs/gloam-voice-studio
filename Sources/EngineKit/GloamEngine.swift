@@ -65,6 +65,36 @@ public actor GloamEngine {
         return try await work.value
     }
 
+    /// Streaming chat. Chained through the same task tail as synthesize/chat so
+    /// token generation never overlaps other GPU work. The stream finishes with
+    /// an error if no language provider is configured or the model fails.
+    public func chatStream(backend: LLMBackendID, request: ChatRequest)
+        -> AsyncThrowingStream<ChatEvent, Error>
+    {
+        let (stream, continuation) = AsyncThrowingStream<ChatEvent, Error>.makeStream()
+        guard languageProvider != nil else {
+            continuation.finish(throwing: EngineError.languageProviderUnavailable)
+            return stream
+        }
+        let previous = tail
+        let work = Task { [self] in
+            await previous?.value
+            do {
+                let model = try await self.residentLanguageModel(for: backend)
+                for try await event in model.stream(request) {
+                    try Task.checkCancellation()
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        tail = Task { _ = await work.value }
+        continuation.onTermination = { _ in work.cancel() }
+        return stream
+    }
+
     private func residentLanguageModel(for backend: LLMBackendID) async throws -> any LanguageModel {
         if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
         guard let languageProvider else { throw EngineError.languageProviderUnavailable }

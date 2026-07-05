@@ -101,10 +101,40 @@ public struct ChatResult: Sendable {
     }
 }
 
+/// One streaming chat event: incremental text, then a final result. The final
+/// text in `.finished` is authoritative (it's cleaned via stripThinking); UIs
+/// should replace accumulated deltas with it.
+public enum ChatEvent: Sendable {
+    case delta(String)
+    case finished(ChatResult)
+}
+
 /// A loaded language model. Conformers handle their own thread-safety
 /// (`Sendable`); GloamEngine serializes all calls through its task chain.
 public protocol LanguageModel: AnyObject, Sendable {
     func complete(_ request: ChatRequest) async throws -> ChatResult
+    /// Streaming variant. Implementations must yield `.finished` exactly once,
+    /// as the last event before finishing.
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
+}
+
+public extension LanguageModel {
+    /// Non-streaming models emit their whole reply as one delta + finished.
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let result = try await self.complete(request)
+                    continuation.yield(.delta(result.text))
+                    continuation.yield(.finished(result))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 /// Loads language models. Real impl wraps mlx-swift-lm; tests use fakes.
