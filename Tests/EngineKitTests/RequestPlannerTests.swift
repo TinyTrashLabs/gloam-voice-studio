@@ -19,18 +19,22 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(plan.temperature)
     }
 
-    func testFishMapsEmotionToTemperature() throws {
+    func testFishEmotionDoesNotDriveTemperature() throws {
+        // Fish emotion is an inline [marker], not the sampling temperature: the
+        // emotion enum must not set temperature (only an explicit override does).
         let plan = try RequestPlanner.plan(
             backend: .fishS2Pro,
             request: SynthesisRequest(text: "hi", emotion: .excited))
-        XCTAssertEqual(plan.temperature, 0.9)
+        XCTAssertNil(plan.temperature)
         XCTAssertNil(plan.exaggeration)
     }
 
-    func testDefaultEmotionIsNeutral() throws {
+    func testFishTemperatureNilWithoutOverride() throws {
+        // No explicit temperatureOverride → Fish leaves temperature at the model
+        // default (nil); emotion no longer forces it onto the sampling knob.
         let plan = try RequestPlanner.plan(
             backend: .fishS2Pro, request: SynthesisRequest(text: "hi"))
-        XCTAssertEqual(plan.temperature, Emotion.neutral.fishTemperature)
+        XCTAssertNil(plan.temperature)
     }
 
     func testChatterboxWithoutRefThrows() {

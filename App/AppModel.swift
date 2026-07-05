@@ -9,6 +9,29 @@ struct AppGenerationError: Error {
 }
 
 /// One generated take, ready to play/export.
+/// Emotional expressions baked as acted `<slug>-<expression>` variants, rendered
+/// through Fish's inline `[marker]` mechanism — its real emotion control, unlike
+/// `temperature` (just sampling) or `exaggeration` (intensity only). This is Fish
+/// S2's full single-word expressive vocabulary: a client (e.g. gloam.fm's DJ) may
+/// use only a few, but every voice can carry all of them.
+enum VoiceExpression: String, CaseIterable, Sendable {
+    case excited, delight, angry, sad, surprised, shocked
+    case whisper, shouting, screaming, laughing, chuckle, sigh, panting, moaning, singing
+    var label: String { rawValue.capitalized }
+
+    /// Best-effort Chatterbox exaggeration (0–1) for users who can't run Fish.
+    /// Chatterbox has only an *intensity* knob — it can't act distinct emotions the
+    /// way Fish markers can — so this maps each expression to a calm/intense level.
+    var chatterboxExaggeration: Float {
+        switch self {
+        case .sad, .whisper, .sigh, .moaning: 0.2
+        case .chuckle, .panting, .singing: 0.5
+        case .excited, .delight, .surprised, .laughing: 0.8
+        case .angry, .shocked, .shouting, .screaming: 1.0
+        }
+    }
+}
+
 struct Variant: Identifiable, Equatable {
     let id = UUID()
     let label: String          // "A" / "B"
@@ -99,6 +122,8 @@ final class AppModel {
     // button both reproduce the model's stock delivery.
     var temperatureOverride: Float = AppModel.knobDefaults.temperature
     var exaggerationOverride: Float = AppModel.knobDefaults.exaggeration
+    /// Chatterbox (regular) CFG guidance weight; pairs with exaggeration.
+    var cfgWeight: Float = AppModel.knobDefaults.cfgWeight
 
     // Qwen natural-language controls
     var instruct: String = ""
@@ -107,6 +132,22 @@ final class AppModel {
     var qwenTopP: Float = AppModel.knobDefaults.topP
     var qwenTopK: Int = AppModel.knobDefaults.topK
     var qwenRepetitionPenalty: Float = AppModel.knobDefaults.repetitionPenalty
+
+    // MARK: Voice Foundry (Create Voice) — qwen3-design mints a new voice you then
+    // save as a reusable clone reference. Its state is separate from the Studio bench.
+    static let defaultAuditionLine =
+        "Hi there — I'm trying out a brand-new voice. It should sound natural whether "
+        + "I'm calm and thoughtful, or bright and full of energy."
+    var foundryDescription = ""                     // qwen3-design instruct / Direction
+    var foundryAuditionLine = AppModel.defaultAuditionLine
+    var foundryLanguage = "auto"
+    var foundryCandidates: [Variant] = []
+    var foundryGenerating = false
+    var foundryBaking = false
+    var foundryError: String?
+    var lastSavedFoundrySlug: String?               // set on save → drives the bake panel
+    /// When non-nil, the Create Voice page opens in Edit mode for this voice.
+    var editingVoiceSlug: String?
 
     // Download-on-demand: set when Generate hits a model that isn't downloaded,
     // so the UI can offer to fetch it (instead of a red error). Drives a sheet.
@@ -176,8 +217,11 @@ final class AppModel {
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
-        backend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
+        // qwen3-design is Creation-only now (it lives in the Voice Foundry, not the
+        // Studio picker) — redirect a persisted design backend to a real clone model.
+        let loadedBackend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
             ?? .fishS2Pro
+        backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
@@ -330,12 +374,14 @@ final class AppModel {
     /// (temperature 0.9, top-p 1.0, top-k 0 = off, repetition 1.05) — i.e. the stock
     /// delivery used when no overrides are sent. exaggeration 0.5 is Chatterbox neutral.
     static let knobDefaults = (temperature: Float(0.9), exaggeration: Float(0.5),
+                               cfgWeight: Float(0.5),
                                topP: Float(1.0), topK: 0, repetitionPenalty: Float(1.05))
 
     /// Restore the Advanced fine-tune sliders to their defaults.
     func resetDeliveryKnobs() {
         temperatureOverride = Self.knobDefaults.temperature
         exaggerationOverride = Self.knobDefaults.exaggeration
+        cfgWeight = Self.knobDefaults.cfgWeight
         qwenTopP = Self.knobDefaults.topP
         qwenTopK = Self.knobDefaults.topK
         qwenRepetitionPenalty = Self.knobDefaults.repetitionPenalty
@@ -391,8 +437,12 @@ final class AppModel {
         var refPath: String?
         var refText: String?
         var resolvedVoice: String?
+        // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
+        // the BASE voice — so resolve to the base clip, not an acted `-emotion`
+        // variant (that path is for the variant-clip backends).
+        let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
         if let slug = voiceSlug {
-            guard let found = try? voices.resolve(slug, emotion: emotion) else {
+            guard let found = try? voices.resolve(slug, emotion: resolveEmotion) else {
                 throw AppGenerationError(message: "Voice '\(slug)' is missing.")
             }
             refPath = found.refURL.path
@@ -409,6 +459,7 @@ final class AppModel {
             emotion: emotion, speed: speed,
             temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
+            cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
             instruct: controls.instruct != .none ? instruct : nil,
             speaker: controls.presetSpeakers.isEmpty ? nil : speaker,
             language: controls.language ? language : nil,
@@ -430,6 +481,126 @@ final class AppModel {
                 emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
         }
         return result
+    }
+
+    // MARK: - Voice Foundry
+
+    /// Generate one qwen3-design candidate speaking the audition line and prepend it
+    /// to the candidate list. Each call is a genuinely different voice — that's the
+    /// point: design has no stable identity, so you audition several and pick one.
+    func generateFoundryCandidate() async {
+        foundryError = nil
+        let designBackend = BackendID.qwenDesign
+        let instruct = foundryDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruct.isEmpty else { foundryError = "Describe the voice first."; return }
+        let line = foundryAuditionLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { foundryError = "Add an audition line for the voice to speak."; return }
+        switch downloads.state(for: designBackend) {
+        case .ready: break
+        case .notDownloaded:
+            downloads.download(designBackend)
+            foundryError = "Downloading qwen3-design… press Generate again once it's ready "
+                + "(progress is in the toolbar)."
+            return
+        case .downloading:
+            foundryError = "qwen3-design is still downloading — try again once it's ready."
+            return
+        case .failed(let message):
+            foundryError = "qwen3-design download failed: \(message)"
+            return
+        }
+        foundryGenerating = true
+        defer { foundryGenerating = false }
+        do {
+            let request = SynthesisRequest(
+                text: line, emotion: .neutral, instruct: instruct,
+                language: foundryLanguage == "auto" ? nil : foundryLanguage)
+            let raw = try await engine.synthesize(backend: designBackend, request: request)
+            let samples = AudioAssembler.normalizePeak(floats: raw.samples)
+            let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
+            let seconds = Double(samples.count) / Double(raw.sampleRate)
+            foundryCandidates.insert(
+                Variant(label: "\(foundryCandidates.count + 1)", wavData: wav,
+                        sampleRate: raw.sampleRate, seconds: seconds, wallSeconds: raw.wallSeconds),
+                at: 0)
+            await refreshEngineStatus()
+        } catch {
+            foundryError = describeAny(error)
+        }
+    }
+
+    /// Save a candidate as a Library voice: its audio becomes ref.wav and the exact
+    /// audition line becomes refText, so it clones cleanly. Throws on slug collision.
+    @discardableResult
+    func saveFoundryVoice(_ candidate: Variant, name: String) throws -> VoiceMeta {
+        let meta = try voices.save(
+            name: name, refWav: candidate.wavData,
+            refText: foundryAuditionLine.trimmingCharacters(in: .whitespacesAndNewlines))
+        voicesVersion += 1
+        selectedVoiceSlug = meta.slug
+        lastSavedFoundrySlug = meta.slug
+        return meta
+    }
+
+    /// Neutral carrier line spoken by every baked emotion variant. Deliberately
+    /// distinct from any voice's reference transcript: cloning a voice while
+    /// generating its own transcript makes Fish reproduce the neutral reference
+    /// delivery and swamps the `[marker]` (proven in Phase 0). A different line lets
+    /// the emotion actually render.
+    static let bakeCarrierLine =
+        "Let me read you a short line so you can hear how this voice sounds."
+
+    /// Bake acted expression variants of a saved voice by cloning its base clip
+    /// through Fish with each emotion's inline `[marker]` — Fish's real emotion
+    /// mechanism (temperature/exaggeration produce near-identical takes). Saved as
+    /// `<slug>-<expression>` so any backend can clone the acted performance.
+    func bakeExpressionVariants(baseSlug: String, expressions: [VoiceExpression],
+                                baker: BackendID) async {
+        foundryError = nil
+        guard let (meta, refURL) = try? voices.get(baseSlug) else {
+            foundryError = "Base voice '\(baseSlug)' is missing."; return
+        }
+        if baker.spec.needsLicenseAck && !didAckFishLicense {
+            foundryError = "Baking with \(baker.rawValue) needs its license — acknowledge it in Settings first."
+            return
+        }
+        guard downloads.state(for: baker) == .ready else {
+            if case .notDownloaded = downloads.state(for: baker) { downloads.download(baker) }
+            foundryError = "Downloading \(baker.rawValue) to bake with — try again once it's ready."
+            return
+        }
+        foundryBaking = true
+        loadedBackend = baker   // reflect the baker as resident while it renders
+        defer { foundryBaking = false }
+        let text = Self.bakeCarrierLine
+        let baseRefText = meta.refText.isEmpty ? nil : meta.refText
+        for expr in expressions {
+            do {
+                // Fish renders the emotion from a leading [marker] (a control, not
+                // spoken) — injected by the planner from `emotionMarker`. We clone the
+                // base voice (refURL/baseRefText) but SPEAK the neutral carrier line,
+                // so the marker isn't swamped by the reference's own delivery.
+                // Chatterbox has no markers, so fall back to its exaggeration
+                // intensity — cruder, but works for users who can't run Fish.
+                let request: SynthesisRequest = baker == .fishS2Pro
+                    ? SynthesisRequest(text: text, refAudioPath: refURL.path,
+                                       refText: baseRefText, emotionMarker: expr.rawValue)
+                    : SynthesisRequest(text: text, refAudioPath: refURL.path,
+                                       refText: baseRefText,
+                                       exaggerationOverride: expr.chatterboxExaggeration)
+                let raw = try await engine.synthesize(backend: baker, request: request)
+                let samples = AudioAssembler.normalizePeak(floats: raw.samples)
+                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
+                try voices.saveAt(slug: "\(baseSlug)-\(expr.rawValue)",
+                                  name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text)
+                await refreshEngineStatus()   // model resident now — update the RAM chip
+            } catch {
+                foundryError = "Bake failed for \(expr.label): \(describeAny(error))"
+                break
+            }
+        }
+        voicesVersion += 1
+        await refreshEngineStatus()   // the baker is resident — confirm loadedBackend + memGB
     }
 
     func describeAny(_ error: Error) -> String {

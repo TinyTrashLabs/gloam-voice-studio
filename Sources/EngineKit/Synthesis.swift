@@ -6,6 +6,10 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var refAudioPath: String?
     public var refText: String?
     public var emotion: Emotion
+    /// Fish inline emotion marker (e.g. "whisper"): the planner renders it as a
+    /// leading `[marker]` for `.inlineMarker` backends. nil = none. Ignored by other
+    /// backends. Not injected if `text` already begins with a `[marker]`.
+    public var emotionMarker: String?
     /// Playback-speed multiplier (1.0 = unchanged). Applied as a time-domain
     /// resample after generation — extreme values shift pitch, same trade-off
     /// as both upstream implementations.
@@ -14,6 +18,8 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var temperatureOverride: Float?
     /// Override emotion's chatterboxExaggeration when present (Chatterbox only).
     public var exaggerationOverride: Float?
+    /// Chatterbox (regular) CFG guidance weight; nil = model default (0.5).
+    public var cfgWeight: Float?
     /// Qwen natural-language voice direction (instruct). Honored per backend.
     public var instruct: String?
     /// Qwen CustomVoice preset speaker name.
@@ -26,17 +32,20 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var repetitionPenalty: Float?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
-                emotion: Emotion = .neutral, speed: Float = 1.0,
+                emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
                 temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
+                cfgWeight: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText
         self.emotion = emotion
+        self.emotionMarker = emotionMarker
         self.speed = speed
         self.temperatureOverride = temperatureOverride
         self.exaggerationOverride = exaggerationOverride
+        self.cfgWeight = cfgWeight
         self.instruct = instruct
         self.speaker = speaker
         self.language = language
@@ -55,6 +64,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var temperature: Float?
     /// Chatterbox (regular) only: emotion exaggeration.
     public var exaggeration: Float?
+    /// Chatterbox (regular) only: CFG guidance weight (nil = model default 0.5).
+    public var cfgWeight: Float?
     /// Qwen natural-language direction.
     public var instruct: String?
     /// Qwen CustomVoice preset speaker.
@@ -67,11 +78,11 @@ public struct ProviderRequest: Sendable, Equatable {
     public var repetitionPenalty: Float?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
-                temperature: Float? = nil, exaggeration: Float? = nil,
+                temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
-        self.temperature = temperature; self.exaggeration = exaggeration
+        self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.language = language
         self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
     }
@@ -142,16 +153,35 @@ enum RequestPlanner {
         let language = controls.language ? clean(request.language) : nil
         let knobs = controls.knobs
 
+        // Emotion resolves to a model-native knob ONLY when the backend's mechanism
+        // is the matching live knob — the single source of truth. (Fish is
+        // `.inlineMarker`, not a knob: its emotion is injected into `text` below.)
+        let emotionExaggeration: Float? =
+            backend.emotionMechanism == .liveKnob(.exaggeration) ? request.emotion.chatterboxExaggeration : nil
+
+        // Fish (.inlineMarker): emotion is a leading `[marker]` in the text — its
+        // trained control. Inject the requested marker, but never when the text
+        // already begins with a `[…]` marker (a client embedding its own wins, so
+        // the gloam.fm DJ can drive markers on the fly without double-stacking).
+        let plannedText: String = {
+            guard backend.emotionMechanism == .inlineMarker,
+                  let marker = clean(request.emotionMarker),
+                  !request.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[")
+            else { return request.text }
+            return "[\(marker)] \(request.text)"
+        }()
+
         return ProviderRequest(
-            text: request.text,
+            text: plannedText,
             refAudioPath: refAudioPath,
             refText: refText,
             temperature: knobs.temperature != nil
-                ? (request.temperatureOverride ?? (spec.honorsTags ? request.emotion.fishTemperature : nil))
+                ? request.temperatureOverride
                 : nil,
             exaggeration: knobs.exaggeration != nil
-                ? (request.exaggerationOverride ?? request.emotion.chatterboxExaggeration)
+                ? (request.exaggerationOverride ?? emotionExaggeration)
                 : nil,
+            cfgWeight: knobs.cfgWeight != nil ? request.cfgWeight : nil,
             instruct: instruct,
             speaker: speaker,
             language: language,

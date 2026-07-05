@@ -37,7 +37,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
-        XCTAssertTrue(spec.honorsEmotionKnob)
+        XCTAssertEqual(BackendID.chatterbox.emotionMechanism, .liveKnob(.exaggeration))
     }
 
     func testChatterboxTurboSpec() {
@@ -47,7 +47,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
-        XCTAssertFalse(spec.honorsEmotionKnob)
+        XCTAssertEqual(BackendID.chatterboxTurbo.emotionMechanism, .variantClipOnly)
     }
 
     func testFishSpec() {
@@ -57,7 +57,7 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(spec.honorsTags)
         XCTAssertTrue(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio)
-        XCTAssertTrue(spec.honorsEmotionKnob)
+        XCTAssertEqual(BackendID.fishS2Pro.emotionMechanism, .inlineMarker)
     }
 
     func testFishRefAudioSampleRateIsCodecRate() {
@@ -96,7 +96,6 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(base.voiceClone, .optional)
         XCTAssertEqual(base.instruct, .none, "Base is a clone model — no natural-language instruct")
         XCTAssertTrue(base.language)
-        XCTAssertFalse(base.emotionChips)
         XCTAssertNotNil(base.knobs.temperature)
         XCTAssertNotNil(base.knobs.topP)
         XCTAssertTrue(base.presetSpeakers.isEmpty)
@@ -112,7 +111,6 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(custom.presetSpeakers.first, "Vivian")
 
         let fish = BackendID.fishS2Pro.controls
-        XCTAssertTrue(fish.emotionChips)
         XCTAssertNotNil(fish.knobs.temperature)
         XCTAssertNil(fish.knobs.topP)
 
