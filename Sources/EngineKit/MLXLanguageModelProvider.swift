@@ -78,6 +78,22 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         self.family = family
     }
 
+    /// Maps the request's sampler surface onto mlx-swift-lm's GenerateParameters.
+    /// nil request fields keep the library defaults (topK 0 = off, minP 0 = off).
+    static func generateParameters(for request: ChatRequest) -> GenerateParameters {
+        var params = GenerateParameters(
+            maxTokens: request.maxTokens,
+            temperature: request.temperature,
+            topP: request.topP ?? 1.0)
+        if let topK = request.topK { params.topK = topK }
+        if let minP = request.minP { params.minP = minP }
+        params.repetitionPenalty = request.repetitionPenalty
+        if let size = request.repetitionContextSize { params.repetitionContextSize = size }
+        params.presencePenalty = request.presencePenalty
+        params.frequencyPenalty = request.frequencyPenalty
+        return params
+    }
+
     func complete(_ request: ChatRequest) async throws -> ChatResult {
         let start = Date()
 
@@ -124,10 +140,7 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             }
         }
 
-        let params = GenerateParameters(
-            maxTokens: request.maxTokens,
-            temperature: request.temperature,
-            topP: request.topP ?? 1.0)
+        let params = Self.generateParameters(for: request)
 
         let toolSpecs: [ToolSpec]? = try request.tools.map { try $0.map { try toolSpec(from: $0) } }
 

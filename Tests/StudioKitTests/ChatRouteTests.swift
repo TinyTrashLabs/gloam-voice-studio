@@ -8,7 +8,7 @@ import XCTest
 private final class StubLangModel: LanguageModel, @unchecked Sendable {
     func complete(_ request: ChatRequest) async throws -> ChatResult {
         ChatResult(text: "spin it up", toolCalls: [],
-                   usage: ChatUsage(promptTokens: 3, completionTokens: 2), wallSeconds: 0)
+                   usage: ChatUsage(promptTokens: 3, completionTokens: 2), wallSeconds: 0, tokensPerSecond: nil)
     }
 }
 private final class StubLangProvider: LanguageModelProviding, @unchecked Sendable {

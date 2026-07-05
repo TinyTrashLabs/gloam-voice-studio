@@ -42,17 +42,35 @@ public struct ChatRequest: Sendable, Equatable {
     public var temperature: Float
     public var topP: Float?
     public var maxTokens: Int
+    // Advanced sampler surface (nil = library default). Exposed by the chat
+    // inspector's Advanced disclosure; all natively supported by mlx-swift-lm.
+    public var topK: Int?
+    public var minP: Float?
+    public var repetitionPenalty: Float?
+    public var repetitionContextSize: Int?
+    public var presencePenalty: Float?
+    public var frequencyPenalty: Float?
     /// Hard-off thinking by default (DJ brain never wants reasoning tokens).
     public var disableThinking: Bool
 
     public init(messages: [ChatTurn], tools: [LLMTool]? = nil,
                 temperature: Float = 0.7, topP: Float? = nil,
-                maxTokens: Int = 512, disableThinking: Bool = true) {
+                maxTokens: Int = 512,
+                topK: Int? = nil, minP: Float? = nil,
+                repetitionPenalty: Float? = nil, repetitionContextSize: Int? = nil,
+                presencePenalty: Float? = nil, frequencyPenalty: Float? = nil,
+                disableThinking: Bool = true) {
         self.messages = messages
         self.tools = tools
         self.temperature = temperature
         self.topP = topP
         self.maxTokens = maxTokens
+        self.topK = topK
+        self.minP = minP
+        self.repetitionPenalty = repetitionPenalty
+        self.repetitionContextSize = repetitionContextSize
+        self.presencePenalty = presencePenalty
+        self.frequencyPenalty = frequencyPenalty
         self.disableThinking = disableThinking
     }
 }
@@ -71,11 +89,15 @@ public struct ChatResult: Sendable {
     public var toolCalls: [LLMToolCall]
     public var usage: ChatUsage
     public var wallSeconds: Double
-    public init(text: String, toolCalls: [LLMToolCall], usage: ChatUsage, wallSeconds: Double) {
+    /// Generation speed reported by the provider (nil for fakes/older paths).
+    public var tokensPerSecond: Double?
+    public init(text: String, toolCalls: [LLMToolCall], usage: ChatUsage,
+                wallSeconds: Double, tokensPerSecond: Double? = nil) {
         self.text = text
         self.toolCalls = toolCalls
         self.usage = usage
         self.wallSeconds = wallSeconds
+        self.tokensPerSecond = tokensPerSecond
     }
 }
 
