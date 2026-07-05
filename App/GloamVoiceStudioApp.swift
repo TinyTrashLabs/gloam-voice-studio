@@ -9,6 +9,7 @@ struct GloamVoiceStudioApp: App {
         // known state regardless of what previous runs left behind.
         if UITestMode.isActive {
             UserDefaults.standard.removeObject(forKey: "studioMode")
+            UserDefaults.standard.removeObject(forKey: "studioSection")
         }
     }
 

@@ -259,4 +259,45 @@ final class SmokeTests: XCTestCase {
             "History list should contain the generated line text. debugDescription:\n\(app.debugDescription)"
         )
     }
+
+    @MainActor
+    func testChatSendsAndReceivesReply() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) { consentButton.click() }
+
+        // Create a voice to chat with (chat needs a sidebar selection).
+        app.buttons["new-voice"].firstMatch.click()
+        let nameField = app.textFields["voice-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.click()
+        nameField.typeText("Chat Voice")
+        app.buttons["use-sample-ref"].click()
+        app.buttons["voice-save"].click()
+        let voiceRow = app.staticTexts["Chat Voice"].firstMatch
+        XCTAssertTrue(voiceRow.waitForExistence(timeout: 5))
+        voiceRow.click()
+
+        // Segmented Picker segments surface as radioButtons on macOS.
+        let chatSegment = app.radioButtons["Chat"].firstMatch
+        XCTAssertTrue(chatSegment.waitForExistence(timeout: 5),
+                      "Chat segment should exist in the section switch")
+        chatSegment.click()
+
+        let composer = app.textFields["chat-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5),
+                      "chat composer should appear")
+        composer.click()
+        composer.typeText("Hello there")
+        app.buttons["chat-send"].firstMatch.click()
+
+        // UITestFakeLanguageModel replies instantly via the default stream impl.
+        let reply = app.staticTexts["Hi there! This is a test reply."]
+        XCTAssertTrue(reply.waitForExistence(timeout: 10),
+                      "assistant reply should appear in the transcript. "
+                      + "debugDescription:\n\(app.debugDescription)")
+    }
 }
