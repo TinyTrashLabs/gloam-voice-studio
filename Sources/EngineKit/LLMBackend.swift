@@ -49,4 +49,8 @@ public enum LLMBackendID: String, CaseIterable, Sendable, Codable {
 
     /// On-disk folder name under the managed Models directory.
     public var diskFolder: String { "llm-\(rawValue)" }
+
+    /// Context window (tokens) used for chat-history trimming. All current
+    /// backends support at least 32k; kept conservative and uniform.
+    public var contextTokens: Int { 32_768 }
 }

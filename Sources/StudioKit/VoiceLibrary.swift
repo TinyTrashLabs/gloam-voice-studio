@@ -1,6 +1,17 @@
 import Foundation
 import EngineKit
 
+/// Chat persona attached to a voice. Kept as its own struct so it can later be
+/// lifted into a standalone Character entity (spec: personas now, characters later).
+public struct Persona: Codable, Equatable, Sendable {
+    public var systemPrompt: String
+    public var greeting: String?
+    public init(systemPrompt: String, greeting: String? = nil) {
+        self.systemPrompt = systemPrompt
+        self.greeting = greeting
+    }
+}
+
 /// On-disk shape and key names are identical to the Python engine's
 /// voices.py meta.json so .gvoice packs interchange cleanly.
 public struct VoiceMeta: Codable, Equatable, Sendable {
@@ -8,12 +19,14 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     public var slug: String
     public var refText: String
     public var createdAt: String
+    public var persona: Persona?
 
-    public init(name: String, slug: String, refText: String, createdAt: String) {
+    public init(name: String, slug: String, refText: String, createdAt: String, persona: Persona? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
         self.createdAt = createdAt
+        self.persona = persona
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -23,6 +36,8 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         slug = try c.decodeIfPresent(String.self, forKey: .slug) ?? ""
         refText = try c.decodeIfPresent(String.self, forKey: .refText) ?? ""
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+        // Optional + tolerant: a malformed persona must never break voice load.
+        persona = (try? c.decodeIfPresent(Persona.self, forKey: .persona)) ?? nil
     }
 }
 
@@ -143,6 +158,15 @@ public struct VoiceLibrary: Sendable {
             try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
+        return meta
+    }
+
+    /// Sets (or clears, with nil) the chat persona on a stored voice.
+    @discardableResult
+    public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
+        var (meta, _) = try get(slug)
+        meta.persona = persona
+        try write(meta, to: directory.appendingPathComponent(slug))
         return meta
     }
 

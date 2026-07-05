@@ -79,13 +79,39 @@ public struct Knobs: Sendable, Equatable {
     public var topK: ClosedRange<Int>?
     public var repetitionPenalty: ClosedRange<Float>?
     public var exaggeration: ClosedRange<Float>?
+    /// Chatterbox (regular) CFG guidance weight. Resemble default 0.5; lower it as
+    /// exaggeration rises to keep pacing from rushing. Turbo has no CFG → no knob.
+    public var cfgWeight: ClosedRange<Float>?
 
     public init(temperature: ClosedRange<Float>? = nil, topP: ClosedRange<Float>? = nil,
                 topK: ClosedRange<Int>? = nil, repetitionPenalty: ClosedRange<Float>? = nil,
-                exaggeration: ClosedRange<Float>? = nil) {
+                exaggeration: ClosedRange<Float>? = nil, cfgWeight: ClosedRange<Float>? = nil) {
         self.temperature = temperature; self.topP = topP; self.topK = topK
         self.repetitionPenalty = repetitionPenalty; self.exaggeration = exaggeration
+        self.cfgWeight = cfgWeight
     }
+}
+
+/// Which model-native scalar a `.liveKnob` backend drives for emotion.
+public enum EmotionKnob: Sendable, Equatable { case exaggeration, temperature }
+
+/// Single source of truth for how a backend expresses emotion. Consumed by BOTH
+/// the request planner (which knob, if any, the emotion enum resolves to) and the
+/// UI (which emotion control to render). Replaces the dead `honorsEmotionKnob`
+/// flag and the `honorsTags` proxy the planner previously used to gate
+/// emotion→temperature (honorsTags means "honors inline [tags]", unrelated).
+public enum EmotionMechanism: Sendable, Equatable {
+    /// Emotion steered by free-text instruct/style (qwen Design/Custom) — no chip;
+    /// the Direction box is the control.
+    case textDriven
+    /// A model-native emotion scalar (fish temperature, chatterbox exaggeration).
+    case liveKnob(EmotionKnob)
+    /// Emotion only via acted `<slug>-<emotion>` reference clips (qwen Base, turbo).
+    case variantClipOnly
+    /// Emotion via a leading inline `[marker]` in the text — Fish's trained control
+    /// (e.g. `[whisper] …`). The planner injects it; the model reads it as literal
+    /// text and never speaks it.
+    case inlineMarker
 }
 
 /// Data-driven description of a backend's Direct-pane controls. The UI renders
@@ -96,14 +122,13 @@ public struct ControlSurface: Sendable, Equatable {
     public var presetSpeakers: [String]
     public var instruct: Requirement
     public var language: Bool
-    public var emotionChips: Bool
     public var knobs: Knobs
 
     public init(voiceClone: Requirement, presetSpeakers: [String] = [],
-                instruct: Requirement, language: Bool, emotionChips: Bool, knobs: Knobs) {
+                instruct: Requirement, language: Bool, knobs: Knobs) {
         self.voiceClone = voiceClone; self.presetSpeakers = presetSpeakers
         self.instruct = instruct; self.language = language
-        self.emotionChips = emotionChips; self.knobs = knobs
+        self.knobs = knobs
     }
 }
 
@@ -123,25 +148,38 @@ extension BackendID {
             // Base is a voice-cloning model (text + reference audio). It does NOT
             // take a natural-language instruct — that's VoiceDesign/CustomVoice only.
             ControlSurface(voiceClone: .optional, instruct: .none,
-                           language: true, emotionChips: false, knobs: Self.qwenKnobs)
+                           language: true, knobs: Self.qwenKnobs)
         case .qwenDesign:
             ControlSurface(voiceClone: .none, instruct: .required,
-                           language: true, emotionChips: false, knobs: Self.qwenKnobs)
+                           language: true, knobs: Self.qwenKnobs)
         case .qwenCustom:
             ControlSurface(voiceClone: .none, presetSpeakers: Self.qwenPresetSpeakers,
-                           instruct: .optional, language: true, emotionChips: false,
+                           instruct: .optional, language: true,
                            knobs: Self.qwenKnobs)
         case .fishS2Pro:
             ControlSurface(voiceClone: .optional, instruct: .none,
-                           language: false, emotionChips: true,
+                           language: false,
                            knobs: Knobs(temperature: 0.3...1.2))
         case .chatterbox:
             ControlSurface(voiceClone: .required, instruct: .none,
-                           language: false, emotionChips: true,
-                           knobs: Knobs(exaggeration: 0...1))
+                           language: false,
+                           knobs: Knobs(exaggeration: 0...1, cfgWeight: 0...1))
         case .chatterboxTurbo:
             ControlSurface(voiceClone: .required, instruct: .none,
-                           language: false, emotionChips: true, knobs: Knobs())
+                           language: false, knobs: Knobs())
+        }
+    }
+}
+
+extension BackendID {
+    /// How this backend expresses emotion. See `EmotionMechanism`.
+    public var emotionMechanism: EmotionMechanism {
+        switch self {
+        case .qwen06B, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
+        case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
+        case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
+        case .chatterbox: .liveKnob(.exaggeration)
+        case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
         }
     }
 }
@@ -155,10 +193,6 @@ public struct BackendSpec: Sendable, Equatable {
     public let needsLicenseAck: Bool
     /// chatterbox family: a reference clip is always required. fish: stock voice OK.
     public let needsRefAudio: Bool
-    /// Whether the backend honors an emotion-exaggeration knob. chatterbox → true,
-    /// chatterboxTurbo → false (turbo ignores exaggeration upstream), fishS2Pro → true
-    /// (emotion is expressed via temperature).
-    public let honorsEmotionKnob: Bool
 }
 
 extension BackendID {
@@ -167,38 +201,31 @@ extension BackendID {
         case .qwen06B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false,
-                        honorsEmotionKnob: false)
+                        needsLicenseAck: false, needsRefAudio: false)
         case .qwen17B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false,
-                        honorsEmotionKnob: false)
+                        needsLicenseAck: false, needsRefAudio: false)
         case .qwenDesign:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false,
-                        honorsEmotionKnob: false)
+                        needsLicenseAck: false, needsRefAudio: false)
         case .qwenCustom:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false,
-                        honorsEmotionKnob: false)
+                        needsLicenseAck: false, needsRefAudio: false)
         case .chatterbox:
             BackendSpec(modelRepo: "mlx-community/Chatterbox-TTS-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true,
-                        honorsEmotionKnob: true)
+                        needsLicenseAck: false, needsRefAudio: true)
         case .chatterboxTurbo:
             BackendSpec(modelRepo: "mlx-community/chatterbox-turbo-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true,
-                        honorsEmotionKnob: false)
+                        needsLicenseAck: false, needsRefAudio: true)
         case .fishS2Pro:
             BackendSpec(modelRepo: "mlx-community/fish-audio-s2-pro-bf16",
                         defaultSampleRate: 44100, honorsTags: true,
-                        needsLicenseAck: true, needsRefAudio: false,
-                        honorsEmotionKnob: true)
+                        needsLicenseAck: true, needsRefAudio: false)
         }
     }
 }

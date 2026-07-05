@@ -15,6 +15,23 @@ final class UITestFakeProvider: ModelProviding, @unchecked Sendable {
     func didEvictModel() {}
 }
 
+/// Instant fake LLM so the chat smoke test runs without weights or Metal.
+final class UITestFakeLanguageModel: LanguageModel, @unchecked Sendable {
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        ChatResult(text: "Hi there! This is a test reply.",
+                   toolCalls: [],
+                   usage: ChatUsage(promptTokens: 8, completionTokens: 8),
+                   wallSeconds: 0.01, tokensPerSecond: 800)
+    }
+}
+
+final class UITestFakeLanguageProvider: LanguageModelProviding, @unchecked Sendable {
+    func loadModel(backend: LLMBackendID) async throws -> any LanguageModel {
+        UITestFakeLanguageModel()
+    }
+    func didEvictModel() {}
+}
+
 enum UITestMode {
     static var isActive: Bool { ProcessInfo.processInfo.arguments.contains("--uitest") }
     static var tempRoot: URL {

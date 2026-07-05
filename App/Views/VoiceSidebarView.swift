@@ -1,3 +1,4 @@
+import EngineKit
 import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -8,6 +9,8 @@ extension Notification.Name {
 
 struct VoiceSidebarView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @State private var expandedBases: Set<String> = []
     @State private var editorPresented = false
     @State private var editingSlug: String?
     @State private var importerPresented = false
@@ -31,6 +34,28 @@ struct VoiceSidebarView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 12)
             Divider().overlay(Color.white.opacity(0.06))
+
+            // Section switch: Studio (speak with reusable voices), Create Voice
+            // (the Foundry — mint a new voice with qwen3-design), Chat (persona
+            // chat through a local LLM). Sidebar stays put.
+            Picker("Section", selection: Binding(
+                get: { StudioSection(rawValue: sectionRaw) ?? .studio },
+                set: { newSection in
+                    sectionRaw = newSection.rawValue
+                    // Tapping "Create Voice" itself means a fresh create — leave any
+                    // in-progress Edit only when opened explicitly from a voice.
+                    if newSection == .createVoice { model.editingVoiceSlug = nil }
+                })) {
+                Text("Studio").tag(StudioSection.studio)
+                Text("Create Voice").tag(StudioSection.createVoice)
+                Text("Chat").tag(StudioSection.chat)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .accessibilityIdentifier("studio-section-picker")
+            .help("Switch between the studio, the voice foundry, and voice chat")
 
             HStack(alignment: .center) {
                 Text("VOICES")
@@ -66,76 +91,13 @@ struct VoiceSidebarView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                ForEach(voiceList, id: \.slug) { voice in
-                    HStack(spacing: 8) {
-                        VoiceAvatarView(
-                            slug: voice.slug,
-                            name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
-                            size: 26)
-                        VStack(alignment: .leading) {
-                            Text(voice.name)
-                            if voice.slug.contains("-") {
-                                Text(voice.slug).font(.caption2).foregroundStyle(.secondary)
-                            }
+                ForEach(groupedVoices, id: \.base.slug) { group in
+                    voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
+                    if expandedBases.contains(group.base.slug) {
+                        ForEach(group.variants, id: \.slug) { variant in
+                            voiceRow(variant, isVariant: true, variantCount: 0)
                         }
-                        Spacer(minLength: 4)
-                        // Visible affordances so the common actions aren't buried
-                        // in the ⋯ overflow: an inline play-sample (surfaced per
-                        // request), a hover-revealed edit pencil, then ⋯ for the
-                        // rest. Play stays visible while THIS voice is playing so
-                        // you can stop it without re-hovering.
-                        let isPlaying = refPlayer.playingID == voice.slug
-                        let showControls = hoveredSlug == voice.slug
-                            || model.selectedVoiceSlug == voice.slug
-                        if showControls || isPlaying {
-                            Button { previewRef(voice) } label: {
-                                ZStack {
-                                    if isPlaying {
-                                        EqualizerBars(color: Brand.accent)
-                                    } else {
-                                        Image(systemName: "play.fill")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(Brand.fgDim)
-                                    }
-                                }
-                                .frame(width: 22, height: 22)
-                                .background(Circle()
-                                    .fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
-                                .contentShape(Circle())
-                            }
-                            .buttonStyle(.borderless)
-                            .help(isPlaying ? "Stop preview" : "Play sample")
-                            .accessibilityIdentifier("play-voice")
-                        }
-                        if showControls {
-                            Button { editingSlug = voice.slug; editorPresented = true } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(Brand.fgDim)
-                            .help("Edit voice name and reference audio")
-                            .accessibilityIdentifier("edit-voice")
-                        }
-                        Menu {
-                            voiceActions(voice)
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .foregroundStyle(Brand.fgDim)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("More actions")
-                        .accessibilityIdentifier("voice-menu")
                     }
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if hovering { hoveredSlug = voice.slug }
-                        else if hoveredSlug == voice.slug { hoveredSlug = nil }
-                    }
-                    .tag(voice.slug)
-                    .contextMenu { voiceActions(voice) }
                 }
             }
             .listStyle(.sidebar)
@@ -183,12 +145,147 @@ struct VoiceSidebarView: View {
         }
     }
 
+    /// One sidebar row. A base voice with acted variants shows a disclosure chevron
+    /// and a count badge; variants render indented under their base, labeled by emotion.
+    @ViewBuilder
+    private func voiceRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
+        let isPlaying = refPlayer.playingID == voice.slug
+        let showControls = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
+        HStack(spacing: 8) {
+            if isVariant {
+                Color.clear.frame(width: 16)
+            } else if variantCount > 0 {
+                Button { toggleExpanded(voice.slug) } label: {
+                    Image(systemName: expandedBases.contains(voice.slug) ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(Brand.fgDim)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Color.clear.frame(width: 12)
+            }
+            VoiceAvatarView(slug: voice.slug, name: voice.name,
+                            avatarURL: model.voices.avatarURL(voice.slug),
+                            size: isVariant ? 20 : 26)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(voice.name).font(isVariant ? .callout : .body)
+                    if variantCount > 0 {
+                        Text("\(variantCount)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                            .foregroundStyle(Brand.fgDim)
+                    }
+                }
+                if isVariant {
+                    Text(variantEmotionLabel(voice.slug)).font(.caption2).foregroundStyle(.secondary)
+                } else if voice.slug.contains("-") {
+                    Text(voice.slug).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 4)
+            if showControls || isPlaying {
+                Button { previewRef(voice) } label: {
+                    ZStack {
+                        if isPlaying { EqualizerBars(color: Brand.accent) }
+                        else {
+                            Image(systemName: "play.fill").font(.system(size: 10))
+                                .foregroundStyle(Brand.fgDim)
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.borderless)
+                .help(isPlaying ? "Stop preview" : "Play sample")
+                .accessibilityIdentifier("play-voice")
+            }
+            if showControls && !isVariant {
+                Button { openEdit(voice.slug) } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless).foregroundStyle(Brand.fgDim)
+                .help("Edit this voice (name, reference, emotion variants)")
+                .accessibilityIdentifier("edit-voice")
+            }
+            Menu { voiceActions(voice) } label: {
+                Image(systemName: "ellipsis").foregroundStyle(Brand.fgDim)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("More actions").accessibilityIdentifier("voice-menu")
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering { hoveredSlug = voice.slug }
+            else if hoveredSlug == voice.slug { hoveredSlug = nil }
+        }
+        .tag(voice.slug)
+        .contextMenu { voiceActions(voice) }
+    }
+
+    /// Suffixes that mark a `<base>-<expression>` acted variant — the current Fish
+    /// expression set plus the legacy `Emotion` names, so old variants still collapse.
+    private static let emotionSuffixes = Set(
+        VoiceExpression.allCases.map { $0.rawValue } + Emotion.allCases.map { $0.rawValue })
+
+    /// Base voices, each with its acted `<slug>-<emotion>` variants folded under it.
+    /// A voice is only a variant when its slug is `<base>-<emotion>` AND `<base>`
+    /// exists — so a hyphenated name like `sam-elliott` stays its own base voice.
+    private var groupedVoices: [(base: VoiceMeta, variants: [VoiceMeta])] {
+        let all = voiceList
+        let slugs = Set(all.map { $0.slug })
+        func baseSlug(of meta: VoiceMeta) -> String? {
+            for suffix in Self.emotionSuffixes where meta.slug.hasSuffix("-\(suffix)") {
+                let base = String(meta.slug.dropLast(suffix.count + 1))
+                if !base.isEmpty && slugs.contains(base) { return base }
+            }
+            return nil
+        }
+        var variantsByBase: [String: [VoiceMeta]] = [:]
+        var bases: [VoiceMeta] = []
+        for meta in all {
+            if let base = baseSlug(of: meta) { variantsByBase[base, default: []].append(meta) }
+            else { bases.append(meta) }
+        }
+        return bases.map { base in
+            (base, (variantsByBase[base.slug] ?? []).sorted { $0.slug < $1.slug })
+        }
+    }
+
+    private func variantEmotionLabel(_ slug: String) -> String {
+        guard let dash = slug.lastIndex(of: "-") else { return slug }
+        return String(slug[slug.index(after: dash)...]).capitalized
+    }
+
+    private func toggleExpanded(_ slug: String) {
+        if expandedBases.contains(slug) { expandedBases.remove(slug) } else { expandedBases.insert(slug) }
+    }
+
+    /// The base voice a slug belongs to (if it's an acted `<base>-<emotion>` variant).
+    private func baseSlug(for slug: String) -> String? {
+        let slugs = Set(voiceList.map { $0.slug })
+        for suffix in Self.emotionSuffixes where slug.hasSuffix("-\(suffix)") {
+            let base = String(slug.dropLast(suffix.count + 1))
+            if !base.isEmpty && slugs.contains(base) { return base }
+        }
+        return nil
+    }
+
+    /// Open a voice in the Create Voice page's Edit mode (full page, not the modal
+    /// sheet). A variant has no page of its own — it opens its base, where it's managed.
+    private func openEdit(_ slug: String) {
+        model.editingVoiceSlug = baseSlug(for: slug) ?? slug
+        sectionRaw = StudioSection.createVoice.rawValue
+    }
+
     /// Shared action set for a voice — used by both the row's ⋯ overflow menu
     /// and its right-click context menu so they never drift apart.
     @ViewBuilder
     private func voiceActions(_ voice: VoiceMeta) -> some View {
-        Button("Edit…") { editingSlug = voice.slug; editorPresented = true }
-            .help("Edit voice name and reference audio")
+        Button("Edit…") { openEdit(voice.slug) }
+            .help("Edit this voice (name, reference, bake variants)")
         Button(refPlayer.playingID == voice.slug ? "Stop Sample" : "Play Sample") {
             previewRef(voice)
         }

@@ -54,6 +54,7 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
             }
             if let chatterbox = model as? ChatterboxModel {
                 chatterbox.emotionAdvOverride = request.exaggeration
+                chatterbox.cfgWeightOverride = request.cfgWeight
             }
             var params = model.defaultGenerationParameters
             if let temperature = request.temperature { params.temperature = temperature }

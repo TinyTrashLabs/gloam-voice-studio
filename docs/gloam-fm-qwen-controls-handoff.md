@@ -13,11 +13,72 @@ A client composes the spoken text **and** the delivery controls in a single `POS
 | `voice` | string? | voice-library slug to **clone** (Base/Fish) |
 | `speaker` | string? | preset speaker name (**qwen3-custom** only) |
 | `instruct` | string? | natural-language direction (Qwen) |
+| `emotion` | string? | acted **variant** name (e.g. `excited`, `angry`, `whisper`) OR a live-knob level (`flat`/`neutral`/`warm`/`excited`/`hype`) — see **Emotion & voice variants** |
+| `exaggeration` | number? | Chatterbox emotional-intensity override (0–1) |
 | `language` | string? | `auto` or one of the 10 languages |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number? | sampling overrides (Qwen) |
 | `response_format` | string | only `wav` |
 
 Returns `audio/wav`. Errors are `{"detail": "..."}` with status 400/403/503.
+
+## Emotion & voice variants  (⚠️ updated — gloam.fm please sync)
+
+`emotion` now resolves in two stages, so one field reaches both **acted variant clips**
+and the **live emotion knob**:
+
+1. **Acted variant clip.** If voice `<voice>` has a saved variant named `<voice>-<emotion>`,
+   that clip is used as the reference. Baked variants are Fish-marker performances —
+   `excited`, `delight`, `angry`, `sad`, `surprised`, `shocked`, `whisper`, `shouting`,
+   `screaming`, `laughing`, `chuckle`, `sigh`, `panting`, `moaning`, `singing` — plus any
+   legacy names. (Chatterbox-only users can bake intensity-based variants of the same names.)
+2. **Base ("normal") fallback.** No matching variant, or `emotion` omitted / `neutral` →
+   the **base** voice `<voice>` is used: the plain reference read.
+3. **Live emotion.** On the **base** clip: for **Chatterbox**, a level (`flat`/`neutral`/
+   `warm`/`excited`/`hype`) drives `exaggeration`. For **Fish**, a non-neutral `emotion`
+   injects a leading `[marker]` — Fish's trained control (see **Fish live markers** below);
+   `temperature` is now sampling-only, not emotion. On a **variant** clip the emotion is
+   already baked in, so nothing extra is applied.
+
+Examples (voice `ogre`, with baked `ogre-excited` and `ogre-angry`):
+```json
+{"voice":"ogre"}                     // normal / reference (base clip)
+{"voice":"ogre","emotion":"neutral"} // normal (base clip)
+{"voice":"ogre","emotion":"excited"} // ogre-excited acted clip
+{"voice":"ogre","emotion":"angry"}   // ogre-angry acted clip
+{"voice":"ogre","emotion":"warm"}    // base clip + Chatterbox exaggeration≈0.6 (no ogre-warm clip)
+{"voice":"ogre-excited"}             // still works — direct slug addressing
+```
+
+**Change for gloam.fm:** previously `emotion` only drove the live knob and never selected
+variant clips — variants had to be requested by full slug (`ogre-excited`). Now
+`voice`+`emotion` auto-resolves to the variant clip, and the base voice is the "normal"
+read. Direct slug addressing (`voice:"ogre-excited"`) is unchanged.
+
+## Fish live markers  (⚠️ new — gloam.fm)
+
+For `fish-s2-pro`, emotion is rendered from a literal **`[marker]`** at the start of a
+sentence — Fish's trained control, consumed as a token (never spoken). The DJ can drive
+these **on the fly**: embed them directly in `input` and they reach the model verbatim (the
+server never strips or normalizes them).
+
+```json
+{"model":"fish-s2-pro","voice":"ogre","input":"[whisper] Keep this between us. [excited] But it's huge!"}
+```
+
+- **Placement:** put a marker at the **start of a sentence/clause** (how Fish was trained);
+  mid-word insertion is unreliable. Multiple markers across sentences are fine.
+- **Vocabulary:** the trained single-word set — `excited, delight, angry, sad, surprised,
+  shocked, whisper, shouting, screaming, laughing, chuckle, sigh, panting, moaning, singing`
+  (non-verbal ones like `laughing`/`sigh` insert an actual sound; the rest shape delivery).
+- **Convenience:** alternatively send `emotion:"whisper"` with no marker in `input` — for Fish
+  the server injects a leading `[whisper]` for you. If `input` **already** starts with a
+  `[marker]`, the server does **not** add another (your embedded marker wins), so the DJ owns
+  marker placement without double-stacking.
+- **Cloning + emotion together:** a marker renders *while* cloning `voice`, as long as the
+  generated line differs from that voice's own reference transcript (identical text makes the
+  clone reproduce the neutral reference and swamps the marker).
+- **Not temperature.** `fish-s2-pro` emotion is the marker, not `temperature` — temperature is
+  now a plain sampling knob.
 
 ## Model control matrix
 

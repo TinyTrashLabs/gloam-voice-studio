@@ -7,7 +7,7 @@ final class FakeLanguageModel: LanguageModel, @unchecked Sendable {
     func complete(_ request: ChatRequest) async throws -> ChatResult {
         ChatResult(text: reply, toolCalls: [],
                    usage: ChatUsage(promptTokens: 1, completionTokens: 1),
-                   wallSeconds: 0)
+                   wallSeconds: 0, tokensPerSecond: nil)
     }
 }
 

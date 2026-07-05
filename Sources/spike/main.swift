@@ -36,6 +36,72 @@ final class PctTracker: @unchecked Sendable {
     }
 }
 
+// MARK: - chat subcommand
+//
+// `spike chat <llm-backend-id> <llm-model-dir> <prompt> [--speak <tts-model-dir>]`
+// — streams a chat reply from a local model dir, printing deltas as they
+// arrive. With --speak it also queues each completed sentence through
+// synthesizeInterleaved mid-stream, proving the speak-while-generating path
+// (paced TokenIterator decode + TTS in the token gaps) against real weights.
+if CommandLine.arguments.dropFirst().first == "chat" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    guard sub.count >= 3, let backend = LLMBackendID(rawValue: sub[0]) else {
+        die("chat needs: <llm-backend-id> <llm-model-dir> <prompt> [--speak <tts-model-dir>]")
+    }
+    let llmDir = URL(fileURLWithPath: sub[1])
+    let prompt = sub[2]
+    let ttsPath: String? = {
+        guard let flag = sub.firstIndex(of: "--speak"), sub.count > flag + 1 else { return nil }
+        return sub[flag + 1]
+    }()
+
+    let languageProvider = MLXLanguageModelProvider(modelDirectoryResolver: { _ in llmDir })
+    let provider = MLXModelProvider(modelPathResolver: { _ in ttsPath })
+    let engine = GloamEngine(provider: provider, languageProvider: languageProvider)
+
+    do {
+        let request = ChatRequest(
+            messages: [ChatTurn(role: .user, content: prompt)], maxTokens: 200)
+        var pendingSpeech = ""
+        var synthTasks: [Task<Void, Never>] = []
+        let stream = await engine.chatStream(backend: backend, request: request)
+        let start = Date()
+        for try await event in stream {
+            switch event {
+            case .delta(let d):
+                print(d, terminator: "")
+                if ttsPath != nil {
+                    pendingSpeech += d
+                    let (complete, remainder) = SentenceSplitter.splitStreaming(pendingSpeech)
+                    pendingSpeech = remainder
+                    for sentence in complete {
+                        synthTasks.append(Task {
+                            do {
+                                let t0 = Date().timeIntervalSince(start)
+                                let r = try await engine.synthesizeInterleaved(
+                                    backend: .qwen17B, request: SynthesisRequest(text: sentence))
+                                let t1 = Date().timeIntervalSince(start)
+                                print("\n[speak t=\(String(format: "%.1f–%.1f", t0, t1))s "
+                                      + "\(r.samples.count) samples] \(sentence)")
+                            } catch {
+                                print("\n[speak FAILED] \(error)")
+                            }
+                        })
+                    }
+                }
+            case .finished(let result):
+                print("\n---\nfinished: \(result.usage.completionTokens) tokens, "
+                      + "\(String(format: "%.1f", result.tokensPerSecond ?? 0)) tok/s, "
+                      + "\(String(format: "%.1f", result.wallSeconds))s wall")
+            }
+        }
+        for task in synthTasks { await task.value }
+        exit(0)
+    } catch {
+        die("chat failed: \(error)")
+    }
+}
+
 // MARK: - serve-llm subcommand
 //
 // `spike serve-llm <llm-backend-id> [port]` — downloads the LLM if missing,

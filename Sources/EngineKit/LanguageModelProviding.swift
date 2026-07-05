@@ -42,17 +42,35 @@ public struct ChatRequest: Sendable, Equatable {
     public var temperature: Float
     public var topP: Float?
     public var maxTokens: Int
+    // Advanced sampler surface (nil = library default). Exposed by the chat
+    // inspector's Advanced disclosure; all natively supported by mlx-swift-lm.
+    public var topK: Int?
+    public var minP: Float?
+    public var repetitionPenalty: Float?
+    public var repetitionContextSize: Int?
+    public var presencePenalty: Float?
+    public var frequencyPenalty: Float?
     /// Hard-off thinking by default (DJ brain never wants reasoning tokens).
     public var disableThinking: Bool
 
     public init(messages: [ChatTurn], tools: [LLMTool]? = nil,
                 temperature: Float = 0.7, topP: Float? = nil,
-                maxTokens: Int = 512, disableThinking: Bool = true) {
+                maxTokens: Int = 512,
+                topK: Int? = nil, minP: Float? = nil,
+                repetitionPenalty: Float? = nil, repetitionContextSize: Int? = nil,
+                presencePenalty: Float? = nil, frequencyPenalty: Float? = nil,
+                disableThinking: Bool = true) {
         self.messages = messages
         self.tools = tools
         self.temperature = temperature
         self.topP = topP
         self.maxTokens = maxTokens
+        self.topK = topK
+        self.minP = minP
+        self.repetitionPenalty = repetitionPenalty
+        self.repetitionContextSize = repetitionContextSize
+        self.presencePenalty = presencePenalty
+        self.frequencyPenalty = frequencyPenalty
         self.disableThinking = disableThinking
     }
 }
@@ -71,18 +89,79 @@ public struct ChatResult: Sendable {
     public var toolCalls: [LLMToolCall]
     public var usage: ChatUsage
     public var wallSeconds: Double
-    public init(text: String, toolCalls: [LLMToolCall], usage: ChatUsage, wallSeconds: Double) {
+    /// Generation speed reported by the provider (nil for fakes/older paths).
+    public var tokensPerSecond: Double?
+    public init(text: String, toolCalls: [LLMToolCall], usage: ChatUsage,
+                wallSeconds: Double, tokensPerSecond: Double? = nil) {
         self.text = text
         self.toolCalls = toolCalls
         self.usage = usage
         self.wallSeconds = wallSeconds
+        self.tokensPerSecond = tokensPerSecond
     }
+}
+
+/// One streaming chat event: incremental text, then a final result. The final
+/// text in `.finished` is authoritative (it's cleaned via stripThinking); UIs
+/// should replace accumulated deltas with it.
+public enum ChatEvent: Sendable {
+    case delta(String)
+    case finished(ChatResult)
 }
 
 /// A loaded language model. Conformers handle their own thread-safety
 /// (`Sendable`); GloamEngine serializes all calls through its task chain.
 public protocol LanguageModel: AnyObject, Sendable {
     func complete(_ request: ChatRequest) async throws -> ChatResult
+    /// Streaming variant. Implementations must yield `.finished` exactly once,
+    /// as the last event before finishing.
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
+    /// Consumer-paced streaming: `onEvent` is awaited for every event and the
+    /// model performs no further generation work until it returns. This is the
+    /// engine's interleave point — queued TTS synthesis runs between deltas
+    /// while the GPU is otherwise idle, keeping all GPU work serialized.
+    /// Implementations must deliver `.finished` exactly once, as the last event.
+    func pacedStream(_ request: ChatRequest,
+                     onEvent: @Sendable (ChatEvent) async -> Void) async throws
+
+    /// Blocks until any speculative computation the model pipelined ahead has
+    /// completed (MLX's TokenIterator launches the NEXT token's eval before
+    /// returning the current one). The engine calls this before running other
+    /// GPU work in a between-deltas gap so the two never overlap. No-op for
+    /// models that don't pipeline.
+    func awaitPendingComputation() async
+}
+
+public extension LanguageModel {
+    /// Non-streaming models emit their whole reply as one delta + finished.
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let result = try await self.complete(request)
+                    continuation.yield(.delta(result.text))
+                    continuation.yield(.finished(result))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Fallback pacing: forward the (possibly free-running) stream, awaiting
+    /// the handler per event. True pacing needs a pull-based implementation;
+    /// this keeps fakes and simple conformers correct.
+    func pacedStream(_ request: ChatRequest,
+                     onEvent: @Sendable (ChatEvent) async -> Void) async throws {
+        for try await event in stream(request) {
+            try Task.checkCancellation()
+            await onEvent(event)
+        }
+    }
+
+    func awaitPendingComputation() async {}
 }
 
 /// Loads language models. Real impl wraps mlx-swift-lm; tests use fakes.

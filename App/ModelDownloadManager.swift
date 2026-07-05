@@ -13,6 +13,8 @@ final class ModelDownloadManager {
     let uiTest: Bool
     private(set) var states: [BackendID: State] = [:]
     private var downloadTasks: [BackendID: Task<Void, Never>] = [:]
+    private(set) var llmStates: [LLMBackendID: State] = [:]
+    private var llmDownloadTasks: [LLMBackendID: Task<Void, Never>] = [:]
 
     /// Approximate 8-bit download sizes; scaled by the selected quant.
     static let approxBytes8bit: [BackendID: Int64] = [
@@ -38,12 +40,17 @@ final class ModelDownloadManager {
         refresh()
     }
 
-    /// The first backend currently downloading, with its progress fraction —
-    /// drives the global download indicator in the toolbar. nil when idle.
-    var activeDownload: (backend: BackendID, fraction: Double)? {
+    /// The first model currently downloading (TTS first, then LLM), with its
+    /// progress fraction — drives the global download indicator in the toolbar.
+    var activeDownload: (label: String, fraction: Double)? {
         for backend in BackendID.allCases {
             if case .downloading(let fraction) = states[backend] {
-                return (backend, fraction)
+                return (backend.rawValue, fraction)
+            }
+        }
+        for backend in LLMBackendID.allCases {
+            if case .downloading(let fraction) = llmStates[backend] {
+                return (backend.rawValue, fraction)
             }
         }
         return nil
@@ -86,6 +93,11 @@ final class ModelDownloadManager {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
         }
+        for backend in LLMBackendID.allCases {
+            if case .downloading = llmStates[backend] { continue }
+            llmStates[backend] = isComplete(dir: llmDirectory(for: backend))
+                ? .ready : .notDownloaded
+        }
     }
 
     /// A model is only "ready" if it has both a config AND the actual weight
@@ -94,13 +106,15 @@ final class ModelDownloadManager {
     /// dir would otherwise read as ready and then fail at generate time with a
     /// confusing `modelNotInitialized`. Require weights so the UI honestly
     /// offers a (re)download instead.
-    private func isComplete(_ backend: BackendID) -> Bool {
-        let dir = directory(for: backend)
+    private func isComplete(dir: URL) -> Bool {
         guard FileManager.default.fileExists(
             atPath: dir.appendingPathComponent("config.json").path) else { return false }
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil)) ?? []
         return contents.contains { $0.pathExtension == "safetensors" }
+    }
+    private func isComplete(_ backend: BackendID) -> Bool {
+        isComplete(dir: directory(for: backend))
     }
 
     func download(_ backend: BackendID) {
@@ -114,7 +128,9 @@ final class ModelDownloadManager {
         let repo = backend.modelRepo(quant: quant(for: backend))
         downloadTasks[backend] = Task {
             do {
-                try await downloadRepoSnapshot(repo: repo, to: dest, backend: backend)
+                try await downloadRepoSnapshot(repo: repo, to: dest) { fraction in
+                    self.states[backend] = .downloading(fraction)
+                }
                 self.states[backend] = .ready
             } catch is CancellationError {
                 self.states[backend] = .notDownloaded
@@ -137,7 +153,7 @@ final class ModelDownloadManager {
     /// explicit destination — flat repos (chatterbox/fish) work, subdir repos
     /// (qwen3) don't. Public resolve URLs need no auth for mlx-community repos.
     private func downloadRepoSnapshot(repo: String, to dir: URL,
-                                      backend: BackendID) async throws {
+                                      onProgress: (Double) -> Void) async throws {
         struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
         guard let treeURL = URL(
             string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true") else {
@@ -166,7 +182,7 @@ final class ModelDownloadManager {
             try? FileManager.default.removeItem(at: target)
             try FileManager.default.moveItem(at: tmp, to: target)
             done += file.size ?? 0
-            states[backend] = .downloading(Double(done) / Double(total))
+            onProgress(Double(done) / Double(total))
         }
     }
 
@@ -189,15 +205,62 @@ final class ModelDownloadManager {
         }
     }
 
-    private func preflight(_ backend: BackendID) throws {
-        let needed = Int64(Double(approxBytes(for: backend)) * 1.1)
+    private func preflight(needed approxBytes: Int64, dir: URL) throws {
+        let needed = Int64(Double(approxBytes) * 1.1)
         let values = try root.deletingLastPathComponent()
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         if let available = values.volumeAvailableCapacityForImportantUsage,
            available < needed {
             throw InsufficientDiskSpace(needed: needed)
         }
-        try FileManager.default.createDirectory(
-            at: directory(for: backend), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    private func preflight(_ backend: BackendID) throws {
+        try preflight(needed: approxBytes(for: backend), dir: directory(for: backend))
+    }
+
+    // MARK: LLM downloads — parallel to the TTS surface, keyed by LLMBackendID.
+    // Weights land in root/llm-<rawValue>, exactly where MLXLanguageModelProvider
+    // (wired in AppModel) resolves them.
+
+    func llmDirectory(for backend: LLMBackendID) -> URL {
+        root.appendingPathComponent(backend.diskFolder)
+    }
+
+    func state(for backend: LLMBackendID) -> State {
+        uiTest ? .ready : (llmStates[backend] ?? .notDownloaded)
+    }
+
+    func download(_ backend: LLMBackendID) {
+        if case .downloading = llmStates[backend] { return }
+        let dest = llmDirectory(for: backend)
+        do { try preflight(needed: backend.approxBytes, dir: dest) } catch {
+            llmStates[backend] = .failed(error.localizedDescription)
+            return
+        }
+        llmStates[backend] = .downloading(0)
+        llmDownloadTasks[backend] = Task {
+            do {
+                try await downloadRepoSnapshot(repo: backend.repoId, to: dest) { fraction in
+                    self.llmStates[backend] = .downloading(fraction)
+                }
+                self.llmStates[backend] = .ready
+            } catch is CancellationError {
+                self.llmStates[backend] = .notDownloaded
+            } catch {
+                self.llmStates[backend] = .failed(error.localizedDescription)
+            }
+            self.llmDownloadTasks[backend] = nil
+        }
+    }
+
+    func cancelDownload(_ backend: LLMBackendID) {
+        llmDownloadTasks[backend]?.cancel()
+    }
+
+    func delete(_ backend: LLMBackendID) {
+        llmDownloadTasks[backend]?.cancel()
+        try? FileManager.default.removeItem(at: llmDirectory(for: backend))
+        llmStates[backend] = .notDownloaded
     }
 }
