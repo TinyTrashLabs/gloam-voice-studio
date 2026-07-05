@@ -116,6 +116,13 @@ public protocol LanguageModel: AnyObject, Sendable {
     /// Streaming variant. Implementations must yield `.finished` exactly once,
     /// as the last event before finishing.
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error>
+    /// Consumer-paced streaming: `onEvent` is awaited for every event and the
+    /// model performs no further generation work until it returns. This is the
+    /// engine's interleave point — queued TTS synthesis runs between deltas
+    /// while the GPU is otherwise idle, keeping all GPU work serialized.
+    /// Implementations must deliver `.finished` exactly once, as the last event.
+    func pacedStream(_ request: ChatRequest,
+                     onEvent: @Sendable (ChatEvent) async -> Void) async throws
 }
 
 public extension LanguageModel {
@@ -133,6 +140,17 @@ public extension LanguageModel {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Fallback pacing: forward the (possibly free-running) stream, awaiting
+    /// the handler per event. True pacing needs a pull-based implementation;
+    /// this keeps fakes and simple conformers correct.
+    func pacedStream(_ request: ChatRequest,
+                     onEvent: @Sendable (ChatEvent) async -> Void) async throws {
+        for try await event in stream(request) {
+            try Task.checkCancellation()
+            await onEvent(event)
         }
     }
 }

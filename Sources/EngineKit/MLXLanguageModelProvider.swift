@@ -94,12 +94,29 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         return params
     }
 
-    /// Builds the ChatSession + final user turn for a request. Shared by
-    /// complete() and stream(). Mutating steps (system-turn merge, thinking
-    /// suppression, final-turn reinforcement) are unchanged from the original
-    /// complete() implementation.
-    private func makeSession(_ request: ChatRequest) throws
-        -> (session: ChatSession, lastUser: String) {
+    /// The request decomposed into prompt-side pieces. Shared by the paced
+    /// TokenIterator path and the ChatSession (tool-calling) path so the two
+    /// can never drift on thinking suppression or system-turn handling.
+    private struct PreparedChat {
+        var instructions: String?
+        var historyTurns: [ChatTurn]
+        var lastUser: String
+        var additionalContext: [String: any Sendable]
+    }
+
+    private static func chatMessage(from turn: ChatTurn) -> Chat.Message {
+        switch turn.role {
+        case .assistant: .assistant(turn.content)
+        case .user: .user(turn.content)
+        case .tool: .tool(turn.content)
+        case .system: .system(turn.content)
+        }
+    }
+
+    /// Mutating prompt steps (system-turn merge, thinking suppression,
+    /// final-turn reinforcement), unchanged from the original complete()
+    /// implementation.
+    private func preparedChat(_ request: ChatRequest) throws -> PreparedChat {
         // 1. Thinking-off via tokenizer chat-template flag.
         var additionalContext: [String: any Sendable] = [:]
         if request.disableThinking { additionalContext["enable_thinking"] = false }
@@ -134,25 +151,8 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             lastUser = "Answer directly with no reasoning.\n\n" + lastUser
         }
 
-        let history: [Chat.Message] = turns.map { turn in
-            switch turn.role {
-            case .assistant: return .assistant(turn.content)
-            case .user: return .user(turn.content)
-            case .tool: return .tool(turn.content)
-            case .system: return .system(turn.content)
-            }
-        }
-
-        let toolSpecs: [ToolSpec]? = try request.tools.map { try $0.map { try toolSpec(from: $0) } }
-
-        let session = ChatSession(
-            container,
-            instructions: instructions,
-            history: history,
-            generateParameters: Self.generateParameters(for: request),
-            additionalContext: additionalContext.isEmpty ? nil : additionalContext,
-            tools: toolSpecs)
-        return (session, lastUser)
+        return PreparedChat(instructions: instructions, historyTurns: turns,
+                            lastUser: lastUser, additionalContext: additionalContext)
     }
 
     func complete(_ request: ChatRequest) async throws -> ChatResult {
@@ -167,46 +167,8 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                let start = Date()
                 do {
-                    let (session, lastUser) = try self.makeSession(request)
-                    var rawText = ""
-                    var toolCalls: [LLMToolCall] = []
-                    var promptTokens = 0
-                    var completionTokens = 0
-                    var tokensPerSecond: Double?
-                    for try await generation in session.streamDetails(
-                        to: lastUser, images: [], videos: []) {
-                        try Task.checkCancellation()
-                        switch generation {
-                        case .chunk(let t):
-                            rawText += t
-                            continuation.yield(.delta(t))
-                        case .toolCall(let call):
-                            // NOTE: mlx-swift-lm v3.31.3 (issue #259) does NOT parse
-                            // Gemma-4 tool calls — see the original comment in git
-                            // history; Qwen tool-calling works.
-                            let argsData = (try? JSONSerialization.data(
-                                withJSONObject: jsonObject(call.function.arguments)))
-                                ?? Data("{}".utf8)
-                            toolCalls.append(LLMToolCall(
-                                name: call.function.name,
-                                argumentsJSON: String(decoding: argsData, as: UTF8.self)))
-                        case .info(let info):
-                            promptTokens = info.promptTokenCount
-                            completionTokens = info.generationTokenCount
-                            tokensPerSecond = info.tokensPerSecond
-                        }
-                    }
-                    // Final safety net — strip any leaked <think>…</think> block.
-                    let cleaned = request.disableThinking ? stripThinking(rawText) : rawText
-                    continuation.yield(.finished(ChatResult(
-                        text: cleaned,
-                        toolCalls: toolCalls,
-                        usage: ChatUsage(promptTokens: promptTokens,
-                                         completionTokens: completionTokens),
-                        wallSeconds: Date().timeIntervalSince(start),
-                        tokensPerSecond: tokensPerSecond)))
+                    try await self.pacedStream(request) { continuation.yield($0) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -214,6 +176,133 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    func pacedStream(_ request: ChatRequest,
+                     onEvent: @Sendable (ChatEvent) async -> Void) async throws {
+        // Tool-calling needs ChatSession's tool-call parser; those requests come
+        // from the server route, never the chat UI, so pacing doesn't matter there.
+        if let tools = request.tools, !tools.isEmpty {
+            try await chatSessionStream(request, onEvent: onEvent)
+            return
+        }
+
+        let start = Date()
+        let prepared = try preparedChat(request)
+        // Capture only Sendable pieces (UserInput/Chat.Message are not Sendable —
+        // they can carry MLXArray images); rebuild the chat inside the closure.
+        let instructions = prepared.instructions
+        let historyTurns = prepared.historyTurns
+        let lastUser = prepared.lastUser
+        let additionalContext = prepared.additionalContext
+        let params = Self.generateParameters(for: request)
+
+        try await container.perform { context in
+            var messages: [Chat.Message] = []
+            if let instructions { messages.append(.system(instructions)) }
+            messages.append(contentsOf: historyTurns.map(Self.chatMessage(from:)))
+            messages.append(.user(lastUser))
+            let userInput = UserInput(
+                chat: messages,
+                additionalContext: additionalContext.isEmpty ? nil : additionalContext)
+            let input = try await context.processor.prepare(input: userInput)
+            let promptTokens = input.text.tokens.size
+            var iterator = try TokenIterator(
+                input: input, model: context.model, cache: nil, parameters: params)
+            var detokenizer = NaiveStreamingDetokenizer(tokenizer: context.tokenizer)
+
+            // Same stop set generateLoopTask builds (its builder is private).
+            var stopIds = context.configuration.eosTokenIds
+            if let eos = context.tokenizer.eosTokenId { stopIds.insert(eos) }
+            for token in context.configuration.extraEOSTokens {
+                if let id = context.tokenizer.convertTokenToId(token) { stopIds.insert(id) }
+            }
+
+            var rawText = ""
+            var completionTokens = 0
+            var generationStart: Date?
+            // Pull-based decode: computing the next token happens inside next(),
+            // so the GPU is idle for exactly as long as onEvent keeps us waiting.
+            while let token = iterator.next() {
+                try Task.checkCancellation()
+                if generationStart == nil { generationStart = Date() }
+                if token == context.tokenizer.unknownTokenId || stopIds.contains(token) { break }
+                completionTokens += 1
+                detokenizer.append(token: token)
+                if let chunk = detokenizer.next() {
+                    rawText += chunk
+                    await onEvent(.delta(chunk))
+                }
+            }
+
+            let generationSeconds = generationStart.map { Date().timeIntervalSince($0) } ?? 0
+            // Final safety net — strip any leaked <think>…</think> block.
+            let cleaned = request.disableThinking ? stripThinking(rawText) : rawText
+            await onEvent(.finished(ChatResult(
+                text: cleaned,
+                toolCalls: [],
+                usage: ChatUsage(promptTokens: promptTokens,
+                                 completionTokens: completionTokens),
+                wallSeconds: Date().timeIntervalSince(start),
+                tokensPerSecond: generationSeconds > 0
+                    ? Double(completionTokens) / generationSeconds : nil)))
+        }
+    }
+
+    /// ChatSession-backed streaming, kept only for tool-calling requests (the
+    /// session's handler parses tool calls out of the token stream).
+    private func chatSessionStream(
+        _ request: ChatRequest,
+        onEvent: @Sendable (ChatEvent) async -> Void
+    ) async throws {
+        let start = Date()
+        let prepared = try preparedChat(request)
+        let toolSpecs: [ToolSpec]? = try request.tools.map { try $0.map { try toolSpec(from: $0) } }
+        let session = ChatSession(
+            container,
+            instructions: prepared.instructions,
+            history: prepared.historyTurns.map(Self.chatMessage(from:)),
+            generateParameters: Self.generateParameters(for: request),
+            additionalContext: prepared.additionalContext.isEmpty ? nil : prepared.additionalContext,
+            tools: toolSpecs)
+
+        var rawText = ""
+        var toolCalls: [LLMToolCall] = []
+        var promptTokens = 0
+        var completionTokens = 0
+        var tokensPerSecond: Double?
+        for try await generation in session.streamDetails(
+            to: prepared.lastUser, images: [], videos: []) {
+            try Task.checkCancellation()
+            switch generation {
+            case .chunk(let t):
+                rawText += t
+                await onEvent(.delta(t))
+            case .toolCall(let call):
+                // NOTE: mlx-swift-lm v3.31.3 (issue #259) does NOT parse
+                // Gemma-4 tool calls — see the original comment in git
+                // history; Qwen tool-calling works.
+                let argsData = (try? JSONSerialization.data(
+                    withJSONObject: jsonObject(call.function.arguments)))
+                    ?? Data("{}".utf8)
+                toolCalls.append(LLMToolCall(
+                    name: call.function.name,
+                    argumentsJSON: String(decoding: argsData, as: UTF8.self)))
+            case .info(let info):
+                promptTokens = info.promptTokenCount
+                completionTokens = info.generationTokenCount
+                tokensPerSecond = info.tokensPerSecond
+            }
+        }
+        // Final safety net — strip any leaked <think>…</think> block.
+        let cleaned = request.disableThinking ? stripThinking(rawText) : rawText
+        await onEvent(.finished(ChatResult(
+            text: cleaned,
+            toolCalls: toolCalls,
+            usage: ChatUsage(promptTokens: promptTokens,
+                             completionTokens: completionTokens),
+            wallSeconds: Date().timeIntervalSince(start),
+            tokensPerSecond: tokensPerSecond)))
     }
 
     /// Build an OpenAI-shaped `ToolSpec` ([String: any Sendable]) for the tokenizer.
