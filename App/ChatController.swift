@@ -123,6 +123,7 @@ final class ChatController {
         streamingText = ""
         streamTask = Task { [weak self] in
             guard let self else { return }
+            var sawFinished = false
             do {
                 let stream = await self.app.engine.chatStream(
                     backend: self.app.chatLLM, request: request)
@@ -131,10 +132,19 @@ final class ChatController {
                     case .delta(let d):
                         self.streamingText += d
                     case .finished(let result):
+                        sawFinished = true
                         self.finishReply(result, convoID: convoID)
                     }
                 }
+                // Cancelling the consuming task makes `for try await` end
+                // normally with no error — it does NOT throw CancellationError
+                // — so a Stop mid-stream lands here, not in the catch below.
+                if !sawFinished, Task.isCancelled {
+                    self.keepPartialReply(convoID: convoID)
+                }
             } catch is CancellationError {
+                // Belt-and-braces: kept in case a future producer does throw on
+                // cancellation.
                 self.keepPartialReply(convoID: convoID)
             } catch {
                 self.failReply(self.app.describeAny(error), convoID: convoID)
