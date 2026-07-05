@@ -237,7 +237,9 @@ final class SmokeTests: XCTestCase {
         playButton.click()
 
         // ── Step 6: Open history and assert the line appears ──────────────────────
-        let historyButton = app.buttons["open-history"]
+        // firstMatch: a crowded toolbar exposes overflowed items twice in the
+        // AX tree (toolbar + overflow menu), so a plain query is ambiguous.
+        let historyButton = app.buttons["open-history"].firstMatch
         XCTAssertTrue(historyButton.waitForExistence(timeout: 5),
                       "open-history button should be in the studio toolbar")
         historyButton.click()

@@ -366,12 +366,12 @@ struct StudioView: View {
         // ── WRITE zone ──────────────────────────────────────────────────────
         zoneLabel("WRITE")
         HStack(alignment: .top, spacing: 8) {
-            CaretTextEditor(text: $model.text, selection: $lineSelection)
+            CaretTextEditor(text: $model.text, selection: $lineSelection,
+                            axIdentifier: "line-editor")
                 .frame(height: 110)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
-                .accessibilityIdentifier("line-editor")
             DictationButton(text: $model.text)
         }
         if model.backend.spec.honorsTags {

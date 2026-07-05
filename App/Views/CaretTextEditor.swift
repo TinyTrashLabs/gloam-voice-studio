@@ -8,6 +8,10 @@ import SwiftUI
 struct CaretTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// Accessibility identifier applied to the inner NSTextView. A SwiftUI
+    /// `.accessibilityIdentifier` on the representable never reaches the
+    /// wrapped text view, so XCUITest's `textViews[...]` query can't find it.
+    var axIdentifier: String?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -15,6 +19,7 @@ struct CaretTextEditor: NSViewRepresentable {
         let scroll = NSTextView.scrollableTextView()
         scroll.drawsBackground = false
         guard let tv = scroll.documentView as? NSTextView else { return scroll }
+        if let axIdentifier { tv.setAccessibilityIdentifier(axIdentifier) }
         tv.delegate = context.coordinator
         tv.isRichText = false
         tv.allowsUndo = true
