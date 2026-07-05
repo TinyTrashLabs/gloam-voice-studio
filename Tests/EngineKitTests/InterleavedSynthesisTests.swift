@@ -10,13 +10,16 @@ private actor EventLog {
 
 /// Paced fake: yields "one.", then waits for the test's signal, then "two."
 /// and finished. The wait models the GPU-idle gap between token pulls where
-/// interleaved synthesis is allowed to run.
+/// interleaved synthesis is allowed to run. Logs "emit-finished" just before
+/// its final event so tests can order producer-side happenings deterministically.
 private final class GatedPacedModel: LanguageModel, @unchecked Sendable {
     private let gate: AsyncStream<Void>
     let openGate: AsyncStream<Void>.Continuation
+    private let log: EventLog?
 
-    init() {
+    init(log: EventLog? = nil) {
         (gate, openGate) = AsyncStream<Void>.makeStream()
+        self.log = log
     }
 
     func complete(_ request: ChatRequest) async throws -> ChatResult {
@@ -30,9 +33,23 @@ private final class GatedPacedModel: LanguageModel, @unchecked Sendable {
         var iterator = gate.makeAsyncIterator()
         _ = await iterator.next()
         await onEvent(.delta(" two."))
+        await log?.add("emit-finished")
         await onEvent(.finished(ChatResult(
             text: "one. two.", toolCalls: [],
             usage: ChatUsage(promptTokens: 0, completionTokens: 0), wallSeconds: 0)))
+    }
+}
+
+/// Speech fake that logs each synthesis into the shared event log — synthesis
+/// runs on the engine's serialized path, so its log position is deterministic
+/// relative to the language model's own log entries.
+private final class LoggingSpeechModel: SpeechModel, @unchecked Sendable {
+    let sampleRate = 24000
+    private let log: EventLog
+    init(log: EventLog) { self.log = log }
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        await log.add("synth-run:\(request.text)")
+        return [0.1]
     }
 }
 
@@ -44,26 +61,27 @@ private final class SingleModelLanguageProvider: LanguageModelProviding, @unchec
 }
 
 final class InterleavedSynthesisTests: XCTestCase {
-    /// A synthesis queued mid-stream completes BEFORE the stream finishes —
-    /// i.e. it ran in a between-deltas gap, not after the chat released the tail.
+    /// A synthesis queued mid-stream runs in the between-deltas gap — before
+    /// the language model emits its finished event — not after the chat
+    /// released the tail. Both markers are logged on the engine's serialized
+    /// path, so their order is deterministic.
     func testInterleavedSynthesisRunsBetweenDeltas() async throws {
-        let llm = GatedPacedModel()
-        let engine = GloamEngine(provider: FakeProvider(),
-                                 languageProvider: SingleModelLanguageProvider(model: llm))
         let log = EventLog()
+        let llm = GatedPacedModel(log: log)
+        let provider = FakeProvider()
+        provider.models[.qwen17B] = LoggingSpeechModel(log: log)
+        let engine = GloamEngine(provider: provider,
+                                 languageProvider: SingleModelLanguageProvider(model: llm))
 
         let streamTask = Task {
             for try await event in await engine.chatStream(
                 backend: .qwen3_1_7b, request: ChatRequest(messages: [.init(role: .user, content: "hi")])) {
-                switch event {
-                case .delta(let t): await log.add("delta:\(t)")
-                case .finished: await log.add("finished")
-                }
+                if case .delta(let t) = event { await log.add("delta:\(t)") }
             }
         }
 
         // Wait until the first delta arrived (stream is now parked on the gate).
-        for _ in 0..<100 {
+        for _ in 0..<200 {
             if await log.contains("delta:one.") { break }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -71,20 +89,24 @@ final class InterleavedSynthesisTests: XCTestCase {
         let synthTask = Task {
             _ = try await engine.synthesizeInterleaved(
                 backend: .qwen17B, request: SynthesisRequest(text: "one."))
-            await log.add("synth-done")
         }
-        // Let the request reach the engine's queue before un-parking the model.
-        try await Task.sleep(for: .milliseconds(100))
+        // Un-park the model only once the request is demonstrably queued.
+        for _ in 0..<200 {
+            if await engine._pendingInterleavedCount() > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let queued = await engine._pendingInterleavedCount()
+        XCTAssertEqual(queued, 1, "synthesis request never reached the interleave queue")
         llm.openGate.yield()
 
         try await synthTask.value
         try await streamTask.value
 
         let events = await log.events
-        let synthIdx = try XCTUnwrap(events.firstIndex(of: "synth-done"))
-        let finishedIdx = try XCTUnwrap(events.firstIndex(of: "finished"))
+        let synthIdx = try XCTUnwrap(events.firstIndex(of: "synth-run:one."))
+        let finishedIdx = try XCTUnwrap(events.firstIndex(of: "emit-finished"))
         XCTAssertLessThan(synthIdx, finishedIdx,
-                          "interleaved synthesis must complete while the stream is active, got \(events)")
+                          "synthesis must run in a token gap, before the stream finishes; got \(events)")
     }
 
     /// With no active chat stream, synthesizeInterleaved is plain synthesize.
