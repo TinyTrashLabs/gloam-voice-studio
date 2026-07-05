@@ -61,13 +61,13 @@ struct ContentView: View {
             ToolbarItem(placement: .automatic) {
                 HStack(spacing: 6) {
                     ProgressView(value: dl.fraction).frame(width: 56)
-                    Text("\(dl.backend.rawValue) \(Int(dl.fraction * 100))%")
+                    Text("\(dl.label) \(Int(dl.fraction * 100))%")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(Brand.fgDim)
                         .lineLimit(1).fixedSize()
                 }
                 .padding(.horizontal, 9).padding(.vertical, 2)
-                .help("Downloading \(dl.backend.rawValue)…")
+                .help("Downloading \(dl.label)…")
             }
             if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
         }
