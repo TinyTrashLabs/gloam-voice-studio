@@ -94,9 +94,12 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         return params
     }
 
-    func complete(_ request: ChatRequest) async throws -> ChatResult {
-        let start = Date()
-
+    /// Builds the ChatSession + final user turn for a request. Shared by
+    /// complete() and stream(). Mutating steps (system-turn merge, thinking
+    /// suppression, final-turn reinforcement) are unchanged from the original
+    /// complete() implementation.
+    private func makeSession(_ request: ChatRequest) throws
+        -> (session: ChatSession, lastUser: String) {
         // 1. Thinking-off via tokenizer chat-template flag.
         var additionalContext: [String: any Sendable] = [:]
         if request.disableThinking { additionalContext["enable_thinking"] = false }
@@ -140,52 +143,77 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             }
         }
 
-        let params = Self.generateParameters(for: request)
-
         let toolSpecs: [ToolSpec]? = try request.tools.map { try $0.map { try toolSpec(from: $0) } }
 
         let session = ChatSession(
             container,
             instructions: instructions,
             history: history,
-            generateParameters: params,
+            generateParameters: Self.generateParameters(for: request),
             additionalContext: additionalContext.isEmpty ? nil : additionalContext,
             tools: toolSpecs)
+        return (session, lastUser)
+    }
 
-        var rawText = ""
-        var toolCalls: [LLMToolCall] = []
-        var promptTokens = 0
-        var completionTokens = 0
-
-        for try await generation in session.streamDetails(to: lastUser, images: [], videos: []) {
-            switch generation {
-            case .chunk(let t):
-                rawText += t
-            case .toolCall(let call):
-                // NOTE: mlx-swift-lm v3.31.3 (issue #259) does NOT parse Gemma-4 tool calls —
-                // ToolCallFormat.infer() exact-matches "gemma" and misses "gemma4", so on Gemma
-                // backends tool syntax leaks into the .chunk text and this branch never fires.
-                // Qwen tool-calling works. Until fixed upstream, prefer Qwen for native tool-call
-                // use, or parse JSON-from-text for Gemma.
-                let argsData = (try? JSONSerialization.data(
-                    withJSONObject: jsonObject(call.function.arguments))) ?? Data("{}".utf8)
-                toolCalls.append(LLMToolCall(
-                    name: call.function.name,
-                    argumentsJSON: String(decoding: argsData, as: UTF8.self)))
-            case .info(let info):
-                promptTokens = info.promptTokenCount
-                completionTokens = info.generationTokenCount
-            }
+    func complete(_ request: ChatRequest) async throws -> ChatResult {
+        for try await event in stream(request) {
+            if case .finished(let result) = event { return result }
         }
+        // stream() always yields .finished before finishing; reaching here
+        // means the task was cancelled mid-generation.
+        throw CancellationError()
+    }
 
-        // 4. Final safety net — strip any leaked <think>…</think> block.
-        let cleaned = request.disableThinking ? stripThinking(rawText) : rawText
-
-        return ChatResult(
-            text: cleaned,
-            toolCalls: toolCalls,
-            usage: ChatUsage(promptTokens: promptTokens, completionTokens: completionTokens),
-            wallSeconds: Date().timeIntervalSince(start))
+    func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                let start = Date()
+                do {
+                    let (session, lastUser) = try self.makeSession(request)
+                    var rawText = ""
+                    var toolCalls: [LLMToolCall] = []
+                    var promptTokens = 0
+                    var completionTokens = 0
+                    var tokensPerSecond: Double?
+                    for try await generation in session.streamDetails(
+                        to: lastUser, images: [], videos: []) {
+                        try Task.checkCancellation()
+                        switch generation {
+                        case .chunk(let t):
+                            rawText += t
+                            continuation.yield(.delta(t))
+                        case .toolCall(let call):
+                            // NOTE: mlx-swift-lm v3.31.3 (issue #259) does NOT parse
+                            // Gemma-4 tool calls — see the original comment in git
+                            // history; Qwen tool-calling works.
+                            let argsData = (try? JSONSerialization.data(
+                                withJSONObject: jsonObject(call.function.arguments)))
+                                ?? Data("{}".utf8)
+                            toolCalls.append(LLMToolCall(
+                                name: call.function.name,
+                                argumentsJSON: String(decoding: argsData, as: UTF8.self)))
+                        case .info(let info):
+                            promptTokens = info.promptTokenCount
+                            completionTokens = info.generationTokenCount
+                            tokensPerSecond = info.tokensPerSecond
+                        }
+                    }
+                    // Final safety net — strip any leaked <think>…</think> block.
+                    let cleaned = request.disableThinking ? stripThinking(rawText) : rawText
+                    continuation.yield(.finished(ChatResult(
+                        text: cleaned,
+                        toolCalls: toolCalls,
+                        usage: ChatUsage(promptTokens: promptTokens,
+                                         completionTokens: completionTokens),
+                        wallSeconds: Date().timeIntervalSince(start),
+                        tokensPerSecond: tokensPerSecond)))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     /// Build an OpenAI-shaped `ToolSpec` ([String: any Sendable]) for the tokenizer.
