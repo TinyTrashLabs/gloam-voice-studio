@@ -198,12 +198,29 @@ public enum APIRouter {
                                detail: "\(backend.rawValue) requires a preset 'speaker'")
             }
 
+            // Resolve `voice` + `emotion` to an acted `<voice>-<emotion>` variant clip
+            // when one exists (e.g. "ogre" + "excited" → the ogre-excited clip); else
+            // fall back to the base voice — the "normal" read. `emotion` omitted or
+            // "neutral" always uses the base. A variant clip already carries its
+            // emotion, so the live knob is left neutral; on the base clip, `emotion`
+            // still drives the model knob (chatterbox exaggeration / fish temperature).
             var refPath: String? = nil
             var refText: String? = nil
-            if let voice = req.voice, let found = try? deps.voices.get(voice) {
-                refPath = found.refURL.path
-                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+            var usedVariant = false
+            if let voice = req.voice {
+                let emo = req.emotion?.lowercased()
+                let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
+                if let variant, let found = try? deps.voices.get(variant) {
+                    refPath = found.refURL.path
+                    refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                    usedVariant = true
+                } else if let found = try? deps.voices.get(voice) {
+                    refPath = found.refURL.path
+                    refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                }
             }
+            let knobEmotion = usedVariant ? Emotion.neutral
+                : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
             do {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
@@ -213,7 +230,7 @@ public enum APIRouter {
                             backend: backend,
                             request: SynthesisRequest(
                                 text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
-                                emotion: req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral,
+                                emotion: knobEmotion,
                                 speed: req.speed ?? 1.0,
                                 temperatureOverride: req.temperature,
                                 exaggerationOverride: req.exaggeration,

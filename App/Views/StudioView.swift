@@ -129,6 +129,60 @@ struct StudioView: View {
         }
     }
 
+    /// The delivery control for the current backend's emotion mechanism: a
+    /// continuous model-native knob for `.liveKnob` (what the model actually takes),
+    /// the acted-variant emotion picker for `.variantClipOnly`, the live inline
+    /// `[marker]` picker for `.inlineMarker` (Fish), nothing for `.textDriven`.
+    @ViewBuilder
+    private func deliveryControls(_ controls: ControlSurface) -> some View {
+        @Bindable var model = model
+        switch model.backend.emotionMechanism {
+        case .liveKnob(.exaggeration):
+            if let r = controls.knobs.exaggeration {
+                knobRow("Exaggeration", $model.exaggerationOverride, r,
+                        desc: "Emotional intensity — Chatterbox's exaggeration (~0.3–0.7 typical). "
+                            + "Lower CFG weight in Advanced as you push this up.")
+            }
+        case .liveKnob(.temperature):
+            if let r = controls.knobs.temperature {
+                knobRow("Dynamics", $model.temperatureOverride, r,
+                        desc: "Delivery energy — sampling temperature. Higher is livelier and less "
+                            + "predictable. Fish's emotion itself comes from the inline [tags] above.")
+            }
+        case .variantClipOnly:
+            VStack(alignment: .leading, spacing: 4) {
+                HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
+                emotionPicker
+                Text("Switches to an acted “-emotion” voice variant when one exists — add them via "
+                     + "New Emotion Variant, or bake them in Create Voice.")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .inlineMarker:
+            // Emotion lives in the inline `[tags]` above (TagChipsView) — the full,
+            // trained Fish vocabulary. No separate picker here (that duplicated it).
+            Text("Emotion & sounds: use the [tags] above — click to insert, or type them "
+                 + "inline. Dynamics (temperature) is in Advanced.")
+                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                .fixedSize(horizontal: false, vertical: true)
+        case .textDriven:
+            EmptyView()
+        }
+    }
+
+    /// Knobs minus the live emotion knob (surfaced as the primary delivery control),
+    /// so the Advanced disclosure never shows a second control for the same parameter.
+    private func advancedOnlyKnobs(_ k: Knobs, mechanism: EmotionMechanism) -> Knobs {
+        var out = k
+        if case .liveKnob(let knob) = mechanism {
+            switch knob {
+            case .temperature: out.temperature = nil
+            case .exaggeration: out.exaggeration = nil
+            }
+        }
+        return out
+    }
+
     @ViewBuilder
     private var speedControls: some View {
         @Bindable var model = model
@@ -170,7 +224,7 @@ struct StudioView: View {
 
     private func hasAnyKnob(_ k: Knobs) -> Bool {
         k.temperature != nil || k.topP != nil || k.topK != nil
-            || k.repetitionPenalty != nil || k.exaggeration != nil
+            || k.repetitionPenalty != nil || k.exaggeration != nil || k.cfgWeight != nil
     }
 
     @ViewBuilder
@@ -207,6 +261,11 @@ struct StudioView: View {
                 if let r = knobs.exaggeration {
                     knobRow("Exaggeration", $model.exaggerationOverride, r,
                             desc: "Drives Chatterbox's emotional intensity.")
+                }
+                if let r = knobs.cfgWeight {
+                    knobRow("CFG weight", $model.cfgWeight, r,
+                            desc: "Chatterbox guidance strength. Lower it (~0.3) as Exaggeration rises "
+                                + "so pacing doesn't rush.")
                 }
                 HStack {
                     Spacer()
@@ -248,7 +307,7 @@ struct StudioView: View {
         case .qwenCustom:
             "Pick a built-in Speaker, then describe how it should talk. The identity stays fixed; your Direction shapes the delivery."
         case .fishS2Pro:
-            "Clone a voice (optional) and shape delivery with Emotion + Temperature. Free-text Direction isn't supported here."
+            "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
         case .chatterbox:
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:
@@ -417,15 +476,16 @@ struct StudioView: View {
                         .help("Language of your text. Auto detects it.")
                 }
             }
-            // Emotion chips (fish/chatterbox/turbo)
-            if controls.emotionChips {
-                HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
-                emotionPicker
-            }
+            // Delivery — the model-native continuous knob for liveKnob backends
+            // (Exaggeration / Dynamics); the acted-variant picker for variantClipOnly;
+            // nothing for textDriven (the Direction box is the control).
+            deliveryControls(controls)
             speedControls
-            // Advanced knob sliders
-            if hasAnyKnob(controls.knobs) {
-                advancedKnobs(controls.knobs)
+            // Advanced — remaining sampling knobs. The live knob is surfaced above,
+            // so it's filtered out here to avoid two controls for one parameter.
+            let advKnobs = advancedOnlyKnobs(controls.knobs, mechanism: model.backend.emotionMechanism)
+            if hasAnyKnob(advKnobs) {
+                advancedKnobs(advKnobs)
             }
         }
         .padding(12)

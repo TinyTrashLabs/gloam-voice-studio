@@ -1,10 +1,16 @@
 import EngineKit
 import SwiftUI
 
+/// Top-level main-pane section. `Studio` speaks with reusable voices; `createVoice`
+/// is the Voice Foundry where `qwen3-design` mints new ones.
+enum StudioSection: String { case studio, createVoice }
+
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var historyVisible = false
     @State private var modelPickerOpen = false
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    private var section: StudioSection { StudioSection(rawValue: sectionRaw) ?? .studio }
 
     var body: some View {
         @Bindable var model = model
@@ -13,9 +19,15 @@ struct ContentView: View {
                 .frame(width: 248)
                 .background(Brand.ink2)
             Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
-            StudioView()
-                .frame(maxWidth: .infinity)
-                .background(Brand.ink)
+            Group {
+                if section == .createVoice {
+                    CreateVoiceView()
+                } else {
+                    StudioView()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .background(Brand.ink)
             if historyVisible {
                 // Floating drawer: elevated surface + leading shadow so it reads
                 // as sliding over the bench rather than mirroring the library.
@@ -88,6 +100,11 @@ struct ContentView: View {
                 }
         }
 
+        // 2b. Resident model + app RAM — always visible so you can see and unload
+        //     whatever is loaded, including qwen3-design (the Foundry loads it, but it
+        //     isn't in the picker). This is the RAM-management surface on the top bar.
+        ToolbarItem(placement: .automatic) { RAMChip() }
+
         if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
 
         // 3. API server indicator — clicking selects the API Server tab first
@@ -131,7 +148,9 @@ struct ContentView: View {
     // tokenization, and uninitialized S3Gen attention biases, all in the vendored
     // mlx-audio-swift fork).
     private var pickerBackends: [BackendID] {
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
+        // qwen3-design is intentionally absent — it's Creation-only, in the Voice
+        // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
     }
 
     private func modelDisplayName(_ b: BackendID) -> String {
@@ -219,6 +238,29 @@ struct ContentView: View {
         // edge (otherwise it hugs the curve and reads as bleeding over).
         .padding(.horizontal, 9)
         .padding(.vertical, 2)
+        // Make the WHOLE chip tappable — without this the Button only registers on
+        // the opaque name text, so clicking the chevron/spacing did nothing.
+        .contentShape(Rectangle())
+    }
+
+    /// Load/Unload for the Foundry's qwen3-design — residency only (never sets the
+    /// Studio backend), so it stays Creation-only while still being manageable here.
+    @ViewBuilder
+    private var foundryLoadButton: some View {
+        if model.loadedBackend == .qwenDesign {
+            Button("Unload") { Task { await model.unloadModel() }; modelPickerOpen = false }
+                .font(.caption).disabled(model.isGenerating || model.modelOpInFlight)
+        } else {
+            switch model.downloads.state(for: .qwenDesign) {
+            case .ready:
+                Button("Load") { Task { await model.loadModel(.qwenDesign) }; modelPickerOpen = false }
+                    .font(.caption).disabled(model.modelOpInFlight)
+            case .notDownloaded, .failed:
+                Button("Download") { model.downloads.download(.qwenDesign) }.font(.caption)
+            case .downloading:
+                ProgressView().controlSize(.small)
+            }
+        }
     }
 
     /// Popover contents for the model chooser: one row per backend (dot + name +
@@ -260,6 +302,20 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .disabled(model.modelOpInFlight)
             }
+            // Voice Foundry model — residency only. It's Creation-only, so this row
+            // loads/unloads qwen3-design WITHOUT making it the Studio speak-backend.
+            Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
+            HStack(spacing: 8) {
+                dot(statusDot(for: .qwenDesign))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("qwen3-design").foregroundStyle(Brand.fg)
+                    Text("Create Voice · " + modelStateText(.qwenDesign))
+                        .font(.caption2).foregroundStyle(Brand.fgDim)
+                }
+                Spacer(minLength: 12)
+                foundryLoadButton
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
             Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
             if let loaded = model.loadedBackend {
                 Button {
@@ -282,6 +338,34 @@ struct ContentView: View {
         .padding(8)
         .frame(width: 260)
         .background(Brand.ink2)
+    }
+}
+
+/// Resident-model + app-RAM chip, as its OWN View so it re-renders reliably when
+/// `loadedBackend`/`memGB` change — toolbar content built from a parent's computed
+/// property often won't observe @Observable changes. Shows whatever backend is
+/// actually loaded (Foundry's qwen3-design, a bake's fish/chatterbox, …); click unloads.
+struct RAMChip: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        // Pure indicator — NOT a button. Load/unload lives in the model picker
+        // popover (the "regular menu"); an accidental click here must never evict a
+        // model. Shows the resident model + app RAM at a glance.
+        HStack(spacing: 5) {
+            Image(systemName: "memorychip").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
+            if let loaded = model.loadedBackend {
+                Text(loaded.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
+                    .lineLimit(1).fixedSize()
+            }
+            Text(String(format: "%.1f GB", model.memGB))
+                .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 2)
+        .help(model.loadedBackend != nil
+              ? "\(model.loadedBackend!.rawValue) resident · "
+                + String(format: "%.2f GB", model.memGB) + " app memory — load/unload in the model picker"
+              : String(format: "%.2f GB", model.memGB) + " app memory · no model resident")
+        .accessibilityIdentifier("ram-chip")
     }
 }
 
