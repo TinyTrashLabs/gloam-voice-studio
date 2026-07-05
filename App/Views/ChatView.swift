@@ -119,6 +119,10 @@ struct ChatView: View {
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                // Start at the bottom (latest messages) on conversation switch
+                // and stay pinned as the transcript grows — covers the user's
+                // own just-sent bubble before the first token arrives.
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: chat.streamingText) {
                     proxy.scrollTo("streaming-bubble", anchor: .bottom)
                 }
@@ -179,6 +183,7 @@ struct ChatView: View {
                 Button { model.chat.stop() } label: {
                     Image(systemName: "stop.fill")
                 }
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("chat-stop")
                 .help("Stop generating / speaking")
             } else {
