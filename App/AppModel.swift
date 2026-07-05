@@ -485,9 +485,16 @@ final class AppModel {
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            guard let self, !self.isGenerating else { return }
+            guard let self,
+                  !self.isGenerating,
+                  !self.chat.isStreaming,
+                  !self.chat.speech.isSpeaking
+            else { return }
             let engine = self.engine
-            Task { await engine.unload() }
+            Task {
+                await engine.unload()
+                await engine.unloadLLM()
+            }
         }
         source.resume()
         memoryPressureSource = source
