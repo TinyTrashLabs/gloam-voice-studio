@@ -93,39 +93,35 @@ struct ChatView: View {
     private func transcriptColumn(voice: VoiceMeta) -> some View {
         @Bindable var chat = model.chat
         return VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(chat.current?.messages ?? []) { message in
-                            bubble(message, voice: voice)
-                        }
-                        if chat.isStreaming {
-                            bubble(ChatMessage(id: "streaming", role: "assistant",
-                                               text: chat.streamingText,
-                                               createdAt: ""),
-                                   voice: voice, isStreamingBubble: true)
-                                .id("streaming-bubble")
-                        }
-                        if let error = chat.chatError {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.red)
-                        }
-                        if let warning = chat.speechWarning {
-                            Label(warning, systemImage: "speaker.slash")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(chat.current?.messages ?? []) { message in
+                        bubble(message, voice: voice)
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if chat.isStreaming {
+                        bubble(ChatMessage(id: "streaming", role: "assistant",
+                                           text: chat.streamingText,
+                                           createdAt: ""),
+                               voice: voice, isStreamingBubble: true)
+                            .id("streaming-bubble")
+                    }
+                    if let error = chat.chatError {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.red)
+                    }
+                    if let warning = chat.speechWarning {
+                        Label(warning, systemImage: "speaker.slash")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
-                // Start at the bottom (latest messages) on conversation switch
-                // and stay pinned as the transcript grows — covers the user's
-                // own just-sent bubble before the first token arrives.
-                .defaultScrollAnchor(.bottom)
-                .onChange(of: chat.streamingText) {
-                    proxy.scrollTo("streaming-bubble", anchor: .bottom)
-                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Start at the bottom (latest messages) on conversation switch and
+            // stay pinned as the transcript grows — covers the user's own
+            // just-sent bubble before the first token arrives, and politely
+            // unpins if the user scrolls up (no onChange needed to reinforce it).
+            .defaultScrollAnchor(.bottom)
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
             composer
         }

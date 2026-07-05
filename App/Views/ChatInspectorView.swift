@@ -120,6 +120,10 @@ struct ChatInspectorView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 70)
                     .multilineTextAlignment(.trailing)
+                    .onChange(of: chat.sampling.maxTokens) {
+                        let clamped = min(max(chat.sampling.maxTokens, 1), 16_384)
+                        if clamped != chat.sampling.maxTokens { chat.sampling.maxTokens = clamped }
+                    }
             }
         }
     }

@@ -82,7 +82,8 @@ public final class ChatStore: @unchecked Sendable {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(conversation)
-            .write(to: directory.appendingPathComponent("\(conversation.id).json"))
+            .write(to: directory.appendingPathComponent("\(conversation.id).json"),
+                   options: .atomic)
     }
 
     public func list() -> [Conversation] {
