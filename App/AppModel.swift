@@ -34,6 +34,7 @@ final class AppModel {
     let downloads: ModelDownloadManager
     let speech: SpeechManager
     private var server: LocalAPIServer?
+    @ObservationIgnored private var serverSync: Task<Void, Never>?
 
     // Persisted settings (raw UserDefaults so @Observable views update via model)
     var backend: BackendID {
@@ -46,12 +47,12 @@ final class AppModel {
             }
         }
     }
-    var serverEnabled = false { didSet { Task { await syncServer() } } }
+    var serverEnabled = false { didSet { scheduleServerSync() } }
     /// LLM used by the chat tab (and as the API server's default LLM).
     var chatLLM: LLMBackendID {
         didSet {
             UserDefaults.standard.set(chatLLM.rawValue, forKey: "chatLLM")
-            Task { await syncServer() }   // keep the route's default in step
+            scheduleServerSync()   // keep the route's default in step
         }
     }
     var chatAutoSpeak: Bool {
@@ -444,18 +445,27 @@ final class AppModel {
 
     // MARK: server
 
-    private func syncServer() async {
+    /// Serializes server rebuilds: didSet triggers (serverEnabled, chatLLM) can
+    /// fire while a previous stop/start is suspended; chaining prevents two
+    /// LocalAPIServers from interleaving and leaking a bound instance.
+    private func scheduleServerSync() {
+        let previous = serverSync
+        serverSync = Task { [weak self] in
+            await previous?.value
+            await self?.performServerSync()
+        }
+    }
+
+    private func performServerSync() async {
         if serverEnabled {
             // Deps are immutable — rebuild the server when settings change so
             // defaultLLM/defaultBackend stay current.
             await server?.stop()
             server = nil
-            if server == nil {
-                server = LocalAPIServer(deps: APIDependencies(
-                    engine: engine, voices: voices, defaultBackend: backend,
-                    defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
-                    log: apiLog))
-            }
+            server = LocalAPIServer(deps: APIDependencies(
+                engine: engine, voices: voices, defaultBackend: backend,
+                defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
+                log: apiLog))
             try? await server?.start(port: serverPort)
         } else {
             await server?.stop()
