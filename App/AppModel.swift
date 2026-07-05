@@ -76,6 +76,7 @@ final class AppModel {
 
     // Engine residency (mirrored from the engine actor for the toolbar UI)
     var loadedBackend: BackendID?
+    var loadedLLM: LLMBackendID?
     var memGB: Double = 0
     var modelOpInFlight = false
     /// The specific backend currently being loaded, so only its row spins
@@ -344,7 +345,14 @@ final class AppModel {
 
     func refreshEngineStatus() async {
         loadedBackend = await engine.loadedBackend()
+        loadedLLM = await engine.loadedLLM()
         memGB = MemoryFootprint.currentGB()
+    }
+
+    /// Evict the resident chat LLM (Unload button in the chat inspector).
+    func unloadChatLLM() async {
+        await engine.unloadLLM()
+        await refreshEngineStatus()
     }
 
     func loadModel(_ backend: BackendID) async {

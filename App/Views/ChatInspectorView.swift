@@ -23,6 +23,7 @@ struct ChatInspectorView: View {
             .padding(14)
         }
         .task(id: model.selectedVoiceSlug) { loadPersonaDrafts() }
+        .task { await model.refreshEngineStatus() }
     }
 
     // MARK: model
@@ -52,8 +53,19 @@ struct ChatInspectorView: View {
                                              countStyle: .file)
         switch model.downloads.state(for: llm) {
         case .ready:
-            Label("On disk", systemImage: "checkmark.circle")
-                .font(.caption).foregroundStyle(.green)
+            HStack(spacing: 8) {
+                Label("On disk", systemImage: "checkmark.circle")
+                    .font(.caption).foregroundStyle(.green)
+                Spacer()
+                if model.loadedLLM == llm {
+                    Button("Unload") { Task { await model.unloadChatLLM() } }
+                        .font(.caption2)
+                        .accessibilityIdentifier("chat-llm-unload")
+                }
+                Button("Delete") { model.downloads.delete(llm) }
+                    .font(.caption2)
+                    .accessibilityIdentifier("chat-llm-delete")
+            }
         case .downloading(let fraction):
             HStack(spacing: 6) {
                 ProgressView(value: fraction)
