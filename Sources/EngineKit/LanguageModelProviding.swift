@@ -123,6 +123,13 @@ public protocol LanguageModel: AnyObject, Sendable {
     /// Implementations must deliver `.finished` exactly once, as the last event.
     func pacedStream(_ request: ChatRequest,
                      onEvent: @Sendable (ChatEvent) async -> Void) async throws
+
+    /// Blocks until any speculative computation the model pipelined ahead has
+    /// completed (MLX's TokenIterator launches the NEXT token's eval before
+    /// returning the current one). The engine calls this before running other
+    /// GPU work in a between-deltas gap so the two never overlap. No-op for
+    /// models that don't pipeline.
+    func awaitPendingComputation() async
 }
 
 public extension LanguageModel {
@@ -153,6 +160,8 @@ public extension LanguageModel {
             await onEvent(event)
         }
     }
+
+    func awaitPendingComputation() async {}
 }
 
 /// Loads language models. Real impl wraps mlx-swift-lm; tests use fakes.

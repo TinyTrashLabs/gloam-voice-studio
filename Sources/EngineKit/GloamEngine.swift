@@ -89,16 +89,16 @@ public actor GloamEngine {
                 let model = try await self.residentLanguageModel(for: backend)
                 try await model.pacedStream(request) { event in
                     continuation.yield(event)
-                    await self.drainInterleaved()
+                    await self.drainInterleaved(settling: model)
                 }
                 chatStreamActive = false
                 // A sentence queued between the last delta and finish must not
                 // strand its waiter — run leftovers while we still hold the tail.
-                await self.drainInterleaved()
+                await self.drainInterleaved(settling: model)
                 continuation.finish()
             } catch {
                 chatStreamActive = false
-                await self.drainInterleaved()
+                await self.drainInterleaved(settling: self.residentLLM?.model)
                 continuation.finish(throwing: error)
             }
         }
@@ -135,8 +135,13 @@ public actor GloamEngine {
 
     /// Runs every queued interleaved synthesis. Called from the chat stream's
     /// tail task between deltas (and once after the stream ends), so it is
-    /// already serialized with all other GPU work.
-    private func drainInterleaved() async {
+    /// already serialized with all other GPU work. `settling` is asked to
+    /// finish any computation it pipelined ahead (MLX evals the next token
+    /// speculatively) before TTS work touches the GPU — but only when there
+    /// is actually work queued, preserving the pipelining win otherwise.
+    private func drainInterleaved(settling model: (any LanguageModel)? = nil) async {
+        guard !pendingInterleaved.isEmpty else { return }
+        await model?.awaitPendingComputation()
         while !pendingInterleaved.isEmpty {
             let item = pendingInterleaved.removeFirst()
             do {

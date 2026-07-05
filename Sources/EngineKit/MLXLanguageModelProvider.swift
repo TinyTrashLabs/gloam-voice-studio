@@ -221,8 +221,14 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
             var rawText = ""
             var completionTokens = 0
             var generationStart: Date?
-            // Pull-based decode: computing the next token happens inside next(),
-            // so the GPU is idle for exactly as long as onEvent keeps us waiting.
+            // Pull-based decode. Note next() pipelines: it launches asyncEval
+            // of the FOLLOWING token before returning this one, so the gap is
+            // only truly GPU-idle after awaitPendingComputation() — the engine
+            // calls it before interleaving synthesis. The synchronize below
+            // also settles the dangling eval a stop-token break leaves behind
+            // (the library's own loop does the same; unsettled tasks hit
+            // scheduler-teardown assertions).
+            defer { MLX.Stream().synchronize() }
             while let token = iterator.next() {
                 try Task.checkCancellation()
                 if generationStart == nil { generationStart = Date() }
@@ -247,6 +253,12 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
                 tokensPerSecond: generationSeconds > 0
                     ? Double(completionTokens) / generationSeconds : nil)))
         }
+    }
+
+    func awaitPendingComputation() async {
+        // Settle the pipelined next-token eval so interleaved TTS never
+        // overlaps LLM GPU work.
+        MLX.Stream().synchronize()
     }
 
     /// ChatSession-backed streaming, kept only for tool-calling requests (the

@@ -61,6 +61,9 @@ final class ChatController {
     private var liveSegmenter = LiveSpeechSegmenter()
     private var liveSentenceFeed: AsyncStream<String>.Continuation?
     private var liveSpokeAnything = false
+    /// The user replayed another message mid-stream — their choice wins; the
+    /// streaming reply must not auto-speak when it finishes.
+    private var liveSpeechInterrupted = false
 
     init(app: AppModel, store: ChatStore) {
         self.app = app
@@ -201,6 +204,14 @@ final class ChatController {
     /// Replay an assistant message (or speak it for the first time).
     func speak(_ message: ChatMessage) {
         guard let convo = current else { return }
+        // Replaying while a reply is streaming-and-speaking is a user
+        // override: close the live feed (its consumer is about to be
+        // cancelled — sentences yielded into a dead feed would silently
+        // vanish) and don't resume auto-speech for that reply on finish.
+        if liveSentenceFeed != nil {
+            endLiveSpeech()
+            liveSpeechInterrupted = true
+        }
         speechTask?.cancel()
         speech.stop()
         speakText(message.text, voiceSlug: convo.voiceSlug)
@@ -259,6 +270,10 @@ final class ChatController {
         guard isCurrent else { return }
         lastStats = stats
         guard app.chatAutoSpeak else { return }
+        if liveSpeechInterrupted {
+            liveSpeechInterrupted = false
+            return
+        }
         if liveSentenceFeed != nil {
             // Speak-while-generating was active: queue whatever the stream
             // hadn't completed yet, then close the feed.
@@ -317,6 +332,7 @@ final class ChatController {
         speech.stop()
         liveSegmenter = LiveSpeechSegmenter()
         liveSpokeAnything = false
+        liveSpeechInterrupted = false
         let (feed, continuation) = AsyncStream<String>.makeStream()
         liveSentenceFeed = continuation
         speechGeneration += 1
@@ -332,12 +348,12 @@ final class ChatController {
             for await sentence in feed {
                 if Task.isCancelled { return }
                 do {
-                    self.isSynthesizing = true
+                    self.setSynthesizing(true, ifGeneration: generation)
                     let result = try await self.app.synthesizeLine(
                         text: sentence, voiceSlug: voiceSlug,
                         emotion: .neutral, speed: 1.0, recordHistory: false,
                         interleaved: true)
-                    self.isSynthesizing = false
+                    self.setSynthesizing(false, ifGeneration: generation)
                     if Task.isCancelled { return }
                     let wav = WAVEncoder.encode(
                         pcm16: PCM16.data(from: result.samples),
@@ -345,7 +361,11 @@ final class ChatController {
                     self.speech.enqueue(wav: wav)
                     self.liveSpokeAnything = true
                 } catch {
-                    self.isSynthesizing = false
+                    self.setSynthesizing(false, ifGeneration: generation)
+                    // A Stop press cancels the stream's tail task, which can
+                    // reject the in-flight synthesis — that's the user's own
+                    // action, not a speech problem worth a warning banner.
+                    if error is CancellationError || Task.isCancelled { return }
                     self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
                     return
                 }
@@ -385,12 +405,12 @@ final class ChatController {
                     // Interleaved so a replay during an active stream plays in
                     // the next token gap instead of queueing behind the whole
                     // generation (identical to normal when nothing streams).
-                    self.isSynthesizing = true
+                    self.setSynthesizing(true, ifGeneration: generation)
                     let result = try await self.app.synthesizeLine(
                         text: sentence, voiceSlug: voiceSlug,
                         emotion: .neutral, speed: 1.0, recordHistory: false,
                         interleaved: true)
-                    self.isSynthesizing = false
+                    self.setSynthesizing(false, ifGeneration: generation)
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
                     if Task.isCancelled { return }
@@ -399,11 +419,18 @@ final class ChatController {
                         sampleRate: result.sampleRate)
                     self.speech.enqueue(wav: wav)
                 } catch {
-                    self.isSynthesizing = false
+                    self.setSynthesizing(false, ifGeneration: generation)
+                    if error is CancellationError || Task.isCancelled { return }
                     self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
                     return
                 }
             }
         }
+    }
+
+    /// Guarded write: a superseded (cancelled) speech task resuming from its
+    /// in-flight synthesis must not stomp the indicator a newer task owns.
+    private func setSynthesizing(_ value: Bool, ifGeneration generation: Int) {
+        if speechGeneration == generation { isSynthesizing = value }
     }
 }
