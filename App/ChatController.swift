@@ -262,6 +262,12 @@ final class ChatController {
     /// TTS backend + the conversation's voice; skips history (chat replies
     /// would flood it). TTS problems warn — they never lose the text reply.
     private func speakText(_ text: String, voiceSlug: String) {
+        // Cancel any speech already in flight — finishReply's auto-speak path
+        // calls this directly (without going through speak()'s cancel), and
+        // without it two replies' audio could interleave and an orphaned task
+        // would escape stop(). Harmless redundancy when speak() already did it.
+        speechTask?.cancel()
+        speech.stop()
         speechGeneration += 1
         let generation = speechGeneration
         speechTask = Task { [weak self] in
