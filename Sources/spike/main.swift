@@ -54,6 +54,10 @@ if CommandLine.arguments.dropFirst().first == "chat" {
         guard let flag = sub.firstIndex(of: "--speak"), sub.count > flag + 1 else { return nil }
         return sub[flag + 1]
     }()
+    let imageURL: URL? = {
+        guard let flag = sub.firstIndex(of: "--image"), sub.count > flag + 1 else { return nil }
+        return URL(fileURLWithPath: sub[flag + 1])
+    }()
 
     let parallel = sub.contains("--parallel")
     let languageProvider = MLXLanguageModelProvider(modelDirectoryResolver: { _ in llmDir })
@@ -69,7 +73,8 @@ if CommandLine.arguments.dropFirst().first == "chat" {
 
     do {
         let request = ChatRequest(
-            messages: [ChatTurn(role: .user, content: prompt)], maxTokens: 200)
+            messages: [ChatTurn(role: .user, content: prompt)], maxTokens: 200,
+            imageURLs: imageURL.map { [$0] })
         if parallel, ttsPath != nil {
             // Load TTS up front so only inference overlaps, never loads.
             _ = try await ttsEngine.synthesize(

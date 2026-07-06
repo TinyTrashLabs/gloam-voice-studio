@@ -33,7 +33,10 @@ public final class MLXLanguageModelProvider: LanguageModelProviding, @unchecked 
         // generation then runs identically (no images) via ChatSession. Dense
         // gemmas (e2b/e4b) and non-gemma models keep the default LLM path.
         let container: ModelContainer
-        if backend.family == .gemma, Self.isMoEConfig(dir) {
+        if backend.family == .gemma, Self.isMoEConfig(dir) || Self.hasVisionTower(dir) {
+            // VLM factory also whenever the checkpoint ships a vision tower:
+            // the generic loader builds a TEXT-ONLY gemma whose processor
+            // silently drops attached images ("I do not see an image").
             container = try await VLMModelFactory.shared.loadContainer(
                 from: dir, using: #huggingFaceTokenizerLoader())
         } else {
@@ -52,6 +55,15 @@ public final class MLXLanguageModelProvider: LanguageModelProviding, @unchecked 
     /// config.json (top-level or under `text_config`). MoE gemmas must load via
     /// the VLM factory; dense ones use the LLM factory. Reads the small config
     /// file only — no weights touched.
+    /// Whether the checkpoint is a unified multimodal gemma (vision tower in
+    /// config.json) — those must load via the VLM factory to see images.
+    private static func hasVisionTower(_ dir: URL) -> Bool {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return json["vision_config"] != nil
+    }
+
     private static func isMoEConfig(_ dir: URL) -> Bool {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
