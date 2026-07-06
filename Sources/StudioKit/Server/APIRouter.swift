@@ -39,6 +39,9 @@ public enum APIRouter {
 
         router.add(middleware: APILogMiddleware(log: deps.log))
 
+        // MCP: agents (Claude Code, Cursor, …) get list_voices + speak at /mcp.
+        MCPRoute.add(to: router, deps: deps)
+
         router.get("health") { _, _ in
             let loaded = await deps.engine.loadedBackend()
             return HealthResponse(

@@ -18,9 +18,16 @@ struct VoiceEditorForm: View {
     @Environment(AppModel.self) private var model
     @State private var name = ""
     @State private var refText = ""
-    @State private var refData: Data?
-    @State private var refDescription = "No reference yet"
+    /// Reference clips — several combine into one steadier reference on save.
+    @State private var refClips: [RefClip] = []
+    @State private var keepingExistingRef = false
     @State private var showRecorder = false
+
+    struct RefClip: Identifiable {
+        let id = UUID()
+        let data: Data
+        let label: String
+    }
     @State private var error: String?
     @State private var transcribing = false
     @State private var transcriptNote: String?
@@ -75,18 +82,43 @@ struct VoiceEditorForm: View {
 
             GroupBox {
                 VStack(spacing: 8) {
-                    Text(refDescription).font(.callout)
+                    if refClips.isEmpty {
+                        Text(keepingExistingRef ? "Keeping existing reference" : "No reference yet")
+                            .font(.callout)
+                    } else {
+                        ForEach(refClips) { clip in
+                            HStack(spacing: 6) {
+                                Image(systemName: "waveform").font(.caption)
+                                    .foregroundStyle(Brand.fgDim)
+                                Text(clip.label).font(.callout).lineLimit(1)
+                                Spacer()
+                                Button {
+                                    refClips.removeAll { $0.id == clip.id }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(Brand.fgFaint)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove this clip")
+                            }
+                        }
+                        if refClips.count > 1 {
+                            Text("Clips are combined into one reference — more "
+                                 + "material makes a steadier clone.")
+                                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                        }
+                    }
                     HStack {
-                        Button("Record…") { showRecorder = true }
+                        Button(refClips.isEmpty ? "Record…" : "Record another…") {
+                            showRecorder = true
+                        }
                         if UITestMode.isActive {
                             Button("Use Sample Reference") {
-                                refData = UITestMode.sampleReference()
-                                refDescription = "Sample reference (2.0 s)"
-                                autoTranscribe()
+                                addClip(UITestMode.sampleReference(), label: "Sample reference (2.0 s)")
                             }
                             .accessibilityIdentifier("use-sample-ref")
                         }
-                        Text("or drop an audio file").foregroundStyle(.secondary)
+                        Text("or drop audio files").foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -105,15 +137,13 @@ struct VoiceEditorForm: View {
                 }
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(name.isEmpty || (editingSlug == nil && refData == nil))
+                    .disabled(name.isEmpty || (editingSlug == nil && refClips.isEmpty))
                     .accessibilityIdentifier("voice-save")
             }
         }
         .sheet(isPresented: $showRecorder) {
             RecorderView { data, seconds in
-                refData = data
-                refDescription = String(format: "Recorded clip (%.1f s)", seconds)
-                autoTranscribe()
+                addClip(data, label: String(format: "Recorded clip (%.1f s)", seconds))
             }
         }
         .onAppear { loadExisting() }
@@ -134,10 +164,12 @@ struct VoiceEditorForm: View {
         }
     }
 
-    private func autoTranscribe() {
-        guard let refData,
-              refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return }   // never clobber text the user typed
+    private func addClip(_ data: Data, label: String) {
+        refClips.append(RefClip(data: data, label: label))
+        autoTranscribe(data)
+    }
+
+    private func autoTranscribe(_ clipData: Data) {
         transcribing = true
         transcriptNote = nil
         Task { @MainActor in
@@ -149,12 +181,14 @@ struct VoiceEditorForm: View {
             do {
                 let transcriber = model.speech.makeTranscriber()
                 let transcript = try await transcriber.transcribe(
-                    wavData: refData,
+                    wavData: clipData,
                     languageHint: model.speech.effectiveLanguageHint)
-                if refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    refText = transcript.text
-                    transcriptNote = "Auto-transcribed — review before saving."
-                }
+                // Append per clip (never clobber what the user typed): the
+                // combined reference's transcript is the clips' texts in order.
+                let existing = refText.trimmingCharacters(in: .whitespacesAndNewlines)
+                refText = existing.isEmpty ? transcript.text
+                    : existing + " " + transcript.text
+                transcriptNote = "Auto-transcribed — review before saving."
             } catch {
                 transcriptNote = "Couldn't auto-transcribe (\(model.describeAny(error))) — type it manually."
             }
@@ -170,35 +204,49 @@ struct VoiceEditorForm: View {
         }
         name = found.meta.name
         refText = found.meta.refText
-        refDescription = "Keeping existing reference"
+        keepingExistingRef = true
     }
 
     private func loadDrop(_ providers: [NSItemProvider]) {
-        guard let provider = providers.first else { return }
-        _ = provider.loadObject(ofClass: URL.self) { url, _ in
-            guard let url else { return }
-            DispatchQueue.main.async {
-                do {
-                    try RefAudioValidator.validate(url: url)
-                    refData = try Data(contentsOf: url)
-                    refDescription = url.lastPathComponent
-                    error = nil
-                    autoTranscribe()
-                } catch { self.error = "\(error)" }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async {
+                    do {
+                        try RefAudioValidator.validate(url: url)
+                        let data = try Data(contentsOf: url)
+                        error = nil
+                        addClip(data, label: url.lastPathComponent)
+                    } catch { self.error = "\(error)" }
+                }
             }
+        }
+    }
+
+    /// The clips resolved into one reference WAV: single clip passes through,
+    /// several combine (resampled, normalized, gap-joined); none = nil (edit
+    /// mode keeps the existing reference).
+    private func resolvedReference() throws -> Data? {
+        switch refClips.count {
+        case 0: return nil
+        case 1: return refClips[0].data
+        default:
+            return try RefAudioCombiner.combine(
+                clips: refClips.map { ($0.data, "") }).wav
         }
     }
 
     private func save() {
         do {
+            let refWav = try resolvedReference()
             if let slug = editingSlug {
                 // updateVoice (not voices.update): a rename re-slugs, and the
                 // wrapper migrates chats + emotion variants + selection.
                 _ = try model.updateVoice(slug, name: name, refText: refText,
-                                          refWav: refData)
+                                          refWav: refWav)
                 onSaved(nil)
             } else {
-                let meta = try model.voices.save(name: name, refWav: refData ?? Data(),
+                let meta = try model.voices.save(name: name, refWav: refWav ?? Data(),
                                                  refText: refText)
                 model.voicesVersion += 1
                 onSaved(meta.slug)

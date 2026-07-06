@@ -77,3 +77,38 @@ final class LiveSpeechSegmenterTests: XCTestCase {
         XCTAssertEqual(seg.finish(finalText: "whatever"), [])
     }
 }
+
+final class SplitterAbbreviationTests: XCTestCase {
+    func testDottedAbbreviationsDoNotSplit() {
+        XCTAssertEqual(SentenceSplitter.split("See you at 5 p.m. tomorrow, e.g. after work."),
+                       ["See you at 5 p.m. tomorrow, e.g. after work."])
+    }
+
+    func testPlainAmStillEndsASentence() {
+        // "a.m" is matched with its dots — bare "am" must not be swallowed.
+        XCTAssertEqual(SentenceSplitter.split("Here I am. Ready now."),
+                       ["Here I am.", "Ready now."])
+    }
+
+    func testBusinessAbbreviationsDoNotSplit() {
+        XCTAssertEqual(SentenceSplitter.split("Acme Inc. was founded on Baker Blvd. in 1999."),
+                       ["Acme Inc. was founded on Baker Blvd. in 1999."])
+    }
+}
+
+final class FadeEdgesTests: XCTestCase {
+    func testEdgesFadeAndMiddleUntouched() {
+        let samples = [Float](repeating: 1.0, count: 2400)   // 100ms @ 24k
+        let faded = AudioAssembler.fadeEdges(samples, sampleRate: 24_000)   // 8ms = 192
+        XCTAssertEqual(faded[0], 0, accuracy: 1e-6)
+        XCTAssertEqual(faded[faded.count - 1], 0, accuracy: 1e-6)
+        XCTAssertLessThan(faded[96], 1.0)                     // mid-ramp
+        XCTAssertEqual(faded[1200], 1.0, accuracy: 1e-6)      // middle untouched
+        XCTAssertEqual(faded.count, samples.count)
+    }
+
+    func testTinyClipDoesNotCrash() {
+        XCTAssertEqual(AudioAssembler.fadeEdges([0.5], sampleRate: 24_000).count, 1)
+        XCTAssertTrue(AudioAssembler.fadeEdges([], sampleRate: 24_000).isEmpty)
+    }
+}
