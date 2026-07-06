@@ -78,6 +78,13 @@ final class AppModel {
             scheduleServerSync()   // keep the route's default in step
         }
     }
+    /// Keep the resident TTS + LLM loaded through memory-pressure WARNINGS
+    /// (evict only on critical). Reloading a model costs ~10s each, so a
+    /// warning-level evict between chat turns makes every reply feel like a
+    /// cold start. Off = old behavior (evict on any pressure).
+    var keepModelsResident: Bool {
+        didSet { UserDefaults.standard.set(keepModelsResident, forKey: "keepModelsResident") }
+    }
     var chatAutoSpeak: Bool {
         didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
     }
@@ -228,6 +235,7 @@ final class AppModel {
         chatLLM = defaults.string(forKey: "chatLLM")
             .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
         chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
+        keepModelsResident = defaults.object(forKey: "keepModelsResident") as? Bool ?? true
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
             savedDirections = decoded
@@ -670,11 +678,18 @@ final class AppModel {
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            guard let self,
-                  !self.isGenerating,
-                  !self.chat.isStreaming,
-                  !self.chat.speech.isSpeaking
-            else { return }
+            guard let self else { return }
+            let critical = self.memoryPressureSource?.data.contains(.critical) == true
+            let busy = self.isGenerating || self.chat.isStreaming
+                || self.chat.speech.isSpeaking || self.chat.isSynthesizing
+            AppLog.memory.log(
+                "memory pressure \(critical ? "CRITICAL" : "warning", privacy: .public); busy=\(busy); keepResident=\(self.keepModelsResident)")
+            guard !busy else { return }
+            // Warnings are routine on a busy Mac; evicting on every one makes
+            // each chat turn a ~20s cold start (LLM + TTS reload). Keep both
+            // models resident unless it's critical or the user opted out.
+            guard critical || !self.keepModelsResident else { return }
+            AppLog.memory.log("evicting resident models (pressure)")
             let engine = self.engine
             Task {
                 await engine.unload()

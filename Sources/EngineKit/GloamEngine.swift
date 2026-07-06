@@ -1,4 +1,8 @@
 import Foundation
+import os
+
+/// Residency + timing log: `log stream --predicate 'subsystem == "fm.gloam.studio"'`.
+private let engineLog = Logger(subsystem: "fm.gloam.studio", category: "engine")
 
 /// Owns model lifecycle: one model resident at a time, all model work
 /// serialized through this actor (MLX streams/graphs are execution-context
@@ -39,8 +43,9 @@ public actor GloamEngine {
     /// Evicts the resident model and releases accelerator memory.
     /// Takes effect immediately; callers must not unload while a generation is in flight.
     public func unload() {
-        guard resident != nil else { return }
-        resident = nil
+        guard let resident else { return }
+        engineLog.log("unload TTS \(resident.backend.rawValue, privacy: .public)")
+        self.resident = nil
         provider.didEvictModel()
     }
 
@@ -48,8 +53,9 @@ public actor GloamEngine {
 
     /// Evicts the resident language model and releases accelerator memory.
     public func unloadLLM() {
-        guard residentLLM != nil else { return }
-        residentLLM = nil
+        guard let residentLLM else { return }
+        engineLog.log("unload LLM \(residentLLM.backend.rawValue, privacy: .public)")
+        self.residentLLM = nil
         languageProvider?.didEvictModel()
     }
 
@@ -85,6 +91,7 @@ public actor GloamEngine {
         let work = Task { [self] in
             await previous?.value
             chatStreamActive = true
+            engineLog.log("chat stream begin (\(backend.rawValue, privacy: .public))")
             do {
                 let model = try await self.residentLanguageModel(for: backend)
                 try await model.pacedStream(request) { event in
@@ -95,6 +102,7 @@ public actor GloamEngine {
                 // A sentence queued between the last delta and finish must not
                 // strand its waiter — run leftovers while we still hold the tail.
                 await self.drainInterleaved(settling: model)
+                engineLog.log("chat stream end")
                 continuation.finish()
             } catch {
                 chatStreamActive = false
@@ -158,7 +166,10 @@ public actor GloamEngine {
         if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
         guard let languageProvider else { throw EngineError.languageProviderUnavailable }
         unloadLLM()
+        let start = Date()
+        engineLog.log("loading LLM \(backend.rawValue, privacy: .public)…")
         let model = try await languageProvider.loadModel(backend: backend)
+        engineLog.log("loaded LLM \(backend.rawValue, privacy: .public) in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s")
         residentLLM = (backend, model)
         return model
     }
@@ -212,6 +223,7 @@ public actor GloamEngine {
         let start = Date()
         let raw = try await model.synthesize(plan)
         let wall = Date().timeIntervalSince(start)
+        engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
         return SynthesisResult(
             samples: SpeedAdjust.apply(raw, speed: request.speed),
             sampleRate: model.sampleRate,
@@ -223,7 +235,10 @@ public actor GloamEngine {
             return resident.model
         }
         unload()
+        let start = Date()
+        engineLog.log("loading TTS \(backend.rawValue, privacy: .public)…")
         let model = try await provider.loadModel(backend: backend)
+        engineLog.log("loaded TTS \(backend.rawValue, privacy: .public) in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s")
         resident = (backend, model)
         return model
     }
