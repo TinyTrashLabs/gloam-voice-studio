@@ -35,12 +35,23 @@ struct GloamVoiceStudioApp: App {
                     NotificationCenter.default.post(name: .gloamMigrate, object: nil)
                 }
             }
+            CommandGroup(replacing: .help) {
+                DocsMenuButton()
+                Link("Documentation on GitHub",
+                     destination: URL(string:
+                        "https://github.com/TinyTrashLabs/gloam-voice-studio/tree/main/docs")!)
+            }
         }
         Window("Transcribe Audio", id: "transcribe") {
             TranscribeWindow()
                 .environment(model)
                 .preferredColorScheme(.dark)
         }
+        Window("Documentation", id: "docs") {
+            DocsWindow()
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 900, height: 640)
         Settings {
             SettingsView().environment(model)
         }
@@ -52,5 +63,13 @@ private struct TranscribeMenuButton: View {
     var body: some View {
         Button("Transcribe Audio…") { openWindow(id: "transcribe") }
             .keyboardShortcut("t", modifiers: [.command, .shift])
+    }
+}
+
+private struct DocsMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Gloam Documentation") { openWindow(id: "docs") }
+            .keyboardShortcut("?", modifiers: .command)
     }
 }
