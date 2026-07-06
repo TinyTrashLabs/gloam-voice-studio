@@ -11,7 +11,15 @@ targets:
   GloamVoiceStudio:
     type: application
     platform: macOS
-    sources: [App]
+    sources:
+      - App
+      # Docs ship in the bundle so Help → Gloam Documentation works offline.
+      - path: docs
+        buildPhase: resources
+        includes:
+          - "app-guide.md"
+          - "api.md"
+          - "mcp.md"
     dependencies:
       - package: GloamVoiceStudioPackage
         product: EngineKit
