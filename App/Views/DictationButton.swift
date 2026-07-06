@@ -7,8 +7,13 @@ struct DictationButton: View {
     /// output while capturing (the chat's spoken replies were being dictated
     /// straight back into the composer).
     var onActiveChange: ((Bool) -> Void)?
+    /// Externally-owned controller, when the host needs to cancel dictation
+    /// itself (chat cancels on send). Defaults to a private one.
+    var externalController: DictationController?
     @Environment(AppModel.self) private var model
-    @State private var controller = DictationController()
+    @State private var ownController = DictationController()
+
+    private var controller: DictationController { externalController ?? ownController }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {

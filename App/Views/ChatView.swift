@@ -6,6 +6,20 @@ import SwiftUI
 /// LM Studio: conversation list | transcript + composer | inspector.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
+    /// Owned here (not by the DictationButton) so send can cancel an open mic:
+    /// sending mid-dictation must close capture — the echo guard would mute
+    /// the reply — and orphan the session so a late Whisper final can't write
+    /// the already-sent text back into the cleared draft.
+    @State private var dictation = DictationController()
+
+    /// Send path shared by ⏎ and the send button.
+    private func sendFromComposer() {
+        if dictation.isActive || dictation.isProcessing {
+            dictation.cancel()
+            model.chat.setMicCapture(false)
+        }
+        model.chat.send()
+    }
 
     var body: some View {
         @Bindable var chat = model.chat
@@ -93,42 +107,54 @@ struct ChatView: View {
     private func transcriptColumn(voice: VoiceMeta) -> some View {
         @Bindable var chat = model.chat
         return VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(chat.current?.messages ?? []) { message in
-                        bubble(message, voice: voice)
-                    }
-                    if chat.isStreaming {
-                        bubble(ChatMessage(id: "streaming", role: "assistant",
-                                           text: chat.streamingText,
-                                           createdAt: ""),
-                               voice: voice, isStreamingBubble: true)
-                            .id("streaming-bubble")
-                    }
-                    if let error = chat.chatError {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.red)
-                            Button("Retry") { model.chat.retry() }
-                                .font(.caption)
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .accessibilityIdentifier("chat-retry")
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(chat.current?.messages ?? []) { message in
+                            bubble(message, voice: voice)
                         }
+                        if chat.isStreaming {
+                            bubble(ChatMessage(id: "streaming", role: "assistant",
+                                               text: chat.streamingText,
+                                               createdAt: ""),
+                                   voice: voice, isStreamingBubble: true)
+                                .id("streaming-bubble")
+                        }
+                        if let error = chat.chatError {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Label(error, systemImage: "exclamationmark.triangle")
+                                    .font(.caption).foregroundStyle(.red)
+                                Button("Retry") { model.chat.retry() }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("chat-retry")
+                            }
+                        }
+                        if let warning = chat.speechWarning {
+                            Label(warning, systemImage: "speaker.slash")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        Color.clear.frame(height: 1).id("chat-bottom")
                     }
-                    if let warning = chat.speechWarning {
-                        Label(warning, systemImage: "speaker.slash")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Start at the bottom on conversation switch…
+                .defaultScrollAnchor(.bottom)
+                // …and stay pinned while a reply streams in — the passive
+                // anchor alone loses its pin once the streaming bubble starts
+                // growing, so reinforce it on every delta and new message.
+                .onChange(of: chat.streamingText) {
+                    proxy.scrollTo("chat-bottom", anchor: .bottom)
+                }
+                .onChange(of: chat.current?.messages.count) {
+                    withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                }
+                .onChange(of: chat.chatError) {
+                    withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                }
             }
-            // Start at the bottom (latest messages) on conversation switch and
-            // stay pinned as the transcript grows — covers the user's own
-            // just-sent bubble before the first token arrives, and politely
-            // unpins if the user scrolls up (no onChange needed to reinforce it).
-            .defaultScrollAnchor(.bottom)
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
             composer
         }
@@ -189,6 +215,9 @@ struct ChatView: View {
                         Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
                     }
                     .accessibilityIdentifier("chat-thinking")
+                } else if message.role == "assistant", model.chat.speech.isSpeaking {
+                    // Karaoke: follow the voice through the transcript.
+                    SpokenTextView(text: message.text, queue: model.chat.speech)
                 } else {
                     Text(message.text)
                         .textSelection(.enabled)
@@ -208,7 +237,8 @@ struct ChatView: View {
             // its own transcribing spinner meanwhile.) While the mic is open,
             // speech output is silenced so the reply can't dictate itself.
             DictationButton(text: $chat.draft,
-                            onActiveChange: { model.chat.setMicCapture($0) })
+                            onActiveChange: { model.chat.setMicCapture($0) },
+                            externalController: dictation)
                 .padding(.bottom, 10)
             TextField("Message \(voiceName())…", text: $chat.draft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -216,7 +246,7 @@ struct ChatView: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
                 .accessibilityIdentifier("chat-composer")
-                .onSubmit { model.chat.send() }
+                .onSubmit { sendFromComposer() }
             if chat.isStreaming || chat.speech.isSpeaking || chat.isSynthesizing {
                 // Busy cue alongside the stop control: EQ bars while the voice
                 // model renders or audio plays, dancing dots while the LLM
@@ -239,7 +269,7 @@ struct ChatView: View {
                 .accessibilityIdentifier("chat-stop")
                 .help("Stop generating / speaking")
             } else {
-                Button { model.chat.send() } label: {
+                Button { sendFromComposer() } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title3)
                 }
                 .buttonStyle(.plain)

@@ -88,6 +88,11 @@ final class AppModel {
     var keepModelsResident: Bool {
         didSet { UserDefaults.standard.set(keepModelsResident, forKey: "keepModelsResident") }
     }
+    /// Let the chat model reason (<think>) before answering. Reasoning shows
+    /// in the transcript but is always stripped from speech.
+    var chatThinking: Bool {
+        didSet { UserDefaults.standard.set(chatThinking, forKey: "chatThinking") }
+    }
     /// Chat context window (tokens). Caps how much conversation history is
     /// sent per turn — smaller = faster prefill and less memory, larger =
     /// longer memory. Clamped to the model's own limit when building requests.
@@ -261,6 +266,7 @@ final class AppModel {
             ?? .qwen06B
         chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
         chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
+        chatThinking = defaults.bool(forKey: "chatThinking")
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
             savedDirections = decoded

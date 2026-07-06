@@ -35,17 +35,20 @@ public struct LiveSpeechSegmenter {
         return complete
     }
 
-    /// The stream finished with its authoritative cleaned text; returns the
-    /// remaining unspoken sentences. Empty (and derailed) if the final text
-    /// disagrees with what was already spoken — stopping beats double-speaking.
+    /// The stream finished with its authoritative text; returns the remaining
+    /// unspoken sentences. Reasoning is stripped here too (the final text is
+    /// raw when thinking is enabled; idempotent when already clean). Empty
+    /// (and derailed) if the final text disagrees with what was already
+    /// spoken — stopping beats double-speaking.
     public mutating func finish(finalText: String) -> [String] {
         guard !derailed else { return [] }
-        guard finalText.hasPrefix(seenFiltered) else {
+        let cleaned = stripThinking(finalText)
+        guard cleaned.hasPrefix(seenFiltered) else {
             derailed = true
             return []
         }
-        buffer += finalText.dropFirst(seenFiltered.count)
-        seenFiltered = finalText
+        buffer += cleaned.dropFirst(seenFiltered.count)
+        seenFiltered = cleaned
         let out = SentenceSplitter.split(buffer)
         buffer = ""
         return out
