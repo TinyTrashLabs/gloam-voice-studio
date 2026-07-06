@@ -195,13 +195,14 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         let historyTurns = prepared.historyTurns
         let lastUser = prepared.lastUser
         let additionalContext = prepared.additionalContext
+        let imageURLs = request.imageURLs ?? []
         let params = Self.generateParameters(for: request)
 
         try await container.perform { context in
             var messages: [Chat.Message] = []
             if let instructions { messages.append(.system(instructions)) }
             messages.append(contentsOf: historyTurns.map(Self.chatMessage(from:)))
-            messages.append(.user(lastUser))
+            messages.append(.user(lastUser, images: imageURLs.map { .url($0) }))
             let userInput = UserInput(
                 chat: messages,
                 additionalContext: additionalContext.isEmpty ? nil : additionalContext)
@@ -284,7 +285,8 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         var completionTokens = 0
         var tokensPerSecond: Double?
         for try await generation in session.streamDetails(
-            to: prepared.lastUser, images: [], videos: []) {
+            to: prepared.lastUser,
+            images: (request.imageURLs ?? []).map { .url($0) }, videos: []) {
             try Task.checkCancellation()
             switch generation {
             case .chunk(let t):

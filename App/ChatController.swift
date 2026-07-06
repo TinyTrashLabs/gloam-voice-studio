@@ -30,6 +30,9 @@ final class ChatController {
     var conversations: [Conversation] = []
     var current: Conversation?
     var draft = ""
+    /// Image staged for the next send (vision models). Copied into the chat
+    /// attachments folder at attach time so the original can move/vanish.
+    var pendingImage: URL?
     var isStreaming = false
     var streamingText = ""
     /// A sentence is currently rendering through the TTS model (drives the
@@ -142,6 +145,8 @@ final class ChatController {
         draft = ""
         chatError = nil
         speechWarning = nil
+        let attachments = app.chatLLM.supportsVision ? pendingImage.map { [$0.path] } : nil
+        pendingImage = nil
         // Title from the first *user* message — a seeded persona greeting
         // shouldn't leave every new chat titled "New Chat".
         if !convo.messages.contains(where: { $0.role == "user" }) {
@@ -149,9 +154,26 @@ final class ChatController {
         }
         convo.messages.append(ChatMessage(
             id: UUID().uuidString, role: "user", text: text,
-            createdAt: ChatStore.timestamp()))
+            createdAt: ChatStore.timestamp(), attachments: attachments))
         commit(convo)
         startStream(for: convo)
+    }
+
+    /// Stage an image for the next send: copied into the conversation
+    /// attachments folder so the original file can move or disappear.
+    func attachImage(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let dir = store.directory.appendingPathComponent("attachments")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = dir.appendingPathComponent(
+                UUID().uuidString + "." + (url.pathExtension.isEmpty ? "png" : url.pathExtension))
+            try FileManager.default.copyItem(at: url, to: dest)
+            pendingImage = dest
+        } catch {
+            chatError = "Couldn't attach image: \(app.describeAny(error))"
+        }
     }
 
     /// Regenerate after a failed reply: drop trailing errored partials so the
@@ -278,6 +300,12 @@ final class ChatController {
         let window = min(app.chatContextTokens, app.chatLLM.contextTokens)
         let budget = max(window - sampling.maxTokens - 256, 512)
         let trimmed = ChatContextWindow.trim(turns: turns, budgetTokens: budget)
+        // Vision: only the LAST user turn's attachments ride along (v1 —
+        // earlier turns' images aren't re-encoded every request).
+        let images: [URL]? = app.chatLLM.supportsVision
+            ? convo.messages.last(where: { $0.role == "user" })?.attachments?
+                .map { URL(fileURLWithPath: $0) }
+            : nil
         return ChatRequest(
             messages: trimmed,
             temperature: sampling.temperature,
@@ -288,7 +316,8 @@ final class ChatController {
             repetitionPenalty: sampling.repetitionPenalty == 0 ? nil : sampling.repetitionPenalty,
             presencePenalty: sampling.presencePenalty == 0 ? nil : sampling.presencePenalty,
             frequencyPenalty: sampling.frequencyPenalty == 0 ? nil : sampling.frequencyPenalty,
-            disableThinking: !(app.chatThinking && app.chatLLM.thinkingSupport == .toggle))
+            disableThinking: !(app.chatThinking && app.chatLLM.thinkingSupport == .toggle),
+            imageURLs: images)
     }
 
     /// Resolve the conversation a stream was started for: prefer `current`,

@@ -23,14 +23,19 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
     public var stats: ChatMessageStats?
     /// true when the stream failed mid-reply; the partial text is kept.
     public var errored: Bool?
+    /// Local file paths of attached images (vision input). Optional so old
+    /// conversation files decode unchanged.
+    public var attachments: [String]?
     public init(id: String, role: String, text: String, createdAt: String,
-                stats: ChatMessageStats? = nil, errored: Bool? = nil) {
+                stats: ChatMessageStats? = nil, errored: Bool? = nil,
+                attachments: [String]? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
         self.stats = stats
         self.errored = errored
+        self.attachments = attachments
     }
 }
 

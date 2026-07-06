@@ -52,6 +52,10 @@ public enum LLMBackendID: String, CaseIterable, Sendable, Codable {
         }
     }
 
+    /// Whether the model accepts image input. gemma4 checkpoints ship a
+    /// vision tower; the qwen3 text models don't.
+    public var supportsVision: Bool { family == .gemma }
+
     /// Approximate on-disk download size (bytes), for the disk preflight check.
     public var approxBytes: Int64 {
         switch self {

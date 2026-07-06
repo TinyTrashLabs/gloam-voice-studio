@@ -3,11 +3,19 @@ import StudioKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct VoiceEditorSheet: View {
+/// The clone-a-recording editor: name + reference clip (record / drop /
+/// sample) + transcript. Hosted inline by the Create Voice page's
+/// "From a recording" mode, and by `VoiceEditorSheet` for the contextual
+/// emotion-variant flow.
+struct VoiceEditorForm: View {
     let editingSlug: String?
     var prefilledName: String? = nil
+    /// Called with the saved voice's slug (nil when updating an existing one).
+    var onSaved: (String?) -> Void
+    /// When non-nil a Cancel button shows (sheet hosting); inline hosting omits it.
+    var onCancel: (() -> Void)? = nil
+
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var refText = ""
     @State private var refData: Data?
@@ -21,7 +29,6 @@ struct VoiceEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(editingSlug == nil ? "New Voice" : "Edit Voice").font(.title3.bold())
             HStack(spacing: 12) {
                 let _ = avatarVersion  // depend on version so view refreshes after save/remove
                 VoiceAvatarView(
@@ -93,15 +100,15 @@ struct VoiceEditorSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                if let onCancel {
+                    Button("Cancel") { onCancel() }
+                }
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.isEmpty || (editingSlug == nil && refData == nil))
                     .accessibilityIdentifier("voice-save")
             }
         }
-        .padding(20)
-        .frame(width: 440)
         .sheet(isPresented: $showRecorder) {
             RecorderView { data, seconds in
                 refData = data
@@ -187,14 +194,37 @@ struct VoiceEditorSheet: View {
             if let slug = editingSlug {
                 _ = try model.voices.update(slug, name: name, refText: refText,
                                             refWav: refData)
+                model.voicesVersion += 1
+                onSaved(nil)
             } else {
-                _ = try model.voices.save(name: name, refWav: refData ?? Data(),
-                                          refText: refText)
+                let meta = try model.voices.save(name: name, refWav: refData ?? Data(),
+                                                 refText: refText)
+                model.voicesVersion += 1
+                onSaved(meta.slug)
             }
-            model.voicesVersion += 1
-            dismiss()
         } catch StudioError.voiceExists(let slug) {
             error = "A voice named '\(slug)' already exists."
         } catch { self.error = "\(error)" }
+    }
+}
+
+/// Sheet wrapper — kept for the contextual "New Emotion Variant…" flow; plain
+/// voice creation lives inline on the Create Voice page ("From a recording").
+struct VoiceEditorSheet: View {
+    let editingSlug: String?
+    var prefilledName: String? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(editingSlug == nil ? "New Voice" : "Edit Voice").font(.title3.bold())
+            VoiceEditorForm(
+                editingSlug: editingSlug,
+                prefilledName: prefilledName,
+                onSaved: { _ in dismiss() },
+                onCancel: { dismiss() })
+        }
+        .padding(20)
+        .frame(width: 440)
     }
 }

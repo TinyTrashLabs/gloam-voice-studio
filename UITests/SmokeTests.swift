@@ -35,6 +35,12 @@ final class SmokeTests: XCTestCase {
                       "voice-save button should be enabled after name + ref are set")
         saveButton.click()
 
+        // Creation lives on the Create Voice page now — return to the Studio.
+        let studioSegment = app.radioButtons["Studio"]
+        XCTAssertTrue(studioSegment.waitForExistence(timeout: 5),
+                      "Studio segment should exist in the section picker")
+        studioSegment.click()
+
         // Select the voice in the sidebar.
         let voiceRow = app.staticTexts["Script Voice"].firstMatch
         XCTAssertTrue(voiceRow.waitForExistence(timeout: 5),
@@ -198,6 +204,13 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(saveButton.waitForExistence(timeout: 5),
                       "voice-save button should be enabled after name + ref are set")
         saveButton.click()
+
+        // Creation now lives on the Create Voice page (no popup) and saving
+        // stays there (variants panel) — return to the Studio for generation.
+        let studioSegment = app.radioButtons["Studio"]
+        XCTAssertTrue(studioSegment.waitForExistence(timeout: 5),
+                      "Studio segment should exist in the section picker")
+        studioSegment.click()
 
         // ── Step 2: Select the voice row in the sidebar ───────────────────────────
         // The sidebar shows the voice display NAME.

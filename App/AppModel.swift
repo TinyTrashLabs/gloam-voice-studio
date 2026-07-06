@@ -179,6 +179,12 @@ final class AppModel {
     var foundryBaking = false
     var foundryError: String?
     var lastSavedFoundrySlug: String?               // set on save → drives the bake panel
+    /// Which creation path the Create Voice page shows. The sidebar's "+"
+    /// jumps straight to `.record` (clone a clip); the Foundry default is
+    /// `.describe` (design from text). One page, both paths — no popups.
+    var createVoiceSource: CreateVoiceSource = .describe
+
+    enum CreateVoiceSource: Sendable { case describe, record }
     /// When non-nil, the Create Voice page opens in Edit mode for this voice.
     var editingVoiceSlug: String?
 
