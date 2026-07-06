@@ -475,6 +475,26 @@ final class AppModel {
         await refreshEngineStatus()
     }
 
+    /// Single door for editing a voice: a rename re-slugs, so this carries the
+    /// dependents — acted emotion variants move with the voice, and chat
+    /// conversations re-point — plus selection/edit-state bookkeeping.
+    /// Renaming through `voices.update` directly orphans all of those.
+    @discardableResult
+    func updateVoice(_ slug: String, name: String? = nil,
+                     refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
+        let suffixes = Set(VoiceExpression.allCases.map(\.rawValue)
+            + Emotion.allCases.map(\.rawValue))
+        let meta = try voices.update(slug, name: name, refText: refText,
+                                     refWav: refWav, variantSuffixes: suffixes)
+        if meta.slug != slug {
+            chat.voiceRenamed(from: slug, to: meta.slug)
+            if selectedVoiceSlug == slug { selectedVoiceSlug = meta.slug }
+            if editingVoiceSlug == slug { editingVoiceSlug = meta.slug }
+        }
+        voicesVersion += 1
+        return meta
+    }
+
     /// Shared engine path used by single-line mode and script mode.
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.

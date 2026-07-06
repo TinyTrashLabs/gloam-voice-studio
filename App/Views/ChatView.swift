@@ -7,6 +7,8 @@ import SwiftUI
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @State private var imageImporterPresented = false
+    @State private var renamingConversation: Conversation?
+    @State private var renameDraft = ""
     /// Owned here (not by the DictationButton) so send can cancel an open mic:
     /// sending mid-dictation must close capture — the echo guard would mute
     /// the reply — and orphan the session so a late Whisper final can't write
@@ -90,6 +92,19 @@ struct ChatView: View {
             }
             Spacer(minLength: 0)
         }
+        .alert("Rename Chat",
+               isPresented: Binding(get: { renamingConversation != nil },
+                                    set: { if !$0 { renamingConversation = nil } }),
+               presenting: renamingConversation) { convo in
+            TextField("Title", text: $renameDraft)
+            Button("Rename") {
+                model.chat.renameConversation(convo, to: renameDraft)
+                renamingConversation = nil
+            }
+            Button("Cancel", role: .cancel) { renamingConversation = nil }
+        } message: { _ in
+            Text("Give this chat a new title.")
+        }
     }
 
     private func conversationRow(_ convo: Conversation) -> some View {
@@ -107,6 +122,10 @@ struct ChatView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button("Rename…") {
+                renameDraft = convo.title
+                renamingConversation = convo
+            }
             Button("Delete", role: .destructive) { model.chat.deleteConversation(convo) }
         }
     }

@@ -108,6 +108,19 @@ public final class ChatStore: @unchecked Sendable {
         list().filter { $0.voiceSlug == voiceSlug }
     }
 
+    /// Re-points every conversation from a renamed voice to its new slug —
+    /// renaming a voice re-slugs it, and without this every chat with that
+    /// voice orphans ("Voice '<old>' is missing"). Returns how many moved.
+    @discardableResult
+    public func migrateVoiceSlug(from old: String, to new: String) -> Int {
+        var moved = 0
+        for var conversation in list() where conversation.voiceSlug == old {
+            conversation.voiceSlug = new
+            if (try? save(conversation)) != nil { moved += 1 }
+        }
+        return moved
+    }
+
     public func load(_ id: String) -> Conversation? {
         guard isSafe(id),
               let data = try? Data(contentsOf: directory.appendingPathComponent("\(id).json"))

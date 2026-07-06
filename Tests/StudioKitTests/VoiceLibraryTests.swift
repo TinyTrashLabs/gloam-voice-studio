@@ -179,3 +179,22 @@ final class VoiceLibraryTests: XCTestCase {
         XCTAssertNoThrow(try lib.removeAvatar("cruz"))
     }
 }
+
+extension VoiceLibraryTests {
+    func testRenameCarriesVariantDirectories() throws {
+        let lib = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("voicelib-rename-\(UUID().uuidString)"))
+        _ = try lib.save(name: "DJ Nova", refWav: Data([1, 2]), refText: "hi")
+        _ = try lib.save(name: "dj-nova-hype", refWav: Data([3, 4]), refText: "hype hi")
+        // A hyphenated sibling that is NOT a variant must not be touched.
+        _ = try lib.save(name: "dj-nova-two", refWav: Data([5, 6]), refText: "other")
+
+        let meta = try lib.update("dj-nova", name: "Roomba", variantSuffixes: ["hype"])
+
+        XCTAssertEqual(meta.slug, "roomba")
+        XCTAssertNotNil(try? lib.get("roomba-hype"), "variant should move with its base")
+        XCTAssertEqual((try? lib.get("roomba-hype"))?.meta.slug, "roomba-hype")
+        XCTAssertNil(try? lib.get("dj-nova-hype"))
+        XCTAssertNotNil(try? lib.get("dj-nova-two"), "non-variant sibling must be untouched")
+    }
+}

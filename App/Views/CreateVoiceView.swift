@@ -352,11 +352,12 @@ struct CreateVoiceView: View {
 
     private func saveEdit(_ slug: String) {
         do {
-            let meta = try model.voices.update(
+            // updateVoice (not voices.update): a rename re-slugs, and the
+            // wrapper migrates chats + emotion variants + selection with it.
+            let meta = try model.updateVoice(
                 slug, name: editName, refText: editRefText,
                 refWav: (editReplaceData?.isEmpty == false) ? editReplaceData : nil)
-            model.voicesVersion += 1
-            model.editingVoiceSlug = meta.slug     // rename re-slugs — keep the page pointed at it
+            model.editingVoiceSlug = meta.slug
             model.selectedVoiceSlug = meta.slug
             editReplaceData = nil
             editReplaceDesc = "Keeping existing reference"

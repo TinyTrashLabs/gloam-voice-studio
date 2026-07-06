@@ -130,6 +130,24 @@ final class ChatController {
         refresh()
     }
 
+    func renameConversation(_ conversation: Conversation, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var updated = conversation
+        updated.title = trimmed
+        commit(updated)
+    }
+
+    /// A voice was renamed (re-slugged): re-point its conversations, then
+    /// reload whatever we hold in memory so the open chat follows along.
+    func voiceRenamed(from old: String, to new: String) {
+        store.migrateVoiceSlug(from: old, to: new)
+        if let cur = current, cur.voiceSlug == old {
+            current = store.load(cur.id)
+        }
+        refresh()
+    }
+
     // MARK: send / stop
 
     func send() {

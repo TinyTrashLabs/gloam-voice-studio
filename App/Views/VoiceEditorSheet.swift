@@ -192,9 +192,10 @@ struct VoiceEditorForm: View {
     private func save() {
         do {
             if let slug = editingSlug {
-                _ = try model.voices.update(slug, name: name, refText: refText,
-                                            refWav: refData)
-                model.voicesVersion += 1
+                // updateVoice (not voices.update): a rename re-slugs, and the
+                // wrapper migrates chats + emotion variants + selection.
+                _ = try model.updateVoice(slug, name: name, refText: refText,
+                                          refWav: refData)
                 onSaved(nil)
             } else {
                 let meta = try model.voices.save(name: name, refWav: refData ?? Data(),
