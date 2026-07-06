@@ -2,6 +2,8 @@
 
 Native macOS voice cloning studio for Apple Silicon. Fast, private synthesis on-device using MLX with optional OpenAI-compatible API server.
 
+**Documentation:** [App Guide](docs/app-guide.md) · [HTTP API](docs/api.md) · [MCP Server](docs/mcp.md)
+
 ## Overview
 
 Gloam Voice Studio is a SwiftUI macOS app that clones voices using optimized ML models on Apple Silicon (M-series chips). All processing happens locally—no audio leaves your Mac. Several synthesis backends are available:
@@ -15,6 +17,8 @@ Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights ar
 
 ## Features
 
+- **Chat with your voices** — an on-device LLM answers as a voice's persona and speaks while the reply generates; push-to-talk input, vision models, per-voice personas. See the [App Guide](docs/app-guide.md).
+- **Agent integration** — OpenAI-compatible [HTTP API](docs/api.md) plus an [MCP server](docs/mcp.md) so agents like Claude Code can speak in your voices.
 - **Voice Import & Export** — Create, edit, and export voices as `.gvoice` packs (interchange format with the Python sibling project).
 - **Reference Audio & Transcription** — Record or drop reference clips; optional transcript hints improve quality.
 - **Emotion & Speed Control** — Generate with five emotion variants (flat, neutral, warm, excited, hype); adjust playback speed 0.5× to 2.0×.
