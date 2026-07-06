@@ -151,7 +151,30 @@ final class ChatController {
             id: UUID().uuidString, role: "user", text: text,
             createdAt: ChatStore.timestamp()))
         commit(convo)
+        startStream(for: convo)
+    }
 
+    /// Regenerate after a failed reply: drop trailing errored partials so the
+    /// request is clean, then re-stream for the same last user message.
+    func retry() {
+        guard !isStreaming, var convo = current else { return }
+        chatError = nil
+        speechWarning = nil
+        while let last = convo.messages.last, last.role == "assistant", last.errored == true {
+            convo.messages.removeLast()
+        }
+        guard convo.messages.last?.role == "user" else { return }
+        guard app.downloads.state(for: app.chatLLM) == .ready else {
+            chatError = "Download the \(app.chatLLM.rawValue) model first (chat panel → Model)."
+            return
+        }
+        commit(convo)
+        startStream(for: convo)
+    }
+
+    /// Kick off the streaming reply for a conversation whose last message is
+    /// the user turn to answer. Shared by send() and retry().
+    private func startStream(for convo: Conversation) {
         let request = makeRequest(for: convo)
         let convoID = convo.id
         isStreaming = true

@@ -106,8 +106,15 @@ struct ChatView: View {
                             .id("streaming-bubble")
                     }
                     if let error = chat.chatError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.red)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Label(error, systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.red)
+                            Button("Retry") { model.chat.retry() }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("chat-retry")
+                        }
                     }
                     if let warning = chat.speechWarning {
                         Label(warning, systemImage: "speaker.slash")
