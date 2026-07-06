@@ -23,14 +23,19 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
     public var stats: ChatMessageStats?
     /// true when the stream failed mid-reply; the partial text is kept.
     public var errored: Bool?
+    /// Local file paths of attached images (vision input). Optional so old
+    /// conversation files decode unchanged.
+    public var attachments: [String]?
     public init(id: String, role: String, text: String, createdAt: String,
-                stats: ChatMessageStats? = nil, errored: Bool? = nil) {
+                stats: ChatMessageStats? = nil, errored: Bool? = nil,
+                attachments: [String]? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
         self.stats = stats
         self.errored = errored
+        self.attachments = attachments
     }
 }
 
@@ -101,6 +106,19 @@ public final class ChatStore: @unchecked Sendable {
 
     public func list(voiceSlug: String) -> [Conversation] {
         list().filter { $0.voiceSlug == voiceSlug }
+    }
+
+    /// Re-points every conversation from a renamed voice to its new slug —
+    /// renaming a voice re-slugs it, and without this every chat with that
+    /// voice orphans ("Voice '<old>' is missing"). Returns how many moved.
+    @discardableResult
+    public func migrateVoiceSlug(from old: String, to new: String) -> Int {
+        var moved = 0
+        for var conversation in list() where conversation.voiceSlug == old {
+            conversation.voiceSlug = new
+            if (try? save(conversation)) != nil { moved += 1 }
+        }
+        return moved
     }
 
     public func load(_ id: String) -> Conversation? {

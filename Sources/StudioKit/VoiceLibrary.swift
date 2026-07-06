@@ -135,9 +135,15 @@ public struct VoiceLibrary: Sendable {
         return try get(slug)
     }
 
-    /// Edit a stored voice in place. Renaming re-slugs (the directory moves).
+    /// Edit a stored voice in place. Renaming re-slugs (the directory moves);
+    /// acted `<slug>-<suffix>` variants move with it for the suffixes the
+    /// caller names (the library can't guess which hyphenated siblings are
+    /// variants vs. independent voices — "dj-nova" must survive a rename of
+    /// "dj"). Callers that re-slug must also migrate their own references
+    /// (chat conversations, selection) to the returned meta's slug.
     public func update(_ slug: String, name: String? = nil,
-                       refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
+                       refText: String? = nil, refWav: Data? = nil,
+                       variantSuffixes: Set<String> = []) throws -> VoiceMeta {
         var (meta, _) = try get(slug)
         var voiceDir = directory.appendingPathComponent(slug)
         if let name, name != meta.name {
@@ -149,6 +155,17 @@ public struct VoiceLibrary: Sendable {
                 }
                 try FileManager.default.moveItem(at: voiceDir, to: target)
                 voiceDir = target
+                for suffix in variantSuffixes {
+                    let oldDir = directory.appendingPathComponent("\(slug)-\(suffix)")
+                    let newDir = directory.appendingPathComponent("\(newSlug)-\(suffix)")
+                    guard FileManager.default.fileExists(atPath: oldDir.path),
+                          !FileManager.default.fileExists(atPath: newDir.path),
+                          var variantMeta = (try? get("\(slug)-\(suffix)"))?.meta
+                    else { continue }
+                    try FileManager.default.moveItem(at: oldDir, to: newDir)
+                    variantMeta.slug = "\(newSlug)-\(suffix)"
+                    try write(variantMeta, to: newDir)
+                }
             }
             meta.name = name
             meta.slug = newSlug

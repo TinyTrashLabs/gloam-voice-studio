@@ -30,11 +30,18 @@ final class ChatController {
     var conversations: [Conversation] = []
     var current: Conversation?
     var draft = ""
+    /// Image staged for the next send (vision models). Copied into the chat
+    /// attachments folder at attach time so the original can move/vanish.
+    var pendingImage: URL?
     var isStreaming = false
     var streamingText = ""
     /// A sentence is currently rendering through the TTS model (drives the
     /// voice-activity indicator before/while audio plays).
     var isSynthesizing = false
+    /// The composer mic is capturing. Speech output is silenced for the whole
+    /// window — otherwise the voice's own reply plays into the mic and comes
+    /// back as dictated text.
+    private(set) var micCaptureActive = false
     var chatError: String?
     /// Non-blocking: reply text arrived but speech synthesis had a problem.
     var speechWarning: String?
@@ -53,13 +60,16 @@ final class ChatController {
     /// if it hasn't been superseded by a newer one.
     private var speechGeneration = 0
 
-    // Speak-while-generating: sentences detected mid-stream flow through this
-    // channel into one sequential consumer, which synthesizes each through the
-    // engine's interleaved path (GPU-idle gaps between token pulls) and hands
-    // the audio to the playback queue — so the reply starts speaking while
-    // tokens are still generating.
+    // Speak-while-generating: sentences detected mid-stream queue here and one
+    // sequential consumer synthesizes them through the engine's interleaved
+    // path (GPU-idle gaps between token pulls) and hands the audio to the
+    // playback queue — so the reply starts speaking while tokens are still
+    // generating. The consumer BATCHES whatever queued while the previous
+    // synthesis ran: TTS calls carry a ~5s fixed cost (the clone reference is
+    // re-processed per call), so per-sentence calls are mostly overhead.
     private var liveSegmenter = LiveSpeechSegmenter()
-    private var liveSentenceFeed: AsyncStream<String>.Continuation?
+    private var liveQueue: [String] = []
+    private var liveSignal: AsyncStream<Void>.Continuation?
     private var liveSpokeAnything = false
     /// The user replayed another message mid-stream — their choice wins; the
     /// streaming reply must not auto-speak when it finishes.
@@ -120,6 +130,24 @@ final class ChatController {
         refresh()
     }
 
+    func renameConversation(_ conversation: Conversation, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var updated = conversation
+        updated.title = trimmed
+        commit(updated)
+    }
+
+    /// A voice was renamed (re-slugged): re-point its conversations, then
+    /// reload whatever we hold in memory so the open chat follows along.
+    func voiceRenamed(from old: String, to new: String) {
+        store.migrateVoiceSlug(from: old, to: new)
+        if let cur = current, cur.voiceSlug == old {
+            current = store.load(cur.id)
+        }
+        refresh()
+    }
+
     // MARK: send / stop
 
     func send() {
@@ -135,6 +163,8 @@ final class ChatController {
         draft = ""
         chatError = nil
         speechWarning = nil
+        let attachments = app.chatLLM.supportsVision ? pendingImage.map { [$0.path] } : nil
+        pendingImage = nil
         // Title from the first *user* message — a seeded persona greeting
         // shouldn't leave every new chat titled "New Chat".
         if !convo.messages.contains(where: { $0.role == "user" }) {
@@ -142,14 +172,54 @@ final class ChatController {
         }
         convo.messages.append(ChatMessage(
             id: UUID().uuidString, role: "user", text: text,
-            createdAt: ChatStore.timestamp()))
+            createdAt: ChatStore.timestamp(), attachments: attachments))
         commit(convo)
+        startStream(for: convo)
+    }
 
+    /// Stage an image for the next send: copied into the conversation
+    /// attachments folder so the original file can move or disappear.
+    func attachImage(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let dir = store.directory.appendingPathComponent("attachments")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = dir.appendingPathComponent(
+                UUID().uuidString + "." + (url.pathExtension.isEmpty ? "png" : url.pathExtension))
+            try FileManager.default.copyItem(at: url, to: dest)
+            pendingImage = dest
+        } catch {
+            chatError = "Couldn't attach image: \(app.describeAny(error))"
+        }
+    }
+
+    /// Regenerate after a failed reply: drop trailing errored partials so the
+    /// request is clean, then re-stream for the same last user message.
+    func retry() {
+        guard !isStreaming, var convo = current else { return }
+        chatError = nil
+        speechWarning = nil
+        while let last = convo.messages.last, last.role == "assistant", last.errored == true {
+            convo.messages.removeLast()
+        }
+        guard convo.messages.last?.role == "user" else { return }
+        guard app.downloads.state(for: app.chatLLM) == .ready else {
+            chatError = "Download the \(app.chatLLM.rawValue) model first (chat panel → Model)."
+            return
+        }
+        commit(convo)
+        startStream(for: convo)
+    }
+
+    /// Kick off the streaming reply for a conversation whose last message is
+    /// the user turn to answer. Shared by send() and retry().
+    private func startStream(for convo: Conversation) {
         let request = makeRequest(for: convo)
         let convoID = convo.id
         isStreaming = true
         streamingText = ""
-        if app.chatAutoSpeak {
+        if app.chatAutoSpeak, !micCaptureActive {
             startLiveSpeech(voiceSlug: convo.voiceSlug)
         }
         streamTask = Task { [weak self] in
@@ -162,9 +232,7 @@ final class ChatController {
                     switch event {
                     case .delta(let d):
                         self.streamingText += d
-                        for sentence in self.liveSegmenter.consume(d) {
-                            self.liveSentenceFeed?.yield(sentence)
-                        }
+                        self.feedLiveSentences(self.liveSegmenter.consume(d))
                     case .finished(let result):
                         sawFinished = true
                         self.finishReply(result, convoID: convoID)
@@ -192,6 +260,21 @@ final class ChatController {
         }
     }
 
+    /// Composer mic opened/closed. While the mic is capturing, all speech
+    /// output stops and stays off (echo guard: the reply would be transcribed
+    /// straight back into the draft). Text streaming continues untouched.
+    func setMicCapture(_ active: Bool) {
+        micCaptureActive = active
+        guard active else { return }
+        if liveSignal != nil {
+            endLiveSpeech()
+            liveSpeechInterrupted = true
+        }
+        speechTask?.cancel()
+        speech.stop()
+        isSynthesizing = false
+    }
+
     /// Stop button: cancels the in-flight stream AND clears queued speech.
     func stop() {
         streamTask?.cancel()
@@ -204,11 +287,13 @@ final class ChatController {
     /// Replay an assistant message (or speak it for the first time).
     func speak(_ message: ChatMessage) {
         guard let convo = current else { return }
+        // Echo guard: no speech while the composer mic is capturing.
+        guard !micCaptureActive else { return }
         // Replaying while a reply is streaming-and-speaking is a user
         // override: close the live feed (its consumer is about to be
-        // cancelled — sentences yielded into a dead feed would silently
+        // cancelled — sentences queued for a dead consumer would silently
         // vanish) and don't resume auto-speech for that reply on finish.
-        if liveSentenceFeed != nil {
+        if liveSignal != nil {
             endLiveSpeech()
             liveSpeechInterrupted = true
         }
@@ -229,8 +314,16 @@ final class ChatController {
         }
         // Headroom: reply budget + 256 tokens of template/tool slack. Floor
         // keeps the budget sane if maxTokens approaches the context window.
-        let budget = max(app.chatLLM.contextTokens - sampling.maxTokens - 256, 512)
+        // The user's context setting caps history; the model's limit caps both.
+        let window = min(app.chatContextTokens, app.chatLLM.contextTokens)
+        let budget = max(window - sampling.maxTokens - 256, 512)
         let trimmed = ChatContextWindow.trim(turns: turns, budgetTokens: budget)
+        // Vision: only the LAST user turn's attachments ride along (v1 —
+        // earlier turns' images aren't re-encoded every request).
+        let images: [URL]? = app.chatLLM.supportsVision
+            ? convo.messages.last(where: { $0.role == "user" })?.attachments?
+                .map { URL(fileURLWithPath: $0) }
+            : nil
         return ChatRequest(
             messages: trimmed,
             temperature: sampling.temperature,
@@ -241,7 +334,8 @@ final class ChatController {
             repetitionPenalty: sampling.repetitionPenalty == 0 ? nil : sampling.repetitionPenalty,
             presencePenalty: sampling.presencePenalty == 0 ? nil : sampling.presencePenalty,
             frequencyPenalty: sampling.frequencyPenalty == 0 ? nil : sampling.frequencyPenalty,
-            disableThinking: true)
+            disableThinking: !(app.chatThinking && app.chatLLM.thinkingSupport == .toggle),
+            imageURLs: images)
     }
 
     /// Resolve the conversation a stream was started for: prefer `current`,
@@ -269,12 +363,12 @@ final class ChatController {
         // a background conversation is persisted silently.
         guard isCurrent else { return }
         lastStats = stats
-        guard app.chatAutoSpeak else { return }
+        guard app.chatAutoSpeak, !micCaptureActive else { return }
         if liveSpeechInterrupted {
             liveSpeechInterrupted = false
             return
         }
-        if liveSentenceFeed != nil {
+        if liveSignal != nil {
             // Speak-while-generating was active: queue whatever the stream
             // hadn't completed yet, then close the feed.
             let rest = liveSegmenter.finish(finalText: result.text)
@@ -284,7 +378,7 @@ final class ChatController {
                 endLiveSpeech()
                 speakText(result.text, voiceSlug: convo.voiceSlug)
             } else {
-                for sentence in rest { liveSentenceFeed?.yield(sentence) }
+                feedLiveSentences(rest)
                 endLiveSpeech()
             }
         } else {
@@ -323,18 +417,30 @@ final class ChatController {
         conversations.sort { $0.updatedAt > $1.updatedAt }
     }
 
-    /// Speak-while-generating pipeline: one sequential consumer pulls sentences
-    /// off the feed as the segmenter completes them, synthesizes each through
-    /// the engine's interleaved path (it runs in the GPU-idle gaps between
-    /// token pulls), and hands audio to the playback queue in order.
+    /// Hands completed sentences to the live-speech consumer.
+    private func feedLiveSentences(_ sentences: [String]) {
+        guard liveSignal != nil, !sentences.isEmpty else { return }
+        liveQueue.append(contentsOf: sentences)
+        liveSignal?.yield(())
+    }
+
+    /// Speak-while-generating pipeline: one sequential consumer drains the
+    /// sentence queue, synthesizes through the engine's interleaved path (it
+    /// runs in the GPU-idle gaps between token pulls), and hands audio to the
+    /// playback queue in order. Each pass takes EVERYTHING queued (capped) as
+    /// one TTS call: the first sentence goes out alone for fastest first
+    /// audio, and the batching then amortizes the ~5s per-call fixed cost
+    /// (clone-reference processing) across the sentences that accumulated
+    /// while the previous call rendered.
     private func startLiveSpeech(voiceSlug: String) {
         speechTask?.cancel()
         speech.stop()
         liveSegmenter = LiveSpeechSegmenter()
+        liveQueue.removeAll()
         liveSpokeAnything = false
         liveSpeechInterrupted = false
-        let (feed, continuation) = AsyncStream<String>.makeStream()
-        liveSentenceFeed = continuation
+        let (signals, continuation) = AsyncStream<Void>.makeStream()
+        liveSignal = continuation
         speechGeneration += 1
         let generation = speechGeneration
         speechTask = Task { [weak self] in
@@ -345,29 +451,38 @@ final class ChatController {
                     self.isSynthesizing = false
                 }
             }
-            for await sentence in feed {
-                if Task.isCancelled { return }
-                do {
-                    self.setSynthesizing(true, ifGeneration: generation)
-                    let result = try await self.app.synthesizeLine(
-                        text: sentence, voiceSlug: voiceSlug,
-                        emotion: .neutral, speed: 1.0, recordHistory: false,
-                        interleaved: true)
-                    self.setSynthesizing(false, ifGeneration: generation)
+            for await _ in signals {
+                while !self.liveQueue.isEmpty {
                     if Task.isCancelled { return }
-                    let wav = WAVEncoder.encode(
-                        pcm16: PCM16.data(from: result.samples),
-                        sampleRate: result.sampleRate)
-                    self.speech.enqueue(wav: wav)
-                    self.liveSpokeAnything = true
-                } catch {
-                    self.setSynthesizing(false, ifGeneration: generation)
-                    // A Stop press cancels the stream's tail task, which can
-                    // reject the in-flight synthesis — that's the user's own
-                    // action, not a speech problem worth a warning banner.
-                    if error is CancellationError || Task.isCancelled { return }
-                    self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
-                    return
+                    // Batch what's queued, capped so one giant paragraph
+                    // doesn't become a single long stall.
+                    var chunk = self.liveQueue.removeFirst()
+                    while let next = self.liveQueue.first, chunk.count + next.count < 280 {
+                        self.liveQueue.removeFirst()
+                        chunk += " " + next
+                    }
+                    do {
+                        self.setSynthesizing(true, ifGeneration: generation)
+                        let result = try await self.synthesizeChatLine(chunk, voiceSlug: voiceSlug)
+                        self.setSynthesizing(false, ifGeneration: generation)
+                        if Task.isCancelled { return }
+                        let wav = WAVEncoder.encode(
+                            pcm16: PCM16.data(from: result.samples),
+                            sampleRate: result.sampleRate)
+                        self.speech.enqueue(
+                            wav: wav, text: chunk,
+                            voiced: ChatSpeechQueue.voicedBounds(
+                                samples: result.samples, sampleRate: result.sampleRate))
+                        self.liveSpokeAnything = true
+                    } catch {
+                        self.setSynthesizing(false, ifGeneration: generation)
+                        // A Stop press cancels the stream's tail task, which can
+                        // reject the in-flight synthesis — that's the user's own
+                        // action, not a speech problem worth a warning banner.
+                        if error is CancellationError || Task.isCancelled { return }
+                        self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
+                        return
+                    }
                 }
             }
         }
@@ -375,8 +490,8 @@ final class ChatController {
 
     /// Closes the sentence feed; the consumer drains what's queued, then ends.
     private func endLiveSpeech() {
-        liveSentenceFeed?.finish()
-        liveSentenceFeed = nil
+        liveSignal?.finish()
+        liveSignal = nil
     }
 
     /// Sentence-chunked synthesis into the FIFO queue. Uses the current Studio
@@ -399,17 +514,12 @@ final class ChatController {
                     self.isSynthesizing = false
                 }
             }
-            for sentence in SentenceSplitter.split(text) {
+            // Reasoning is never spoken (idempotent when already clean).
+            for sentence in SentenceSplitter.split(stripThinking(text)) {
                 if Task.isCancelled { return }
                 do {
-                    // Interleaved so a replay during an active stream plays in
-                    // the next token gap instead of queueing behind the whole
-                    // generation (identical to normal when nothing streams).
                     self.setSynthesizing(true, ifGeneration: generation)
-                    let result = try await self.app.synthesizeLine(
-                        text: sentence, voiceSlug: voiceSlug,
-                        emotion: .neutral, speed: 1.0, recordHistory: false,
-                        interleaved: true)
+                    let result = try await self.synthesizeChatLine(sentence, voiceSlug: voiceSlug)
                     self.setSynthesizing(false, ifGeneration: generation)
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
@@ -417,7 +527,10 @@ final class ChatController {
                     let wav = WAVEncoder.encode(
                         pcm16: PCM16.data(from: result.samples),
                         sampleRate: result.sampleRate)
-                    self.speech.enqueue(wav: wav)
+                    self.speech.enqueue(
+                        wav: wav, text: sentence,
+                        voiced: ChatSpeechQueue.voicedBounds(
+                            samples: result.samples, sampleRate: result.sampleRate))
                 } catch {
                     self.setSynthesizing(false, ifGeneration: generation)
                     if error is CancellationError || Task.isCancelled { return }
@@ -432,5 +545,24 @@ final class ChatController {
     /// in-flight synthesis must not stomp the indicator a newer task owns.
     private func setSynthesizing(_ value: Bool, ifGeneration generation: Int) {
         if speechGeneration == generation { isSynthesizing = value }
+    }
+
+    /// One chat speech render, using the chat voice engine. Parallel mode
+    /// (default) runs on the second GloamEngine so TTS overlaps token decode —
+    /// gapless playback; off = the serialized fallback (interleaves with the
+    /// stream in token gaps).
+    private func synthesizeChatLine(_ text: String, voiceSlug: String) async throws -> SynthesisResult {
+        if app.chatParallelSpeech {
+            return try await app.synthesizeLine(
+                text: text, voiceSlug: voiceSlug,
+                emotion: .neutral, speed: 1.0, recordHistory: false,
+                backendOverride: app.chatTTSBackend,
+                engineOverride: app.chatSpeechEngine)
+        }
+        return try await app.synthesizeLine(
+            text: text, voiceSlug: voiceSlug,
+            emotion: .neutral, speed: 1.0, recordHistory: false,
+            interleaved: true,
+            backendOverride: app.chatTTSBackend)
     }
 }

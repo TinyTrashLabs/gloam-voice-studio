@@ -63,7 +63,13 @@ struct VoiceSidebarView: View {
                     .tracking(1.0)
                     .foregroundStyle(Brand.fgDim)
                 Spacer()
-                Button { editingSlug = nil; editorPresented = true } label: {
+                Button {
+                    // One create surface: land on Create Voice in recording
+                    // mode instead of a popup (the page hosts both paths).
+                    model.editingVoiceSlug = nil
+                    model.createVoiceSource = .record
+                    sectionRaw = StudioSection.createVoice.rawValue
+                } label: {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)

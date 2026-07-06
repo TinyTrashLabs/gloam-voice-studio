@@ -52,6 +52,9 @@ public struct ChatRequest: Sendable, Equatable {
     public var frequencyPenalty: Float?
     /// Hard-off thinking by default (DJ brain never wants reasoning tokens).
     public var disableThinking: Bool
+    /// Images attached to the FINAL user turn (vision models only; ignored by
+    /// text-only providers). Local file URLs.
+    public var imageURLs: [URL]?
 
     public init(messages: [ChatTurn], tools: [LLMTool]? = nil,
                 temperature: Float = 0.7, topP: Float? = nil,
@@ -59,7 +62,8 @@ public struct ChatRequest: Sendable, Equatable {
                 topK: Int? = nil, minP: Float? = nil,
                 repetitionPenalty: Float? = nil, repetitionContextSize: Int? = nil,
                 presencePenalty: Float? = nil, frequencyPenalty: Float? = nil,
-                disableThinking: Bool = true) {
+                disableThinking: Bool = true,
+                imageURLs: [URL]? = nil) {
         self.messages = messages
         self.tools = tools
         self.temperature = temperature
@@ -72,6 +76,7 @@ public struct ChatRequest: Sendable, Equatable {
         self.presencePenalty = presencePenalty
         self.frequencyPenalty = frequencyPenalty
         self.disableThinking = disableThinking
+        self.imageURLs = imageURLs
     }
 }
 
@@ -168,6 +173,25 @@ public extension LanguageModel {
 public protocol LanguageModelProviding: Sendable {
     func loadModel(backend: LLMBackendID) async throws -> any LanguageModel
     func didEvictModel()
+}
+
+/// Split a reply into its `<think>` reasoning and the visible answer, for UIs
+/// that show reasoning collapsed. An unterminated `<think>` (still streaming)
+/// yields everything so far as reasoning and an empty answer.
+public func splitThinking(_ text: String) -> (thinking: String?, answer: String) {
+    guard let open = text.range(of: "<think>") else {
+        return (nil, text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    if let close = text.range(of: "</think>", range: open.upperBound..<text.endIndex) {
+        let thinking = String(text[open.upperBound..<close.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (thinking.isEmpty ? nil : thinking, stripThinking(text))
+    }
+    let thinking = String(text[open.upperBound...])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let before = String(text[..<open.lowerBound])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return (thinking.isEmpty ? nil : thinking, before)
 }
 
 /// Safety net: strip any `<think>…</think>` reasoning block so it can never leak

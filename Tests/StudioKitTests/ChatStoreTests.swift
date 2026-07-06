@@ -65,3 +65,22 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertNil(store.load(UUID().uuidString))
     }
 }
+
+extension ChatStoreTests {
+    func testMigrateVoiceSlugRepointsOnlyMatchingConversations() throws {
+        var a = Conversation.new(voiceSlug: "dj-nova")
+        a.title = "A"
+        var b = Conversation.new(voiceSlug: "dj-nova")
+        b.title = "B"
+        var c = Conversation.new(voiceSlug: "midge")
+        c.title = "C"
+        try store.save(a); try store.save(b); try store.save(c)
+
+        let moved = store.migrateVoiceSlug(from: "dj-nova", to: "roomba")
+
+        XCTAssertEqual(moved, 2)
+        XCTAssertEqual(store.list(voiceSlug: "roomba").map(\.title).sorted(), ["A", "B"])
+        XCTAssertTrue(store.list(voiceSlug: "dj-nova").isEmpty)
+        XCTAssertEqual(store.list(voiceSlug: "midge").map(\.title), ["C"])
+    }
+}

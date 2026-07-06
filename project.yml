@@ -40,6 +40,9 @@ targets:
         NSSpeechRecognitionUsageDescription: >-
           Gloam transcribes reference clips and dictation on this Mac using
           Apple's on-device speech recognition. Audio never leaves this Mac.
+        NSAudioCaptureUsageDescription: >-
+          Gloam can record what your Mac is playing to capture a reference
+          clip for voice cloning. Audio never leaves this Mac.
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: fm.gloam.gvoice
             UTTypeConformsTo:

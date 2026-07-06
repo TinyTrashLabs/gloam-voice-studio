@@ -104,6 +104,18 @@ final class DictationController {
         isProcessing = task != nil
     }
 
+    /// Hard teardown: no pending final may write into the field afterwards.
+    /// Used when the host consumes the text NOW (e.g. chat send fires while
+    /// dictating) — a late final would resurrect the already-sent draft.
+    func cancel() {
+        session = UUID()   // orphan any in-flight session's callbacks
+        task?.cancel(); task = nil
+        mic?.stop(); mic = nil
+        uiTestContinuation?.finish(); uiTestContinuation = nil
+        isActive = false
+        isProcessing = false
+    }
+
     private func finish(token: UUID) {
         guard session == token else { return }
         isActive = false

@@ -1,5 +1,5 @@
 {
-  "originHash" : "5df317341cb7fd75a02b08192aa24cb60c7acb195d3fd51b1dcc63d16faa3e75",
+  "originHash" : "4f22bab5dda3fa5a4b384dce173dd3185f07039fa7722c7c44f285ab628f5a1e",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -33,7 +33,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
       "state" : {
-        "revision" : "f57346ace4ad8fd22e6d56f6e952c9afecce2df7"
+        "revision" : "45bd8266cefc169108df24963ad6ac66def545b0"
       }
     },
     {
@@ -48,10 +48,10 @@
     {
       "identity" : "mlx-swift-lm",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift-lm.git",
+      "location" : "https://github.com/TinyTrashLabs/mlx-swift-lm.git",
       "state" : {
-        "revision" : "1c05248bb0899e2a7a4962b84d319cf12f4e12aa",
-        "version" : "3.31.3"
+        "revision" : "75f153e203830df8d4980627234e5e1e6c586dac",
+        "version" : "3.31.5"
       }
     },
     {
@@ -275,8 +275,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-syntax.git",
       "state" : {
-        "revision" : "0687f71944021d616d34d922343dcef086855920",
-        "version" : "600.0.1"
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
       }
     },
     {

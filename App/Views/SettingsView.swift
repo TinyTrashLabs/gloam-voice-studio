@@ -66,6 +66,10 @@ struct BackendsSettings: View {
                 ForEach(backends, id: \.self) { backend in
                     backendRow(backend)
                 }
+                Toggle("Keep models loaded under memory pressure", isOn: $model.keepModelsResident)
+                    .help("Stay resident through memory-pressure warnings so chat and "
+                          + "voice replies never cold-start; models are still released "
+                          + "when pressure turns critical. Turn off to free memory eagerly.")
             }
         }
         .formStyle(.grouped)

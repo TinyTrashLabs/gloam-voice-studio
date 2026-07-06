@@ -6,6 +6,31 @@ import SwiftUI
 /// LM Studio: conversation list | transcript + composer | inspector.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
+    @State private var imageImporterPresented = false
+    @State private var renamingConversation: Conversation?
+    @State private var renameDraft = ""
+    /// Owned here (not by the DictationButton) so send can cancel an open mic:
+    /// sending mid-dictation must close capture — the echo guard would mute
+    /// the reply — and orphan the session so a late Whisper final can't write
+    /// the already-sent text back into the cleared draft.
+    @State private var dictation = DictationController()
+
+    /// Pin the transcript to its end on the NEXT runloop pass, after layout
+    /// has absorbed whatever change triggered this.
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            proxy.scrollTo("chat-bottom", anchor: .bottom)
+        }
+    }
+
+    /// Send path shared by ⏎ and the send button.
+    private func sendFromComposer() {
+        if dictation.isActive || dictation.isProcessing {
+            dictation.cancel()
+            model.chat.setMicCapture(false)
+        }
+        model.chat.send()
+    }
 
     var body: some View {
         @Bindable var chat = model.chat
@@ -67,6 +92,19 @@ struct ChatView: View {
             }
             Spacer(minLength: 0)
         }
+        .alert("Rename Chat",
+               isPresented: Binding(get: { renamingConversation != nil },
+                                    set: { if !$0 { renamingConversation = nil } }),
+               presenting: renamingConversation) { convo in
+            TextField("Title", text: $renameDraft)
+            Button("Rename") {
+                model.chat.renameConversation(convo, to: renameDraft)
+                renamingConversation = nil
+            }
+            Button("Cancel", role: .cancel) { renamingConversation = nil }
+        } message: { _ in
+            Text("Give this chat a new title.")
+        }
     }
 
     private func conversationRow(_ convo: Conversation) -> some View {
@@ -84,6 +122,10 @@ struct ChatView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button("Rename…") {
+                renameDraft = convo.title
+                renamingConversation = convo
+            }
             Button("Delete", role: .destructive) { model.chat.deleteConversation(convo) }
         }
     }
@@ -93,36 +135,76 @@ struct ChatView: View {
     private func transcriptColumn(voice: VoiceMeta) -> some View {
         @Bindable var chat = model.chat
         return VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(chat.current?.messages ?? []) { message in
-                        bubble(message, voice: voice)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    // Plain VStack, deliberately: scrollTo can't reach a
+                    // LazyVStack row that hasn't materialized, which made the
+                    // bottom pin work only "sometimes". Conversations are
+                    // bounded, so eager layout is fine.
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(chat.current?.messages ?? []) { message in
+                            bubble(message, voice: voice)
+                        }
+                        if chat.isStreaming {
+                            bubble(ChatMessage(id: "streaming", role: "assistant",
+                                               text: chat.streamingText,
+                                               createdAt: ""),
+                                   voice: voice, isStreamingBubble: true)
+                                .id("streaming-bubble")
+                        }
+                        if let error = chat.chatError {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Label(error, systemImage: "exclamationmark.triangle")
+                                    .font(.caption).foregroundStyle(.red)
+                                Button("Retry") { model.chat.retry() }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("chat-retry")
+                            }
+                        }
+                        if let warning = chat.speechWarning {
+                            Label(warning, systemImage: "speaker.slash")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        Color.clear.frame(height: 1).id("chat-bottom")
                     }
-                    if chat.isStreaming {
-                        bubble(ChatMessage(id: "streaming", role: "assistant",
-                                           text: chat.streamingText,
-                                           createdAt: ""),
-                               voice: voice, isStreamingBubble: true)
-                            .id("streaming-bubble")
-                    }
-                    if let error = chat.chatError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.red)
-                    }
-                    if let warning = chat.speechWarning {
-                        Label(warning, systemImage: "speaker.slash")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Start at the bottom on conversation switch…
+                .defaultScrollAnchor(.bottom)
+                // …and stay pinned while a reply streams in — the passive
+                // anchor alone loses its pin once the streaming bubble starts
+                // growing, so reinforce it on every delta and new message.
+                // The scroll is deferred out of the layout transaction: a
+                // scrollTo issued in the same pass as the content change
+                // targets the OLD geometry and lands short.
+                .onChange(of: chat.streamingText) { scrollToBottom(proxy) }
+                .onChange(of: chat.current?.messages.count) { scrollToBottom(proxy) }
+                .onChange(of: chat.current?.id) { scrollToBottom(proxy) }
+                .onChange(of: chat.chatError) { scrollToBottom(proxy) }
+                .onAppear { scrollToBottom(proxy) }
             }
-            // Start at the bottom (latest messages) on conversation switch and
-            // stay pinned as the transcript grows — covers the user's own
-            // just-sent bubble before the first token arrives, and politely
-            // unpins if the user scrolls up (no onChange needed to reinforce it).
-            .defaultScrollAnchor(.bottom)
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            if let pending = chat.pendingImage {
+                HStack(spacing: 8) {
+                    if let img = NSImage(contentsOf: pending) {
+                        Image(nsImage: img).resizable().scaledToFill()
+                            .frame(width: 44, height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    Text(pending.lastPathComponent)
+                        .font(.caption2).foregroundStyle(Brand.fgDim).lineLimit(1)
+                    Button { model.chat.pendingImage = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(Brand.fgFaint)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove attachment")
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.top, 8)
+            }
             composer
         }
     }
@@ -174,6 +256,17 @@ struct ChatView: View {
                         .help(isSpeakingThis ? "Speaking…" : "Speak this reply")
                     }
                 }
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(attachments, id: \.self) { path in
+                            if let img = NSImage(contentsOfFile: path) {
+                                Image(nsImage: img).resizable().scaledToFill()
+                                    .frame(width: 140, height: 100)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                }
                 if isStreamingBubble, message.text.isEmpty {
                     // Nothing has streamed back yet — first-send model load can
                     // take 10+ seconds, so show motion instead of a static "…".
@@ -182,6 +275,23 @@ struct ChatView: View {
                         Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
                     }
                     .accessibilityIdentifier("chat-thinking")
+                } else if message.role == "assistant" {
+                    let parts = splitThinking(message.text)
+                    if let thinking = parts.thinking {
+                        // Reasoning renders collapsed, LM Studio-style — not as
+                        // raw <think> tags in the reply.
+                        ThinkingDisclosure(
+                            text: thinking,
+                            isLive: isStreamingBubble && parts.answer.isEmpty)
+                    }
+                    if model.chat.speech.isSpeaking {
+                        // Karaoke: follow the voice through the transcript.
+                        SpokenTextView(text: parts.answer, queue: model.chat.speech)
+                    } else if !parts.answer.isEmpty {
+                        Text(parts.answer)
+                            .textSelection(.enabled)
+                            .foregroundStyle(Brand.fg)
+                    }
                 } else {
                     Text(message.text)
                         .textSelection(.enabled)
@@ -198,16 +308,34 @@ struct ChatView: View {
         return HStack(alignment: .bottom, spacing: 10) {
             // Push-to-talk: dictate into the draft, then send as usual.
             // (Whisper emits its text after the mic stops — the button shows
-            // its own transcribing spinner meanwhile.)
-            DictationButton(text: $chat.draft)
+            // its own transcribing spinner meanwhile.) While the mic is open,
+            // speech output is silenced so the reply can't dictate itself.
+            DictationButton(text: $chat.draft,
+                            onActiveChange: { model.chat.setMicCapture($0) },
+                            externalController: dictation)
                 .padding(.bottom, 10)
+            // Vision models can see: attach an image to ride with the next send.
+            if model.chatLLM.supportsVision {
+                Button { imageImporterPresented = true } label: {
+                    Image(systemName: "photo.badge.plus")
+                        .foregroundStyle(chat.pendingImage != nil ? Brand.accent : .secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 11)
+                .accessibilityIdentifier("chat-attach-image")
+                .help("Attach an image for the model to look at")
+                .fileImporter(isPresented: $imageImporterPresented,
+                              allowedContentTypes: [.png, .jpeg, .heic, .image]) { result in
+                    if case .success(let url) = result { model.chat.attachImage(from: url) }
+                }
+            }
             TextField("Message \(voiceName())…", text: $chat.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
                 .accessibilityIdentifier("chat-composer")
-                .onSubmit { model.chat.send() }
+                .onSubmit { sendFromComposer() }
             if chat.isStreaming || chat.speech.isSpeaking || chat.isSynthesizing {
                 // Busy cue alongside the stop control: EQ bars while the voice
                 // model renders or audio plays, dancing dots while the LLM
@@ -226,16 +354,18 @@ struct ChatView: View {
                     Image(systemName: "stop.fill")
                 }
                 .buttonStyle(.plain)
+                .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-stop")
                 .help("Stop generating / speaking")
             } else {
-                Button { model.chat.send() } label: {
+                Button { sendFromComposer() } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title3)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty ? Brand.fgFaint : Brand.accent)
                 .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .padding(.bottom, 9)
                 .accessibilityIdentifier("chat-send")
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Send (⏎)")
@@ -246,6 +376,35 @@ struct ChatView: View {
 
     private func voiceName() -> String {
         model.selectedVoiceSlug.flatMap { try? model.voices.get($0).meta.name } ?? "voice"
+    }
+}
+
+/// Collapsed reasoning block: a dim "thought" row that expands to the model's
+/// full chain of thought. Live (still reasoning) shows the dot wave.
+struct ThinkingDisclosure: View {
+    let text: String
+    var isLive: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(Brand.fgDim)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.03)))
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "brain").font(.system(size: 10))
+                Text(isLive ? "Thinking…" : "Thoughts")
+                    .font(.caption)
+                if isLive { BouncingDots(color: Brand.fgFaint) }
+            }
+            .foregroundStyle(Brand.fgFaint)
+        }
+        .accessibilityIdentifier("chat-thinking-block")
     }
 }
 

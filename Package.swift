@@ -19,9 +19,12 @@ let package = Package(
         // docs/chatterbox-quality-todo.md.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "f57346ace4ad8fd22e6d56f6e952c9afecce2df7"),
+            revision: "45bd8266cefc169108df24963ad6ac66def545b0"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMajor(from: "3.31.3")),
+        // TTL fork of upstream 3.31.4 + one fix: the Gemma4 VLM backbone wires
+        // kvSharedOnly so QAT checkpoints (gemma-4-e2b/e4b) load — upstream PR
+        // pending; repin to a release once merged.
+        .package(url: "https://github.com/TinyTrashLabs/mlx-swift-lm.git", exact: "3.31.5"),
         // HuggingFace Hub client + Tokenizers — back the mlx-swift-lm #huggingFace…
         // macros (mlx-swift-lm 3.x ships the integration as macros the consumer
         // wires to concrete impls, not a bundled dependency). Both are already in

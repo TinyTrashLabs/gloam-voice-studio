@@ -66,15 +66,49 @@ struct CreateVoiceView: View {
     @ViewBuilder private var createContent: some View {
         @Bindable var model = model
         header(title: "Create a Voice",
-               subtitle: "Describe a voice, audition takes until one clicks, then save it to your "
-                   + "library — every clone model (and the whole app) can reuse it from then on.")
-        designModelStrip
-        describeCard
-        auditionCard
-        generateBar
-        if let err = model.foundryError { errorText(err) }
-        if !model.foundryCandidates.isEmpty { candidatesSection }
-        if let slug = model.lastSavedFoundrySlug { manageVariantsPanel(targetSlug: slug, note: true) }
+               subtitle: model.createVoiceSource == .describe
+                   ? "Describe a voice, audition takes until one clicks, then save it to your "
+                     + "library — every clone model (and the whole app) can reuse it from then on."
+                   : "Record or drop a clip of a voice you have the rights to use — it becomes "
+                     + "a reusable Library voice for every clone model (and the whole app).")
+        Picker("", selection: $model.createVoiceSource) {
+            Text("From a description").tag(AppModel.CreateVoiceSource.describe)
+            Text("From a recording").tag(AppModel.CreateVoiceSource.record)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 420)
+        .accessibilityIdentifier("create-voice-source")
+        switch model.createVoiceSource {
+        case .describe:
+            designModelStrip
+            describeCard
+            auditionCard
+            generateBar
+            if let err = model.foundryError { errorText(err) }
+            if !model.foundryCandidates.isEmpty { candidatesSection }
+            if let slug = model.lastSavedFoundrySlug { manageVariantsPanel(targetSlug: slug, note: true) }
+        case .record:
+            recordCard
+            if let slug = model.lastSavedFoundrySlug { manageVariantsPanel(targetSlug: slug, note: true) }
+        }
+    }
+
+    /// Inline clone-a-recording editor — the sheet the sidebar "+" used to
+    /// open, now living where voice creation lives. Saving selects the new
+    /// voice and offers the same variants panel the Foundry flow gets.
+    private var recordCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VoiceEditorForm(editingSlug: nil, onSaved: { slug in
+                if let slug {
+                    model.lastSavedFoundrySlug = slug
+                    model.selectedVoiceSlug = slug
+                }
+            })
+            .padding(14)
+        }
+        .background(boxBG).overlay(boxStroke)
+        .frame(maxWidth: 480)
     }
 
     private var designModelStrip: some View {
@@ -318,11 +352,12 @@ struct CreateVoiceView: View {
 
     private func saveEdit(_ slug: String) {
         do {
-            let meta = try model.voices.update(
+            // updateVoice (not voices.update): a rename re-slugs, and the
+            // wrapper migrates chats + emotion variants + selection with it.
+            let meta = try model.updateVoice(
                 slug, name: editName, refText: editRefText,
                 refWav: (editReplaceData?.isEmpty == false) ? editReplaceData : nil)
-            model.voicesVersion += 1
-            model.editingVoiceSlug = meta.slug     // rename re-slugs — keep the page pointed at it
+            model.editingVoiceSlug = meta.slug
             model.selectedVoiceSlug = meta.slug
             editReplaceData = nil
             editReplaceDesc = "Keeping existing reference"

@@ -54,6 +54,9 @@ final class AppModel {
     let voices: VoiceLibrary
     let history: HistoryStore
     let engine: GloamEngine
+    /// Second engine holding only the chat voice: TTS here overlaps the main
+    /// engine's LLM decode instead of interleaving with it. See init.
+    let chatSpeechEngine: GloamEngine
     let downloads: ModelDownloadManager
     let speech: SpeechManager
     private var server: LocalAPIServer?
@@ -77,6 +80,36 @@ final class AppModel {
             UserDefaults.standard.set(chatLLM.rawValue, forKey: "chatLLM")
             scheduleServerSync()   // keep the route's default in step
         }
+    }
+    /// Keep the resident TTS + LLM loaded through memory-pressure WARNINGS
+    /// (evict only on critical). Reloading a model costs ~10s each, so a
+    /// warning-level evict between chat turns makes every reply feel like a
+    /// cold start. Off = old behavior (evict on any pressure).
+    var keepModelsResident: Bool {
+        didSet { UserDefaults.standard.set(keepModelsResident, forKey: "keepModelsResident") }
+    }
+    /// Let the chat model reason (<think>) before answering. Reasoning shows
+    /// in the transcript but is always stripped from speech.
+    var chatThinking: Bool {
+        didSet { UserDefaults.standard.set(chatThinking, forKey: "chatThinking") }
+    }
+    /// Chat context window (tokens). Caps how much conversation history is
+    /// sent per turn — smaller = faster prefill and less memory, larger =
+    /// longer memory. Clamped to the model's own limit when building requests.
+    var chatContextTokens: Int {
+        didSet { UserDefaults.standard.set(chatContextTokens, forKey: "chatContextTokens") }
+    }
+    /// Voice engine chat replies render with — independent of the Studio
+    /// backend so slow, quality-first studio work (Fish) never makes chat
+    /// crawl. Small/fast backends only.
+    var chatTTSBackend: BackendID {
+        didSet { UserDefaults.standard.set(chatTTSBackend.rawValue, forKey: "chatTTSBackend") }
+    }
+    /// Render chat speech on the second engine, concurrent with token decode
+    /// (gapless). Off = the serialized fallback: synthesis interleaves with
+    /// decode in token gaps — safe mode if parallel rendering ever misbehaves.
+    var chatParallelSpeech: Bool {
+        didSet { UserDefaults.standard.set(chatParallelSpeech, forKey: "chatParallelSpeech") }
     }
     var chatAutoSpeak: Bool {
         didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
@@ -146,6 +179,12 @@ final class AppModel {
     var foundryBaking = false
     var foundryError: String?
     var lastSavedFoundrySlug: String?               // set on save → drives the bake panel
+    /// Which creation path the Create Voice page shows. The sidebar's "+"
+    /// jumps straight to `.record` (clone a clip); the Foundry default is
+    /// `.describe` (design from text). One page, both paths — no popups.
+    var createVoiceSource: CreateVoiceSource = .describe
+
+    enum CreateVoiceSource: Sendable { case describe, record }
     /// When non-nil, the Create Voice page opens in Edit mode for this voice.
     var editingVoiceSlug: String?
 
@@ -228,6 +267,12 @@ final class AppModel {
         chatLLM = defaults.string(forKey: "chatLLM")
             .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
         chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
+        keepModelsResident = defaults.object(forKey: "keepModelsResident") as? Bool ?? true
+        chatTTSBackend = BackendID(rawValue: defaults.string(forKey: "chatTTSBackend") ?? "")
+            ?? .qwen06B
+        chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
+        chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
+        chatThinking = defaults.bool(forKey: "chatThinking")
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
             savedDirections = decoded
@@ -236,24 +281,33 @@ final class AppModel {
         if uiTest {
             engine = GloamEngine(provider: UITestFakeProvider(),
                                  languageProvider: UITestFakeLanguageProvider())
+            chatSpeechEngine = GloamEngine(provider: UITestFakeProvider())
         } else {
             let modelRoot = StoragePaths.models
+            // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
+            // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
+            let ttsResolver: @Sendable (BackendID) -> String? = { backend in
+                let quantRaw = backend.isQwen
+                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
+                    : nil
+                let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
+                let hasConfig = FileManager.default.fileExists(
+                    atPath: dir.appendingPathComponent("config.json").path)
+                return hasConfig ? dir.path : nil
+            }
             engine = GloamEngine(
-                provider: MLXModelProvider(modelPathResolver: { backend in
-                    // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
-                    // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
-                    let quantRaw = backend.isQwen
-                        ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
-                        : nil
-                    let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
-                    let hasConfig = FileManager.default.fileExists(
-                        atPath: dir.appendingPathComponent("config.json").path)
-                    return hasConfig ? dir.path : nil
-                }),
+                provider: MLXModelProvider(modelPathResolver: ttsResolver),
                 languageProvider: MLXLanguageModelProvider(modelDirectoryResolver: { backend in
                     // Mirror ModelDownloadManager.llmDirectory(for:).
                     modelRoot.appendingPathComponent(backend.diskFolder)
                 }))
+            // Chat speech renders on its OWN engine so TTS inference runs
+            // concurrently with the main engine's token decode (verified safe;
+            // loads still effectively serialize — the chat TTS loads once, up
+            // front). This is what makes spoken replies ~gapless instead of
+            // trading 8s of GPU per sentence with the LLM.
+            chatSpeechEngine = GloamEngine(
+                provider: MLXModelProvider(modelPathResolver: ttsResolver))
         }
         if didAckFishLicense {
             let engine = engine
@@ -421,15 +475,41 @@ final class AppModel {
         await refreshEngineStatus()
     }
 
+    /// Single door for editing a voice: a rename re-slugs, so this carries the
+    /// dependents — acted emotion variants move with the voice, and chat
+    /// conversations re-point — plus selection/edit-state bookkeeping.
+    /// Renaming through `voices.update` directly orphans all of those.
+    @discardableResult
+    func updateVoice(_ slug: String, name: String? = nil,
+                     refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
+        let suffixes = Set(VoiceExpression.allCases.map(\.rawValue)
+            + Emotion.allCases.map(\.rawValue))
+        let meta = try voices.update(slug, name: name, refText: refText,
+                                     refWav: refWav, variantSuffixes: suffixes)
+        if meta.slug != slug {
+            chat.voiceRenamed(from: slug, to: meta.slug)
+            if selectedVoiceSlug == slug { selectedVoiceSlug = meta.slug }
+            if editingVoiceSlug == slug { editingVoiceSlug = meta.slug }
+        }
+        voicesVersion += 1
+        return meta
+    }
+
     /// Shared engine path used by single-line mode and script mode.
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.
     /// `interleaved: true` routes through the engine's interleaved path so a
     /// chat sentence can synthesize in the GPU-idle gaps of an active LLM
     /// stream (identical to the normal path when no stream is active).
+    /// `backendOverride`/`engineOverride` let chat render with its own voice
+    /// engine on the second (parallel) GloamEngine.
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
                         speed: Float, recordHistory: Bool = true,
-                        interleaved: Bool = false) async throws -> SynthesisResult {
+                        interleaved: Bool = false,
+                        backendOverride: BackendID? = nil,
+                        engineOverride: GloamEngine? = nil) async throws -> SynthesisResult {
+        let backend = backendOverride ?? self.backend
+        let engine = engineOverride ?? self.engine
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings first.")
@@ -670,15 +750,24 @@ final class AppModel {
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            guard let self,
-                  !self.isGenerating,
-                  !self.chat.isStreaming,
-                  !self.chat.speech.isSpeaking
-            else { return }
+            guard let self else { return }
+            let critical = self.memoryPressureSource?.data.contains(.critical) == true
+            let busy = self.isGenerating || self.chat.isStreaming
+                || self.chat.speech.isSpeaking || self.chat.isSynthesizing
+            AppLog.memory.log(
+                "memory pressure \(critical ? "CRITICAL" : "warning", privacy: .public); busy=\(busy); keepResident=\(self.keepModelsResident)")
+            guard !busy else { return }
+            // Warnings are routine on a busy Mac; evicting on every one makes
+            // each chat turn a ~20s cold start (LLM + TTS reload). Keep both
+            // models resident unless it's critical or the user opted out.
+            guard critical || !self.keepModelsResident else { return }
+            AppLog.memory.log("evicting resident models (pressure)")
             let engine = self.engine
+            let chatSpeechEngine = self.chatSpeechEngine
             Task {
                 await engine.unload()
                 await engine.unloadLLM()
+                await chatSpeechEngine.unload()
             }
         }
         source.resume()
