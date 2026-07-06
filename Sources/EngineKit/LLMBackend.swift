@@ -1,6 +1,14 @@
 import Foundation
 
 /// LLM "family" — drives the thinking-off recipe in MLXLanguageModelProvider.
+/// What reasoning control a chat model supports.
+public enum ThinkingSupport: Sendable, Equatable {
+    /// No reasoning mode — hide the control.
+    case none
+    /// Binary enable_thinking (qwen3-style Off/On).
+    case toggle
+}
+
 public enum LLMFamily: Sendable, Equatable {
     case qwen
     case gemma
@@ -12,7 +20,7 @@ public enum LLMFamily: Sendable, Equatable {
 public enum LLMBackendID: String, CaseIterable, Sendable, Codable {
     case qwen3_1_7b   = "qwen3-1.7b-text"
     case qwen3_8b     = "qwen3-8b-text"
-    case gemma4_e2b   = "gemma4-e2b"
+    case gemma4_e2b   = "gemma4-e2b"   // requires mlx-swift-lm >= 3.31.4 (KV-shared layers)
     case gemma4_e4b   = "gemma4-e4b"
     case gemma4_26b   = "gemma4-26b"   // MoE, 4B active — "Genius" tier (high RAM)
     case gemma4_31b   = "gemma4-31b"   // dense — "let it rip" tier (64GB+)
@@ -32,6 +40,15 @@ public enum LLMBackendID: String, CaseIterable, Sendable, Codable {
         switch self {
         case .qwen3_1_7b, .qwen3_8b: .qwen
         case .gemma4_e2b, .gemma4_e4b, .gemma4_26b, .gemma4_31b: .gemma
+        }
+    }
+
+    /// Reasoning support: qwen3 honors enable_thinking (off/on); gemma4 has
+    /// no reasoning mode. Extend with graded levels when a model offers them.
+    public var thinkingSupport: ThinkingSupport {
+        switch family {
+        case .qwen: .toggle
+        case .gemma: .none
         }
     }
 

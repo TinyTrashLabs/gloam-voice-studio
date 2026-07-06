@@ -33,14 +33,8 @@ struct ChatInspectorView: View {
         @Bindable var appModel = model
         return VStack(alignment: .leading, spacing: 8) {
             sectionHeader("MODEL")
-            // gemma4 e2b/e4b are hidden: their KV-sharing layout (upper layers
-            // reuse earlier layers' attention weights) isn't supported by the
-            // pinned mlx-swift-lm — weights load fails at the first shared
-            // layer (missing k/v_proj). Restore when the pin is bumped.
             Picker("", selection: $appModel.chatLLM) {
-                ForEach(LLMBackendID.allCases.filter {
-                    $0 != .gemma4_e2b && $0 != .gemma4_e4b
-                }, id: \.self) { llm in
+                ForEach(LLMBackendID.allCases, id: \.self) { llm in
                     Text(llm.rawValue).tag(llm)
                 }
             }
@@ -62,13 +56,24 @@ struct ChatInspectorView: View {
                       + "= faster replies and less memory; larger = the voice "
                       + "remembers more of the chat.")
             }
-            Toggle("Thinking (reasoning)", isOn: $appModel.chatThinking)
-                .toggleStyle(.switch).controlSize(.small)
-                .font(.caption).foregroundStyle(Brand.fgDim)
-                .accessibilityIdentifier("chat-thinking-toggle")
-                .help("Let the model reason before answering — smarter replies, "
-                      + "slower first token. Reasoning shows in the transcript "
-                      + "but is never spoken.")
+            // Only models with a reasoning mode get the control, showing the
+            // levels that model actually supports (qwen3: Off/On).
+            if model.chatLLM.thinkingSupport == .toggle {
+                HStack(spacing: 6) {
+                    Text("Reasoning").font(.caption).foregroundStyle(Brand.fgDim)
+                    Picker("", selection: $appModel.chatThinking) {
+                        Text("Off").tag(false)
+                        Text("On").tag(true)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("chat-thinking-toggle")
+                    .help("Let the model reason before answering — smarter "
+                          + "replies, slower first token. Reasoning shows in "
+                          + "the transcript but is never spoken.")
+                }
+            }
         }
     }
 

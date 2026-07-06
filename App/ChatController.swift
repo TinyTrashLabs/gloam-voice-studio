@@ -288,7 +288,7 @@ final class ChatController {
             repetitionPenalty: sampling.repetitionPenalty == 0 ? nil : sampling.repetitionPenalty,
             presencePenalty: sampling.presencePenalty == 0 ? nil : sampling.presencePenalty,
             frequencyPenalty: sampling.frequencyPenalty == 0 ? nil : sampling.frequencyPenalty,
-            disableThinking: !app.chatThinking)
+            disableThinking: !(app.chatThinking && app.chatLLM.thinkingSupport == .toggle))
     }
 
     /// Resolve the conversation a stream was started for: prefer `current`,
@@ -422,7 +422,10 @@ final class ChatController {
                         let wav = WAVEncoder.encode(
                             pcm16: PCM16.data(from: result.samples),
                             sampleRate: result.sampleRate)
-                        self.speech.enqueue(wav: wav, text: chunk)
+                        self.speech.enqueue(
+                            wav: wav, text: chunk,
+                            voiced: ChatSpeechQueue.voicedBounds(
+                                samples: result.samples, sampleRate: result.sampleRate))
                         self.liveSpokeAnything = true
                     } catch {
                         self.setSynthesizing(false, ifGeneration: generation)
@@ -477,7 +480,10 @@ final class ChatController {
                     let wav = WAVEncoder.encode(
                         pcm16: PCM16.data(from: result.samples),
                         sampleRate: result.sampleRate)
-                    self.speech.enqueue(wav: wav, text: sentence)
+                    self.speech.enqueue(
+                        wav: wav, text: sentence,
+                        voiced: ChatSpeechQueue.voicedBounds(
+                            samples: result.samples, sampleRate: result.sampleRate))
                 } catch {
                     self.setSynthesizing(false, ifGeneration: generation)
                     if error is CancellationError || Task.isCancelled { return }
