@@ -35,6 +35,10 @@ final class ChatController {
     /// A sentence is currently rendering through the TTS model (drives the
     /// voice-activity indicator before/while audio plays).
     var isSynthesizing = false
+    /// The composer mic is capturing. Speech output is silenced for the whole
+    /// window — otherwise the voice's own reply plays into the mic and comes
+    /// back as dictated text.
+    private(set) var micCaptureActive = false
     var chatError: String?
     /// Non-blocking: reply text arrived but speech synthesis had a problem.
     var speechWarning: String?
@@ -149,7 +153,7 @@ final class ChatController {
         let convoID = convo.id
         isStreaming = true
         streamingText = ""
-        if app.chatAutoSpeak {
+        if app.chatAutoSpeak, !micCaptureActive {
             startLiveSpeech(voiceSlug: convo.voiceSlug)
         }
         streamTask = Task { [weak self] in
@@ -192,6 +196,21 @@ final class ChatController {
         }
     }
 
+    /// Composer mic opened/closed. While the mic is capturing, all speech
+    /// output stops and stays off (echo guard: the reply would be transcribed
+    /// straight back into the draft). Text streaming continues untouched.
+    func setMicCapture(_ active: Bool) {
+        micCaptureActive = active
+        guard active else { return }
+        if liveSentenceFeed != nil {
+            endLiveSpeech()
+            liveSpeechInterrupted = true
+        }
+        speechTask?.cancel()
+        speech.stop()
+        isSynthesizing = false
+    }
+
     /// Stop button: cancels the in-flight stream AND clears queued speech.
     func stop() {
         streamTask?.cancel()
@@ -204,6 +223,8 @@ final class ChatController {
     /// Replay an assistant message (or speak it for the first time).
     func speak(_ message: ChatMessage) {
         guard let convo = current else { return }
+        // Echo guard: no speech while the composer mic is capturing.
+        guard !micCaptureActive else { return }
         // Replaying while a reply is streaming-and-speaking is a user
         // override: close the live feed (its consumer is about to be
         // cancelled — sentences yielded into a dead feed would silently
@@ -269,7 +290,7 @@ final class ChatController {
         // a background conversation is persisted silently.
         guard isCurrent else { return }
         lastStats = stats
-        guard app.chatAutoSpeak else { return }
+        guard app.chatAutoSpeak, !micCaptureActive else { return }
         if liveSpeechInterrupted {
             liveSpeechInterrupted = false
             return

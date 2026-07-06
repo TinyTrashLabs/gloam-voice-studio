@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Gloam can record what your Mac is playing to capture a reference clip for voice cloning. Audio never leaves this Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Gloam records short reference clips so you can clone voices you have the rights to use. Audio never leaves this Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

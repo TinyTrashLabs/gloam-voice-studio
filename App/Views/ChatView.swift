@@ -198,8 +198,10 @@ struct ChatView: View {
         return HStack(alignment: .bottom, spacing: 10) {
             // Push-to-talk: dictate into the draft, then send as usual.
             // (Whisper emits its text after the mic stops — the button shows
-            // its own transcribing spinner meanwhile.)
-            DictationButton(text: $chat.draft)
+            // its own transcribing spinner meanwhile.) While the mic is open,
+            // speech output is silenced so the reply can't dictate itself.
+            DictationButton(text: $chat.draft,
+                            onActiveChange: { model.chat.setMicCapture($0) })
                 .padding(.bottom, 10)
             TextField("Message \(voiceName())…", text: $chat.draft, axis: .vertical)
                 .textFieldStyle(.plain)
