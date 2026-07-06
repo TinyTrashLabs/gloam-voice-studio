@@ -251,7 +251,9 @@ final class ChatController {
         }
         // Headroom: reply budget + 256 tokens of template/tool slack. Floor
         // keeps the budget sane if maxTokens approaches the context window.
-        let budget = max(app.chatLLM.contextTokens - sampling.maxTokens - 256, 512)
+        // The user's context setting caps history; the model's limit caps both.
+        let window = min(app.chatContextTokens, app.chatLLM.contextTokens)
+        let budget = max(window - sampling.maxTokens - 256, 512)
         let trimmed = ChatContextWindow.trim(turns: turns, budgetTokens: budget)
         return ChatRequest(
             messages: trimmed,
@@ -391,10 +393,7 @@ final class ChatController {
                     }
                     do {
                         self.setSynthesizing(true, ifGeneration: generation)
-                        let result = try await self.app.synthesizeLine(
-                            text: chunk, voiceSlug: voiceSlug,
-                            emotion: .neutral, speed: 1.0, recordHistory: false,
-                            interleaved: true)
+                        let result = try await self.synthesizeChatLine(chunk, voiceSlug: voiceSlug)
                         self.setSynthesizing(false, ifGeneration: generation)
                         if Task.isCancelled { return }
                         let wav = WAVEncoder.encode(
@@ -445,14 +444,8 @@ final class ChatController {
             for sentence in SentenceSplitter.split(text) {
                 if Task.isCancelled { return }
                 do {
-                    // Interleaved so a replay during an active stream plays in
-                    // the next token gap instead of queueing behind the whole
-                    // generation (identical to normal when nothing streams).
                     self.setSynthesizing(true, ifGeneration: generation)
-                    let result = try await self.app.synthesizeLine(
-                        text: sentence, voiceSlug: voiceSlug,
-                        emotion: .neutral, speed: 1.0, recordHistory: false,
-                        interleaved: true)
+                    let result = try await self.synthesizeChatLine(sentence, voiceSlug: voiceSlug)
                     self.setSynthesizing(false, ifGeneration: generation)
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
@@ -475,5 +468,24 @@ final class ChatController {
     /// in-flight synthesis must not stomp the indicator a newer task owns.
     private func setSynthesizing(_ value: Bool, ifGeneration generation: Int) {
         if speechGeneration == generation { isSynthesizing = value }
+    }
+
+    /// One chat speech render, using the chat voice engine. Parallel mode
+    /// (default) runs on the second GloamEngine so TTS overlaps token decode —
+    /// gapless playback; off = the serialized fallback (interleaves with the
+    /// stream in token gaps).
+    private func synthesizeChatLine(_ text: String, voiceSlug: String) async throws -> SynthesisResult {
+        if app.chatParallelSpeech {
+            return try await app.synthesizeLine(
+                text: text, voiceSlug: voiceSlug,
+                emotion: .neutral, speed: 1.0, recordHistory: false,
+                backendOverride: app.chatTTSBackend,
+                engineOverride: app.chatSpeechEngine)
+        }
+        return try await app.synthesizeLine(
+            text: text, voiceSlug: voiceSlug,
+            emotion: .neutral, speed: 1.0, recordHistory: false,
+            interleaved: true,
+            backendOverride: app.chatTTSBackend)
     }
 }

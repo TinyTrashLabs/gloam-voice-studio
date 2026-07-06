@@ -15,6 +15,7 @@ struct ChatInspectorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 modelSection
+                voiceSection
                 personaSection
                 samplingSection
                 advancedSection
@@ -40,9 +41,77 @@ struct ChatInspectorView: View {
             .labelsHidden()
             .accessibilityIdentifier("chat-llm-picker")
             modelStateRow
+            HStack(spacing: 6) {
+                Text("Context").font(.caption).foregroundStyle(Brand.fgDim)
+                Picker("", selection: $appModel.chatContextTokens) {
+                    ForEach([4_096, 8_192, 16_384, 32_768], id: \.self) { tokens in
+                        Text("\(tokens / 1_024)k").tag(tokens)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .accessibilityIdentifier("chat-context-picker")
+                .help("How much conversation history is sent each turn. Smaller "
+                      + "= faster replies and less memory; larger = the voice "
+                      + "remembers more of the chat.")
+            }
+        }
+    }
+
+    // MARK: voice engine
+
+    /// TTS backends fast enough for conversation. Fish is deliberately absent
+    /// (measured ~10× slower than realtime — a quality engine, not a chat one).
+    private static let chatVoiceBackends: [BackendID] =
+        [.qwen06B, .qwen17B, .chatterboxTurbo, .chatterbox]
+
+    private var voiceSection: some View {
+        @Bindable var appModel = model
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("VOICE")
             Toggle("Speak replies", isOn: $appModel.chatAutoSpeak)
                 .toggleStyle(.switch).controlSize(.small)
                 .font(.caption).foregroundStyle(Brand.fgDim)
+            Picker("", selection: $appModel.chatTTSBackend) {
+                ForEach(Self.chatVoiceBackends, id: \.self) { backend in
+                    Text(backend.rawValue).tag(backend)
+                }
+            }
+            .labelsHidden()
+            .accessibilityIdentifier("chat-tts-picker")
+            .help("Voice engine for chat replies — independent of the Studio backend")
+            voiceStateRow
+            Toggle("Render in parallel with text", isOn: $appModel.chatParallelSpeech)
+                .toggleStyle(.switch).controlSize(.small)
+                .font(.caption).foregroundStyle(Brand.fgDim)
+                .help("Speech renders on a second engine while the reply streams — "
+                      + "gapless playback. Turn off to fall back to strictly "
+                      + "serialized rendering if audio ever glitches.")
+        }
+    }
+
+    @ViewBuilder
+    private var voiceStateRow: some View {
+        let backend = model.chatTTSBackend
+        switch model.downloads.state(for: backend) {
+        case .ready:
+            Label("On disk", systemImage: "checkmark.circle")
+                .font(.caption).foregroundStyle(.green)
+        case .downloading(let fraction):
+            HStack(spacing: 6) {
+                ProgressView(value: fraction)
+                Button("Cancel") { model.downloads.cancelDownload(backend) }
+                    .font(.caption2)
+            }
+        case .notDownloaded:
+            Button("Download voice engine") { model.downloads.download(backend) }
+                .accessibilityIdentifier("chat-tts-download")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message).font(.caption2).foregroundStyle(.red).lineLimit(3)
+                Button("Retry") { model.downloads.download(backend) }
+            }
         }
     }
 

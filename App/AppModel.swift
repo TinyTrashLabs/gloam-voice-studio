@@ -54,6 +54,9 @@ final class AppModel {
     let voices: VoiceLibrary
     let history: HistoryStore
     let engine: GloamEngine
+    /// Second engine holding only the chat voice: TTS here overlaps the main
+    /// engine's LLM decode instead of interleaving with it. See init.
+    let chatSpeechEngine: GloamEngine
     let downloads: ModelDownloadManager
     let speech: SpeechManager
     private var server: LocalAPIServer?
@@ -84,6 +87,24 @@ final class AppModel {
     /// cold start. Off = old behavior (evict on any pressure).
     var keepModelsResident: Bool {
         didSet { UserDefaults.standard.set(keepModelsResident, forKey: "keepModelsResident") }
+    }
+    /// Chat context window (tokens). Caps how much conversation history is
+    /// sent per turn — smaller = faster prefill and less memory, larger =
+    /// longer memory. Clamped to the model's own limit when building requests.
+    var chatContextTokens: Int {
+        didSet { UserDefaults.standard.set(chatContextTokens, forKey: "chatContextTokens") }
+    }
+    /// Voice engine chat replies render with — independent of the Studio
+    /// backend so slow, quality-first studio work (Fish) never makes chat
+    /// crawl. Small/fast backends only.
+    var chatTTSBackend: BackendID {
+        didSet { UserDefaults.standard.set(chatTTSBackend.rawValue, forKey: "chatTTSBackend") }
+    }
+    /// Render chat speech on the second engine, concurrent with token decode
+    /// (gapless). Off = the serialized fallback: synthesis interleaves with
+    /// decode in token gaps — safe mode if parallel rendering ever misbehaves.
+    var chatParallelSpeech: Bool {
+        didSet { UserDefaults.standard.set(chatParallelSpeech, forKey: "chatParallelSpeech") }
     }
     var chatAutoSpeak: Bool {
         didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
@@ -236,6 +257,10 @@ final class AppModel {
             .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
         chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
         keepModelsResident = defaults.object(forKey: "keepModelsResident") as? Bool ?? true
+        chatTTSBackend = BackendID(rawValue: defaults.string(forKey: "chatTTSBackend") ?? "")
+            ?? .qwen06B
+        chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
+        chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
             savedDirections = decoded
@@ -244,24 +269,33 @@ final class AppModel {
         if uiTest {
             engine = GloamEngine(provider: UITestFakeProvider(),
                                  languageProvider: UITestFakeLanguageProvider())
+            chatSpeechEngine = GloamEngine(provider: UITestFakeProvider())
         } else {
             let modelRoot = StoragePaths.models
+            // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
+            // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
+            let ttsResolver: @Sendable (BackendID) -> String? = { backend in
+                let quantRaw = backend.isQwen
+                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
+                    : nil
+                let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
+                let hasConfig = FileManager.default.fileExists(
+                    atPath: dir.appendingPathComponent("config.json").path)
+                return hasConfig ? dir.path : nil
+            }
             engine = GloamEngine(
-                provider: MLXModelProvider(modelPathResolver: { backend in
-                    // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
-                    // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
-                    let quantRaw = backend.isQwen
-                        ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
-                        : nil
-                    let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
-                    let hasConfig = FileManager.default.fileExists(
-                        atPath: dir.appendingPathComponent("config.json").path)
-                    return hasConfig ? dir.path : nil
-                }),
+                provider: MLXModelProvider(modelPathResolver: ttsResolver),
                 languageProvider: MLXLanguageModelProvider(modelDirectoryResolver: { backend in
                     // Mirror ModelDownloadManager.llmDirectory(for:).
                     modelRoot.appendingPathComponent(backend.diskFolder)
                 }))
+            // Chat speech renders on its OWN engine so TTS inference runs
+            // concurrently with the main engine's token decode (verified safe;
+            // loads still effectively serialize — the chat TTS loads once, up
+            // front). This is what makes spoken replies ~gapless instead of
+            // trading 8s of GPU per sentence with the LLM.
+            chatSpeechEngine = GloamEngine(
+                provider: MLXModelProvider(modelPathResolver: ttsResolver))
         }
         if didAckFishLicense {
             let engine = engine
@@ -435,9 +469,15 @@ final class AppModel {
     /// `interleaved: true` routes through the engine's interleaved path so a
     /// chat sentence can synthesize in the GPU-idle gaps of an active LLM
     /// stream (identical to the normal path when no stream is active).
+    /// `backendOverride`/`engineOverride` let chat render with its own voice
+    /// engine on the second (parallel) GloamEngine.
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
                         speed: Float, recordHistory: Bool = true,
-                        interleaved: Bool = false) async throws -> SynthesisResult {
+                        interleaved: Bool = false,
+                        backendOverride: BackendID? = nil,
+                        engineOverride: GloamEngine? = nil) async throws -> SynthesisResult {
+        let backend = backendOverride ?? self.backend
+        let engine = engineOverride ?? self.engine
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings first.")
@@ -691,9 +731,11 @@ final class AppModel {
             guard critical || !self.keepModelsResident else { return }
             AppLog.memory.log("evicting resident models (pressure)")
             let engine = self.engine
+            let chatSpeechEngine = self.chatSpeechEngine
             Task {
                 await engine.unload()
                 await engine.unloadLLM()
+                await chatSpeechEngine.unload()
             }
         }
         source.resume()

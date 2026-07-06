@@ -55,13 +55,27 @@ if CommandLine.arguments.dropFirst().first == "chat" {
         return sub[flag + 1]
     }()
 
+    let parallel = sub.contains("--parallel")
     let languageProvider = MLXLanguageModelProvider(modelDirectoryResolver: { _ in llmDir })
     let provider = MLXModelProvider(modelPathResolver: { _ in ttsPath })
     let engine = GloamEngine(provider: provider, languageProvider: languageProvider)
+    // --parallel: a SECOND engine owning only the TTS model, so synthesis runs
+    // truly concurrently with the first engine's token decode — an experiment
+    // probing whether MLX tolerates overlapping inference from two models
+    // (loads still don't overlap: we preload TTS before streaming).
+    let ttsEngine = parallel
+        ? GloamEngine(provider: MLXModelProvider(modelPathResolver: { _ in ttsPath }))
+        : engine
 
     do {
         let request = ChatRequest(
             messages: [ChatTurn(role: .user, content: prompt)], maxTokens: 200)
+        if parallel, ttsPath != nil {
+            // Load TTS up front so only inference overlaps, never loads.
+            _ = try await ttsEngine.synthesize(
+                backend: .qwen17B, request: SynthesisRequest(text: "warm up."))
+            print("[parallel mode: TTS preloaded on second engine]")
+        }
         var pendingSpeech = ""
         var synthTasks: [Task<Void, Never>] = []
         let stream = await engine.chatStream(backend: backend, request: request)
@@ -78,8 +92,11 @@ if CommandLine.arguments.dropFirst().first == "chat" {
                         synthTasks.append(Task {
                             do {
                                 let t0 = Date().timeIntervalSince(start)
-                                let r = try await engine.synthesizeInterleaved(
-                                    backend: .qwen17B, request: SynthesisRequest(text: sentence))
+                                let r = parallel
+                                    ? try await ttsEngine.synthesize(
+                                        backend: .qwen17B, request: SynthesisRequest(text: sentence))
+                                    : try await engine.synthesizeInterleaved(
+                                        backend: .qwen17B, request: SynthesisRequest(text: sentence))
                                 let t1 = Date().timeIntervalSince(start)
                                 print("\n[speak t=\(String(format: "%.1f–%.1f", t0, t1))s "
                                       + "\(r.samples.count) samples] \(sentence)")

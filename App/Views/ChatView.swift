@@ -228,6 +228,7 @@ struct ChatView: View {
                     Image(systemName: "stop.fill")
                 }
                 .buttonStyle(.plain)
+                .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-stop")
                 .help("Stop generating / speaking")
             } else {
@@ -238,6 +239,7 @@ struct ChatView: View {
                 .foregroundStyle(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty ? Brand.fgFaint : Brand.accent)
                 .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .padding(.bottom, 9)
                 .accessibilityIdentifier("chat-send")
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Send (⏎)")
