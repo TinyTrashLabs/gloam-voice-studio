@@ -38,6 +38,21 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
     private let model: any SpeechGenerationModel
     private let backend: BackendID
 
+    /// Reference-audio reuse: the Qwen model caches its reference context
+    /// (speaker embedding + codec tokens — several seconds of GPU work) keyed
+    /// by MLXArray IDENTITY, so a freshly-loaded array every call misses it
+    /// and repays the full cost per sentence. Keep the loaded array per
+    /// (path, mtime) and hand back the SAME instance, so repeat synths with
+    /// one voice — chat speaks sentence by sentence — pay it once.
+    /// (Idea borrowed from Voicebox's voice-prompt cache, MIT.)
+    private struct CachedRef {
+        let path: String
+        let mtime: Date
+        let audio: MLXArray
+    }
+    private var refCache: [CachedRef] = []
+    private let refCacheLock = NSLock()
+
     init(model: any SpeechGenerationModel, backend: BackendID) {
         self.model = model
         self.backend = backend
@@ -45,12 +60,28 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
 
     var sampleRate: Int { model.sampleRate }
 
+    private func referenceAudio(for path: String) throws -> MLXArray {
+        let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
+            as? Date) ?? .distantPast
+        refCacheLock.lock()
+        defer { refCacheLock.unlock() }
+        if let index = refCache.firstIndex(where: { $0.path == path && $0.mtime == mtime }) {
+            let hit = refCache.remove(at: index)
+            refCache.insert(hit, at: 0)   // MRU to the front
+            return hit.audio
+        }
+        let (_, audio) = try loadAudioArray(
+            from: URL(fileURLWithPath: path), sampleRate: model.sampleRate)
+        refCache.insert(CachedRef(path: path, mtime: mtime, audio: audio), at: 0)
+        if refCache.count > 4 { refCache.removeLast() }   // a few voices, tiny arrays
+        return audio
+    }
+
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         do {
             var refAudio: MLXArray?
             if let path = request.refAudioPath {
-                (_, refAudio) = try loadAudioArray(
-                    from: URL(fileURLWithPath: path), sampleRate: model.sampleRate)
+                refAudio = try referenceAudio(for: path)
             }
             if let chatterbox = model as? ChatterboxModel {
                 chatterbox.emotionAdvOverride = request.exaggeration

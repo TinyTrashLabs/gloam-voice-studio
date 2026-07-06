@@ -466,13 +466,17 @@ final class ChatController {
                         let result = try await self.synthesizeChatLine(chunk, voiceSlug: voiceSlug)
                         self.setSynthesizing(false, ifGeneration: generation)
                         if Task.isCancelled { return }
+                        // Edge fades: consecutive chunks play back-to-back;
+                        // without them the seams can click.
+                        let faded = AudioAssembler.fadeEdges(
+                            result.samples, sampleRate: result.sampleRate)
                         let wav = WAVEncoder.encode(
-                            pcm16: PCM16.data(from: result.samples),
+                            pcm16: PCM16.data(from: faded),
                             sampleRate: result.sampleRate)
                         self.speech.enqueue(
                             wav: wav, text: chunk,
                             voiced: ChatSpeechQueue.voicedBounds(
-                                samples: result.samples, sampleRate: result.sampleRate))
+                                samples: faded, sampleRate: result.sampleRate))
                         self.liveSpokeAnything = true
                     } catch {
                         self.setSynthesizing(false, ifGeneration: generation)
@@ -524,13 +528,15 @@ final class ChatController {
                     // Re-check after the await: stop() may have cleared the
                     // queue while this sentence was mid-synthesis.
                     if Task.isCancelled { return }
+                    let faded = AudioAssembler.fadeEdges(
+                        result.samples, sampleRate: result.sampleRate)
                     let wav = WAVEncoder.encode(
-                        pcm16: PCM16.data(from: result.samples),
+                        pcm16: PCM16.data(from: faded),
                         sampleRate: result.sampleRate)
                     self.speech.enqueue(
                         wav: wav, text: sentence,
                         voiced: ChatSpeechQueue.voicedBounds(
-                            samples: result.samples, sampleRate: result.sampleRate))
+                            samples: faded, sampleRate: result.sampleRate))
                 } catch {
                     self.setSynthesizing(false, ifGeneration: generation)
                     if error is CancellationError || Task.isCancelled { return }

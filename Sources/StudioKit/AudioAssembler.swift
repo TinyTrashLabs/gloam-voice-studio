@@ -16,6 +16,26 @@ public enum AudioAssembler {
         return out
     }
 
+    /// Short linear fade-in/out at the clip edges so back-to-back playback of
+    /// separately-synthesized chunks (chat speaks sentence groups) never
+    /// clicks at the seams. 8ms is inaudible as a fade but kills the step
+    /// discontinuity. (Declick idea borrowed from Voicebox's chunked TTS
+    /// crossfade, MIT — we fade edges instead of crossfading because chunks
+    /// play as separate queue items, not one concatenated stream.)
+    public static func fadeEdges(_ samples: [Float], sampleRate: Int,
+                                 milliseconds: Double = 8) -> [Float] {
+        let fade = min(max(0, Int(Double(sampleRate) * milliseconds / 1000)),
+                       samples.count / 2)
+        guard fade > 0 else { return samples }
+        var out = samples
+        for i in 0 ..< fade {
+            let gain = Float(i) / Float(fade)
+            out[i] *= gain
+            out[out.count - 1 - i] *= gain
+        }
+        return out
+    }
+
     /// Scale so the peak hits `target` of full scale (default −0.18 dBFS ≈ 0.98).
     /// Silence (or already-at-target audio) passes through unchanged.
     /// Peak-normalize float samples (range [-1, 1]) to `target` full-scale.

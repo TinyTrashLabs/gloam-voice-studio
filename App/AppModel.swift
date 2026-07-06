@@ -105,6 +105,26 @@ final class AppModel {
     var chatTTSBackend: BackendID {
         didSet { UserDefaults.standard.set(chatTTSBackend.rawValue, forKey: "chatTTSBackend") }
     }
+    /// Measured synthesis speed per TTS backend, as audio-seconds produced per
+    /// wall-second (EMA over recent synths on THIS machine). >1 means faster
+    /// than realtime — the bar for gapless chat speech. Drives the speed
+    /// labels in the chat voice picker.
+    private(set) var ttsSpeedEMA: [String: Double] {
+        didSet { UserDefaults.standard.set(ttsSpeedEMA, forKey: "ttsSpeedEMA") }
+    }
+
+    func recordTTSSpeed(backend: BackendID, audioSeconds: Double, wallSeconds: Double) {
+        guard wallSeconds > 0.2, audioSeconds > 0.2 else { return }   // ignore blips
+        let ratio = audioSeconds / wallSeconds
+        let old = ttsSpeedEMA[backend.rawValue]
+        ttsSpeedEMA[backend.rawValue] = old.map { $0 * 0.7 + ratio * 0.3 } ?? ratio
+    }
+
+    /// Picker label suffix: measured speed if we have one, else nothing.
+    func ttsSpeedLabel(for backend: BackendID) -> String {
+        guard let ratio = ttsSpeedEMA[backend.rawValue] else { return "" }
+        return String(format: " · %.1f× realtime", ratio)
+    }
     /// Render chat speech on the second engine, concurrent with token decode
     /// (gapless). Off = the serialized fallback: synthesis interleaves with
     /// decode in token gaps — safe mode if parallel rendering ever misbehaves.
@@ -268,8 +288,11 @@ final class AppModel {
             .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
         chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
         keepModelsResident = defaults.object(forKey: "keepModelsResident") as? Bool ?? true
+        // Turbo default: the only engine measured faster than realtime — the
+        // bar for gapless chat speech (existing user picks persist).
         chatTTSBackend = BackendID(rawValue: defaults.string(forKey: "chatTTSBackend") ?? "")
-            ?? .qwen06B
+            ?? .chatterboxTurbo
+        ttsSpeedEMA = defaults.dictionary(forKey: "ttsSpeedEMA") as? [String: Double] ?? [:]
         chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
         chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
         chatThinking = defaults.bool(forKey: "chatThinking")
@@ -553,6 +576,9 @@ final class AppModel {
         let raw = interleaved
             ? try await engine.synthesizeInterleaved(backend: backend, request: request)
             : try await engine.synthesize(backend: backend, request: request)
+        recordTTSSpeed(backend: backend,
+                       audioSeconds: Double(raw.samples.count) / Double(raw.sampleRate),
+                       wallSeconds: raw.wallSeconds)
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
         // so history, A/B variants, and script takes all stay consistent.

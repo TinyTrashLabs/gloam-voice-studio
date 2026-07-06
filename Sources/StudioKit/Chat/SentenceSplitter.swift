@@ -6,9 +6,18 @@ import Foundation
 /// favors simple, predictable rules over linguistic perfection.
 public enum SentenceSplitter {
     /// Words whose trailing period is not a sentence boundary.
+    /// (List broadened from Voicebox's splitter, MIT.)
     private static let abbreviations: Set<String> = [
         "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st",
         "vs", "etc", "eg", "ie", "approx", "dept", "est",
+        "ave", "blvd", "inc", "ltd", "corp",
+    ]
+
+    /// Dotted abbreviations matched with their INTERNAL dots intact ("p.m",
+    /// "e.g"). Kept separate from the plain set: stripping dots first would
+    /// turn "p.m" into "pm"/"am" and block genuine sentence ends like "I am."
+    private static let dottedAbbreviations: Set<String> = [
+        "e.g", "i.e", "a.m", "p.m", "u.s",
     ]
 
     public static func split(_ text: String) -> [String] {
@@ -57,8 +66,10 @@ public enum SentenceSplitter {
         } else {
             lastWord = s
         }
-        let word = lastWord.lowercased().replacingOccurrences(of: ".", with: "")
-        return abbreviations.contains(word) || word.count == 1
+        let dotted = lastWord.lowercased()
+        let word = dotted.replacingOccurrences(of: ".", with: "")
+        return abbreviations.contains(word) || dottedAbbreviations.contains(dotted)
+            || word.count == 1
     }
 
     /// Streaming variant: splits a still-growing buffer into sentences that

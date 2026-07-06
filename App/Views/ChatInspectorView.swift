@@ -91,14 +91,19 @@ struct ChatInspectorView: View {
             Toggle("Speak replies", isOn: $appModel.chatAutoSpeak)
                 .toggleStyle(.switch).controlSize(.small)
                 .font(.caption).foregroundStyle(Brand.fgDim)
+            // Speed labels are MEASURED on this machine (audio seconds per
+            // wall second, EMA). >1× keeps up with playback = gapless chat.
             Picker("", selection: $appModel.chatTTSBackend) {
                 ForEach(Self.chatVoiceBackends, id: \.self) { backend in
-                    Text(backend.rawValue).tag(backend)
+                    Text(backend.rawValue + model.ttsSpeedLabel(for: backend))
+                        .tag(backend)
                 }
             }
             .labelsHidden()
             .accessibilityIdentifier("chat-tts-picker")
-            .help("Voice engine for chat replies — independent of the Studio backend")
+            .help("Voice engine for chat replies — independent of the Studio "
+                  + "backend. Speeds are measured on this Mac; above 1× realtime "
+                  + "means speech keeps up with playback (gapless).")
             voiceStateRow
             Toggle("Render in parallel with text", isOn: $appModel.chatParallelSpeech)
                 .toggleStyle(.switch).controlSize(.small)
