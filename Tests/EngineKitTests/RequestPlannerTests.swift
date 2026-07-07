@@ -113,6 +113,47 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(plan.exaggeration)
     }
 
+    func testExaggerationCeilingClampsOverride() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      exaggerationOverride: 0.9, exaggerationCeiling: 0.6))
+        XCTAssertEqual(plan.exaggeration, 0.6)
+    }
+
+    func testExaggerationCeilingClampsEmotion() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      emotion: .hype, exaggerationCeiling: 0.5))
+        XCTAssertEqual(plan.exaggeration, 0.5)
+    }
+
+    func testExaggerationCeilingIsNoOpWhenAboveResolvedValue() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      exaggerationOverride: 0.4, exaggerationCeiling: 0.9))
+        XCTAssertEqual(plan.exaggeration, 0.4)
+    }
+
+    func testExaggerationCeilingNoOpWhenAboveEmotionValue() throws {
+        // .flat resolves to 0.2, below the 0.5 ceiling → passes through unclamped.
+        let plan = try RequestPlanner.plan(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      emotion: .flat, exaggerationCeiling: 0.5))
+        XCTAssertEqual(plan.exaggeration, 0.2)
+    }
+
+    func testExaggerationCeilingIgnoredOnTurbo() throws {
+        let plan = try RequestPlanner.plan(
+            backend: .chatterboxTurbo,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      exaggerationOverride: 0.9, exaggerationCeiling: 0.3))
+        XCTAssertNil(plan.exaggeration)
+    }
+
     func testQwenBasePassesLanguageAndKnobsButNotInstruct() throws {
         // Base is a clone model: it honors language + sampling knobs, but NOT instruct.
         let req = SynthesisRequest(text: "hi", instruct: "warm radio", language: "english",
