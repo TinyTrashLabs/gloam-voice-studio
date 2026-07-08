@@ -124,6 +124,13 @@ final class AppModel {
             foundryCandidateStore.cap = foundryCandidateRetentionCap
         }
     }
+    /// Retention cap for saved chat-reply audio takes.
+    var chatAudioRetentionCap: Int {
+        didSet {
+            UserDefaults.standard.set(chatAudioRetentionCap, forKey: "chatAudioRetentionCap")
+            chatAudioStore.cap = chatAudioRetentionCap
+        }
+    }
     /// Voice engine chat replies render with — independent of the Studio
     /// backend so slow, quality-first studio work (Fish) never makes chat
     /// crawl. Small/fast backends only.
@@ -292,6 +299,12 @@ final class AppModel {
             : StoragePaths.foundryCandidates,
         cap: foundryCandidateRetentionCap)
 
+    @ObservationIgnored lazy var chatAudioStore: ChatAudioStore = ChatAudioStore(
+        directory: UITestMode.isActive
+            ? UITestMode.tempRoot.appendingPathComponent("ChatAudio")
+            : StoragePaths.chatAudio,
+        cap: chatAudioRetentionCap)
+
     static let emotionOrder: [Emotion] = [.flat, .neutral, .warm, .excited, .hype]
 
     private var memoryPressureSource: DispatchSourceMemoryPressure?
@@ -327,6 +340,7 @@ final class AppModel {
         chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
         chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
         foundryCandidateRetentionCap = defaults.object(forKey: "foundryCandidateRetentionCap") as? Int ?? 50
+        chatAudioRetentionCap = defaults.object(forKey: "chatAudioRetentionCap") as? Int ?? 200
         chatThinking = defaults.bool(forKey: "chatThinking")
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
