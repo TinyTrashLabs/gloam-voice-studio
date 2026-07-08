@@ -1,12 +1,16 @@
+import AVFAudio
+import AVFoundation
 import EngineKit
 import StudioKit
 import SwiftUI
 
-/// Guided two-step flow for recording an acted `<base>-<emotion>` variant:
-/// a Prepare step (fixed script, emotion-specific delivery note, recording
-/// tips), then the standard `RecorderView`. Saves directly under the derived
-/// slug — no name/avatar/multi-clip apparatus, and no transcription step,
-/// since the transcript is the fixed passage.
+/// Guided recording flow for an acted `<base>-<emotion>` variant: the fixed
+/// script, an emotion-specific delivery note, and recording tips stay on
+/// screen for the entire flow — recording controls sit inline below them,
+/// never in a separate sheet that would cover the passage you're reading.
+/// Saves directly under the derived slug — no name/avatar/multi-clip
+/// apparatus, and no transcription step, since the transcript is the fixed
+/// passage.
 struct RecordEmotionVariantSheet: View {
     let baseSlug: String
     let baseName: String
@@ -15,8 +19,14 @@ struct RecordEmotionVariantSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(AppModel.self) private var model
-    @State private var showRecorder = false
+    @State private var recorder: AVAudioRecorder?
+    @State private var fileURL: URL?
+    @State private var startedAt: Date?
+    @State private var tick = Date()
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     @State private var error: String?
+
+    private var isRecording: Bool { startedAt != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -51,13 +61,18 @@ struct RecordEmotionVariantSheet: View {
                 }
             }
 
-            if let error { Text(error).foregroundStyle(.red).font(.callout) }
-
+            // Recording controls stay inline, right below the passage — never a
+            // separate sheet, so the script never gets covered while recording.
             HStack {
+                if isRecording {
+                    Text(String(format: "%.0f s", tick.timeIntervalSince(startedAt!)))
+                        .font(.system(.body, design: .monospaced))
+                        .onReceive(timer) { tick = $0 }
+                }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { cancel() }
                     .accessibilityIdentifier("record-variant-cancel")
-                if UITestMode.isActive {
+                if UITestMode.isActive && !isRecording {
                     Button("Use Sample Reference") {
                         saveTake(UITestMode.sampleReference())
                     }
@@ -65,16 +80,67 @@ struct RecordEmotionVariantSheet: View {
                     // page's recording form can be on screen behind this sheet.
                     .accessibilityIdentifier("record-variant-sample")
                 }
-                Button("Start Recording") { showRecorder = true }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("record-variant-start")
+                if isRecording {
+                    Button("Stop & Use") { stopAndSave() }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("record-variant-stop")
+                } else {
+                    Button("Start Recording") { startRecording() }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("record-variant-start")
+                }
             }
+
+            if let error { Text(error).foregroundStyle(.red).font(.callout) }
         }
         .padding(20)
         .frame(width: 460)
-        .sheet(isPresented: $showRecorder) {
-            RecorderView { data, _ in saveTake(data) }
+    }
+
+    private func startRecording() {
+        error = nil
+        AVCaptureDeviceRequestBridge.requestMicAccess { granted in
+            guard granted else { error = "Microphone access was denied."; return }
+            do {
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("gloam-variant-rec-\(UUID().uuidString).wav")
+                let settings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVSampleRateKey: 44100,
+                    AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsBigEndianKey: false,
+                ]
+                let rec = try AVAudioRecorder(url: url, settings: settings)
+                rec.record()
+                recorder = rec
+                fileURL = url
+                startedAt = Date()
+                tick = Date()
+            } catch { self.error = "\(error)" }
         }
+    }
+
+    private func stopAndSave() {
+        recorder?.stop()
+        recorder = nil
+        startedAt = nil
+        guard let fileURL else { return }
+        do {
+            _ = try RefAudioValidator.validate(url: fileURL)
+            let data = try Data(contentsOf: fileURL)
+            try? FileManager.default.removeItem(at: fileURL)
+            saveTake(data)
+        } catch { self.error = "\(error)" }
+    }
+
+    private func cancel() {
+        recorder?.stop()
+        recorder = nil
+        startedAt = nil
+        if let fileURL { try? FileManager.default.removeItem(at: fileURL) }
+        dismiss()
     }
 
     private func saveTake(_ data: Data) {
