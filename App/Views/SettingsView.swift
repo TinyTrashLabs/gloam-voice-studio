@@ -218,12 +218,20 @@ struct StorageSettings: View {
     @State private var sizes: [(String, Int64)] = []
 
     var body: some View {
+        @Bindable var model = model
         Form {
             ForEach(sizes, id: \.0) { name, bytes in
                 LabeledContent(name,
                     value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
             }
             Button("Recalculate") { recalc() }
+            Section("Voice candidates") {
+                Stepper("Keep last \(model.foundryCandidateRetentionCap) candidates",
+                        value: $model.foundryCandidateRetentionCap, in: 5...500, step: 5)
+                    .accessibilityIdentifier("foundry-retention-cap")
+                Text("Older qwen3-design candidates beyond this count are pruned automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear { recalc() }
@@ -233,6 +241,7 @@ struct StorageSettings: View {
         sizes = [
             ("Voices", StoragePaths.directorySize(StoragePaths.voices)),
             ("History", StoragePaths.directorySize(StoragePaths.history)),
+            ("Voice Candidates", StoragePaths.directorySize(StoragePaths.foundryCandidates)),
             ("Models", StoragePaths.directorySize(StoragePaths.models)),
         ]
     }
