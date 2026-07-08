@@ -14,7 +14,7 @@ struct CreateVoiceView: View {
     @State private var player = PreviewPlayer()
 
     // Create-mode
-    @State private var savingCandidate: Variant?
+    @State private var savingCandidate: FoundryCandidate?
     @State private var saveName = ""
     @State private var saveError: String?
 
@@ -215,25 +215,19 @@ struct CreateVoiceView: View {
         VStack(alignment: .leading, spacing: 8) {
             zoneLabel("CANDIDATES — PICK ONE TO SAVE")
             ForEach(model.foundryCandidates) { candidate in
-                GroupBox {
-                    HStack(spacing: 12) {
-                        WaveformView(wavData: candidate.wavData).frame(height: 40)
-                        Text(String(format: "%.1fs", candidate.seconds))
-                            .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
-                        Button(player.playingID == candidate.id.uuidString ? "Stop" : "Play") {
-                            player.toggle(id: candidate.id.uuidString, data: candidate.wavData)
-                        }.accessibilityIdentifier("foundry-play")
-                        Button("Save as Voice…") {
-                            saveName = ""; saveError = nil; savingCandidate = candidate
-                        }.buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
-                    }
-                    .padding(6)
-                }
+                FoundryCandidateRow(
+                    candidate: candidate, player: player,
+                    onSave: { saveName = ""; saveError = nil; savingCandidate = candidate },
+                    onUsePrompt: {
+                        model.foundryDescription = candidate.description
+                        model.foundryAuditionLine = candidate.auditionLine
+                        model.foundryLanguage = candidate.language ?? "auto"
+                    })
             }
         }
     }
 
-    private func saveSheet(_ candidate: Variant) -> some View {
+    private func saveSheet(_ candidate: FoundryCandidate) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Save this voice").font(.title3.bold())
             Text("It joins your library as a clone reference — the audition line becomes its "
@@ -254,7 +248,7 @@ struct CreateVoiceView: View {
         .padding(22).frame(width: 440)
     }
 
-    private func commitSave(_ candidate: Variant) {
+    private func commitSave(_ candidate: FoundryCandidate) {
         do { try model.saveFoundryVoice(candidate, name: saveName); savingCandidate = nil }
         catch { saveError = model.describeAny(error) }
     }
@@ -519,5 +513,56 @@ struct CreateVoiceView: View {
     }
     private var boxStroke: some View {
         RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1)
+    }
+}
+
+/// One generated qwen3-design candidate: waveform + play/save, plus an info
+/// toggle revealing the prompt that produced it and a button to reload that
+/// prompt into the editable fields above.
+private struct FoundryCandidateRow: View {
+    let candidate: FoundryCandidate
+    let player: PreviewPlayer
+    let onSave: () -> Void
+    let onUsePrompt: () -> Void
+
+    @State private var expanded = false
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    WaveformView(wavData: candidate.wavData).frame(height: 40)
+                    Text(String(format: "%.1fs", candidate.seconds))
+                        .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
+                    Button(player.playingID == candidate.id ? "Stop" : "Play") {
+                        player.toggle(id: candidate.id, data: candidate.wavData)
+                    }.accessibilityIdentifier("foundry-play")
+                    Button {
+                        expanded.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
+                    .help("Show the prompt that made this candidate")
+                    .accessibilityIdentifier("foundry-info-toggle")
+                    Button("Save as Voice…", action: onSave)
+                        .buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
+                }
+                if expanded {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(candidate.description).font(.caption).foregroundStyle(.secondary)
+                        Text("\u{201C}\(candidate.auditionLine)\u{201D}").font(.caption2).italic()
+                            .foregroundStyle(Brand.fgFaint)
+                        if let language = candidate.language {
+                            Text("Language: \(language)").font(.caption2).foregroundStyle(Brand.fgFaint)
+                        }
+                        Button("Use this prompt", action: onUsePrompt)
+                            .font(.caption).accessibilityIdentifier("foundry-use-prompt")
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(6)
+        }
     }
 }

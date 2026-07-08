@@ -42,6 +42,23 @@ struct Variant: Identifiable, Equatable {
     var rtf: Double { wallSeconds > 0 ? seconds / wallSeconds : 0 }
 }
 
+/// One persisted qwen3-design candidate: audio + the prompt that produced it,
+/// so it can be revisited after the description/audition-line fields move on
+/// (or the app relaunches). Deliberately separate from `Variant` — that type
+/// is shared with Studio's unrelated generation-history feature and must not
+/// carry Voice-Foundry-specific fields.
+struct FoundryCandidate: Identifiable, Equatable {
+    let id: String              // == FoundryCandidateEntry.id
+    let wavData: Data
+    let sampleRate: Int
+    let seconds: Double
+    let wallSeconds: Double
+    let description: String     // the qwen3-design instruct that produced this candidate
+    let auditionLine: String
+    let language: String?
+    var rtf: Double { wallSeconds > 0 ? seconds / wallSeconds : 0 }
+}
+
 /// A saved/seeded Direction (instruct) description the user can reuse.
 struct DirectionPreset: Identifiable, Codable, Equatable {
     var id = UUID()
@@ -98,6 +115,14 @@ final class AppModel {
     /// longer memory. Clamped to the model's own limit when building requests.
     var chatContextTokens: Int {
         didSet { UserDefaults.standard.set(chatContextTokens, forKey: "chatContextTokens") }
+    }
+    /// Retention cap for persisted Voice Foundry candidates (mirrors the
+    /// store's on-disk pruning into the in-memory list too).
+    var foundryCandidateRetentionCap: Int {
+        didSet {
+            UserDefaults.standard.set(foundryCandidateRetentionCap, forKey: "foundryCandidateRetentionCap")
+            foundryCandidateStore.cap = foundryCandidateRetentionCap
+        }
     }
     /// Voice engine chat replies render with — independent of the Studio
     /// backend so slow, quality-first studio work (Fish) never makes chat
@@ -194,7 +219,7 @@ final class AppModel {
     var foundryDescription = ""                     // qwen3-design instruct / Direction
     var foundryAuditionLine = AppModel.defaultAuditionLine
     var foundryLanguage = "auto"
-    var foundryCandidates: [Variant] = []
+    var foundryCandidates: [FoundryCandidate] = []
     var foundryGenerating = false
     var foundryBaking = false
     var foundryError: String?
@@ -261,6 +286,12 @@ final class AppModel {
             ? UITestMode.tempRoot.appendingPathComponent("Chats")
             : StoragePaths.appSupport.appendingPathComponent("Chats")))
 
+    @ObservationIgnored lazy var foundryCandidateStore: FoundryCandidateStore = FoundryCandidateStore(
+        directory: UITestMode.isActive
+            ? UITestMode.tempRoot.appendingPathComponent("FoundryCandidates")
+            : StoragePaths.foundryCandidates,
+        cap: foundryCandidateRetentionCap)
+
     static let emotionOrder: [Emotion] = [.flat, .neutral, .warm, .excited, .hype]
 
     private var memoryPressureSource: DispatchSourceMemoryPressure?
@@ -295,6 +326,7 @@ final class AppModel {
         ttsSpeedEMA = defaults.dictionary(forKey: "ttsSpeedEMA") as? [String: Double] ?? [:]
         chatParallelSpeech = defaults.object(forKey: "chatParallelSpeech") as? Bool ?? true
         chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
+        foundryCandidateRetentionCap = defaults.object(forKey: "foundryCandidateRetentionCap") as? Int ?? 50
         chatThinking = defaults.bool(forKey: "chatThinking")
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
@@ -337,6 +369,14 @@ final class AppModel {
             Task { await engine.acknowledgeLicense(for: .fishS2Pro) }
         }
         installMemoryPressureHandler()
+        foundryCandidates = foundryCandidateStore.list().compactMap { entry -> FoundryCandidate? in
+            guard let url = try? foundryCandidateStore.wavURL(entry.id),
+                  let wav = try? Data(contentsOf: url) else { return nil }
+            return FoundryCandidate(id: entry.id, wavData: wav, sampleRate: entry.sampleRate,
+                                     seconds: entry.seconds, wallSeconds: entry.wallSeconds,
+                                     description: entry.description, auditionLine: entry.auditionLine,
+                                     language: entry.language)
+        }
     }
 
     // MARK: generation
@@ -631,10 +671,18 @@ final class AppModel {
             let samples = AudioAssembler.normalizePeak(floats: raw.samples)
             let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
             let seconds = Double(samples.count) / Double(raw.sampleRate)
+            let resolvedLanguage = foundryLanguage == "auto" ? nil : foundryLanguage
+            let entry = try foundryCandidateStore.save(
+                wav: wav, description: instruct, auditionLine: line, language: resolvedLanguage,
+                sampleRate: raw.sampleRate, seconds: seconds, wallSeconds: raw.wallSeconds)
             foundryCandidates.insert(
-                Variant(label: "\(foundryCandidates.count + 1)", wavData: wav,
-                        sampleRate: raw.sampleRate, seconds: seconds, wallSeconds: raw.wallSeconds),
+                FoundryCandidate(id: entry.id, wavData: wav, sampleRate: raw.sampleRate,
+                                  seconds: seconds, wallSeconds: raw.wallSeconds,
+                                  description: instruct, auditionLine: line, language: resolvedLanguage),
                 at: 0)
+            if foundryCandidates.count > foundryCandidateRetentionCap {
+                foundryCandidates.removeLast(foundryCandidates.count - foundryCandidateRetentionCap)
+            }
             await refreshEngineStatus()
         } catch {
             foundryError = describeAny(error)
@@ -643,11 +691,11 @@ final class AppModel {
 
     /// Save a candidate as a Library voice: its audio becomes ref.wav and the exact
     /// audition line becomes refText, so it clones cleanly. Throws on slug collision.
+    /// Uses the candidate's OWN audition line (not the possibly-since-edited live
+    /// field) so saving an older candidate still matches what it actually said.
     @discardableResult
-    func saveFoundryVoice(_ candidate: Variant, name: String) throws -> VoiceMeta {
-        let meta = try voices.save(
-            name: name, refWav: candidate.wavData,
-            refText: foundryAuditionLine.trimmingCharacters(in: .whitespacesAndNewlines))
+    func saveFoundryVoice(_ candidate: FoundryCandidate, name: String) throws -> VoiceMeta {
+        let meta = try voices.save(name: name, refWav: candidate.wavData, refText: candidate.auditionLine)
         voicesVersion += 1
         selectedVoiceSlug = meta.slug
         lastSavedFoundrySlug = meta.slug
