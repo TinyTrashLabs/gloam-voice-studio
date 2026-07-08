@@ -45,6 +45,11 @@ final class ChatController {
     var chatError: String?
     /// Non-blocking: reply text arrived but speech synthesis had a problem.
     var speechWarning: String?
+    /// Message ids with an explicit, user-triggered synthesis in flight (a
+    /// speaker click with no cached take yet, or a Regenerate selection) —
+    /// drives the spinner state on that bubble's speaker icon so a second
+    /// click can't race it into double-synthesizing.
+    var pendingAudioMessageIDs: Set<String> = []
     var lastStats: ChatMessageStats?
     var sampling: ChatSamplingSettings {
         didSet {
@@ -297,22 +302,82 @@ final class ChatController {
         isSynthesizing = false
     }
 
-    /// Replay an assistant message (or speak it for the first time).
+    /// Synthesizes the entire reply text in one non-chunked pass, saves it
+    /// as a new take, and (if `play`) enqueues it for playback once ready.
+    /// Called only in response to an explicit user action (a speaker click
+    /// with no cached take, or a Regenerate selection) — never invoked
+    /// automatically or in the background.
+    private func synthesizeWholeReplyAndSave(message: ChatMessage, convoID: String,
+                                             backend: BackendID, play: Bool) async {
+        pendingAudioMessageIDs.insert(message.id)
+        defer { pendingAudioMessageIDs.remove(message.id) }
+        guard let convo = conversation(for: convoID) else { return }
+        do {
+            let result = try await app.synthesizeLine(
+                text: message.text, voiceSlug: convo.voiceSlug,
+                emotion: .neutral, speed: 1.0, recordHistory: false,
+                backendOverride: backend)
+            let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
+                                        sampleRate: result.sampleRate)
+            let seconds = Double(result.samples.count) / Double(result.sampleRate)
+            let entry = try app.chatAudioStore.save(
+                wav: wav, conversationID: convoID, messageID: message.id,
+                backend: backend.rawValue, sampleRate: result.sampleRate,
+                seconds: seconds, wallMs: Int(result.wallSeconds * 1000))
+            guard var freshConvo = conversation(for: convoID),
+                  let index = freshConvo.messages.firstIndex(where: { $0.id == message.id })
+            else { return }
+            freshConvo.messages[index].audioTakeIDs =
+                (freshConvo.messages[index].audioTakeIDs ?? []) + [entry.id]
+            freshConvo.messages[index].currentTakeID = entry.id
+            commit(freshConvo)
+            if play {
+                speechTask?.cancel()
+                speech.stop()
+                speech.enqueue(wav: wav, text: message.text,
+                               voiced: ChatSpeechQueue.voicedBounds(
+                                   samples: result.samples, sampleRate: result.sampleRate))
+            }
+        } catch {
+            speechWarning = "Speech unavailable: \(app.describeAny(error))"
+        }
+    }
+
+    /// Replay an assistant message. If it has a cached take, plays it
+    /// directly — instant, no synthesis. Otherwise (chatAutoSpeak was off
+    /// when this reply generated, or the take was pruned) synthesizes it
+    /// on demand and saves the result as a take for next time.
     func speak(_ message: ChatMessage) {
         guard let convo = current else { return }
         // Echo guard: no speech while the composer mic is capturing.
         guard !micCaptureActive else { return }
+        // A synthesis is already in flight for this exact message — ignore
+        // the click rather than racing a second synthesis.
+        guard !pendingAudioMessageIDs.contains(message.id) else { return }
         // Replaying while a reply is streaming-and-speaking is a user
         // override: close the live feed (its consumer is about to be
         // cancelled — sentences queued for a dead consumer would silently
         // vanish) and don't resume auto-speech for that reply on finish.
-        if liveSignal != nil {
-            endLiveSpeech()
-            liveSpeechInterrupted = true
+        func interruptLiveSpeechIfNeeded() {
+            if liveSignal != nil {
+                endLiveSpeech()
+                liveSpeechInterrupted = true
+            }
         }
+        if let takeID = message.currentTakeID,
+           let url = try? app.chatAudioStore.wavURL(takeID),
+           let wav = try? Data(contentsOf: url) {
+            interruptLiveSpeechIfNeeded()
+            speechTask?.cancel()
+            speech.stop()
+            speech.enqueue(wav: wav, text: message.text, voiced: nil)
+            return
+        }
+        interruptLiveSpeechIfNeeded()
         speechTask?.cancel()
         speech.stop()
-        speakText(message.text, voiceSlug: convo.voiceSlug, convoID: convo.id)
+        Task { await synthesizeWholeReplyAndSave(
+            message: message, convoID: convo.id, backend: app.chatTTSBackend, play: true) }
     }
 
     // MARK: internals
