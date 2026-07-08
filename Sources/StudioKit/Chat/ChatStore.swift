@@ -26,9 +26,16 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
     /// Local file paths of attached images (vision input). Optional so old
     /// conversation files decode unchanged.
     public var attachments: [String]?
+    /// Saved audio takes for this reply (one per synthesis, possibly across
+    /// several models), oldest first. Populated only for assistant messages
+    /// whose audio was actually synthesized — never proactively.
+    public var audioTakeIDs: [String]?
+    /// Which take in `audioTakeIDs` is active (plays on a speaker click).
+    public var currentTakeID: String?
     public init(id: String, role: String, text: String, createdAt: String,
                 stats: ChatMessageStats? = nil, errored: Bool? = nil,
-                attachments: [String]? = nil) {
+                attachments: [String]? = nil, audioTakeIDs: [String]? = nil,
+                currentTakeID: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -36,6 +43,8 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
         self.stats = stats
         self.errored = errored
         self.attachments = attachments
+        self.audioTakeIDs = audioTakeIDs
+        self.currentTakeID = currentTakeID
     }
 }
 
@@ -75,7 +84,9 @@ public struct Conversation: Codable, Equatable, Sendable, Identifiable {
 
 /// Conversation persistence: one <uuid>.json per conversation under an
 /// injectable directory (Application Support/Chats in the app, temp in tests).
-/// Reply audio is deliberately NOT stored — replay re-synthesizes.
+/// Reply audio itself lives in `ChatAudioStore`, keyed by the take ids each
+/// `ChatMessage` references — never inlined here, so conversation files stay
+/// small regardless of how much audio a conversation accumulates.
 public final class ChatStore: @unchecked Sendable {
     public let directory: URL
 
