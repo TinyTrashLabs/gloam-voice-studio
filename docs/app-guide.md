@@ -51,6 +51,14 @@ Only clone voices you have the right to use. After saving, the variants panel
 offers acted emotion bakes (`<voice>-excited`, …) used by Studio's emotion
 chips and the API's `emotion` parameter.
 
+The panel's **Record a take** row is the second way to get emotion variants:
+read a fixed guided script in character (each emotion shows its own delivery
+note), and the recording is saved as `<voice>-<emotion>`. Recorded takes are
+the **only** way to get emotional range on `chatterbox-turbo` — it has no
+runtime emotion knob, so the reference clip itself carries the emotion.
+Baking stays the recommended path when a `fish-s2-pro` or `chatterbox`
+render is good enough.
+
 ## Chat
 
 Pick a voice, type (or push-to-talk with the mic button), and the voice
