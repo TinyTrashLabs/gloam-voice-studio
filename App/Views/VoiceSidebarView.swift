@@ -11,15 +11,12 @@ struct VoiceSidebarView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
     @State private var expandedBases: Set<String> = []
-    @State private var editorPresented = false
-    @State private var editingSlug: String?
     @State private var importerPresented = false
     @State private var exportDoc: DataDocument?
     @State private var exportName = ""
     @State private var actionError: String?
     @State private var migratePresented = false
     @State private var refPlayer = PreviewPlayer()
-    @State private var variantBase: VoiceMeta?
     @State private var hoveredSlug: String?
     @State private var catalogPresented = false
 
@@ -114,14 +111,6 @@ struct VoiceSidebarView: View {
                 importPacks(result)
             }
             .accessibilityIdentifier("voice-list")
-            .sheet(isPresented: $editorPresented, onDismiss: { variantBase = nil }) {
-                if let base = variantBase {
-                    VoiceEditorSheet(editingSlug: nil,
-                                     prefilledName: "\(base.name)-hype")
-                } else {
-                    VoiceEditorSheet(editingSlug: editingSlug)
-                }
-            }
             .sheet(isPresented: $catalogPresented) {
                 VoiceCatalogView()
                     .environment(model)
@@ -296,12 +285,6 @@ struct VoiceSidebarView: View {
             previewRef(voice)
         }
         .help("Play the reference audio for this voice")
-        Button("New Emotion Variant…") {
-            variantBase = voice
-            editingSlug = nil
-            editorPresented = true
-        }
-        .help("Create a variant of this voice for a specific emotion")
         Button("Export…") { export(voice.slug) }
             .help("Export voice as a .gvoice pack")
         Divider()

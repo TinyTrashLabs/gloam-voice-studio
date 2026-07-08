@@ -5,11 +5,9 @@ import UniformTypeIdentifiers
 
 /// The clone-a-recording editor: name + reference clip (record / drop /
 /// sample) + transcript. Hosted inline by the Create Voice page's
-/// "From a recording" mode, and by `VoiceEditorSheet` for the contextual
-/// emotion-variant flow.
+/// "From a recording" mode.
 struct VoiceEditorForm: View {
     let editingSlug: String?
-    var prefilledName: String? = nil
     /// Called with the saved voice's slug (nil when updating an existing one).
     var onSaved: (String?) -> Void
     /// When non-nil a Cancel button shows (sheet hosting); inline hosting omits it.
@@ -67,9 +65,8 @@ struct VoiceEditorForm: View {
                 .accessibilityIdentifier("voice-name")
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $refText).frame(height: 70)
+            ExpandableTextEditor(text: $refText, accessibilityID: "voice-ref-text")
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
-                .accessibilityIdentifier("voice-ref-text")
             if transcribing {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
@@ -196,12 +193,7 @@ struct VoiceEditorForm: View {
     }
 
     private func loadExisting() {
-        guard let slug = editingSlug, let found = try? model.voices.get(slug) else {
-            if editingSlug == nil, let prefill = prefilledName {
-                name = prefill
-            }
-            return
-        }
+        guard let slug = editingSlug, let found = try? model.voices.get(slug) else { return }
         name = found.meta.name
         refText = found.meta.refText
         keepingExistingRef = true
@@ -257,23 +249,3 @@ struct VoiceEditorForm: View {
     }
 }
 
-/// Sheet wrapper — kept for the contextual "New Emotion Variant…" flow; plain
-/// voice creation lives inline on the Create Voice page ("From a recording").
-struct VoiceEditorSheet: View {
-    let editingSlug: String?
-    var prefilledName: String? = nil
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(editingSlug == nil ? "New Voice" : "Edit Voice").font(.title3.bold())
-            VoiceEditorForm(
-                editingSlug: editingSlug,
-                prefilledName: prefilledName,
-                onSaved: { _ in dismiss() },
-                onCancel: { dismiss() })
-        }
-        .padding(20)
-        .frame(width: 440)
-    }
-}

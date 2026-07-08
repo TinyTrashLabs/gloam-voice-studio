@@ -10,10 +10,11 @@ import UniformTypeIdentifiers
 /// panel, save-to-library, and page chrome.
 struct CreateVoiceView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     @State private var player = PreviewPlayer()
 
     // Create-mode
-    @State private var savingCandidate: Variant?
+    @State private var savingCandidate: FoundryCandidate?
     @State private var saveName = ""
     @State private var saveError: String?
 
@@ -21,6 +22,15 @@ struct CreateVoiceView: View {
     // preferred; Chatterbox is the fallback (intensity only) for users without Fish.
     @State private var bakeBaker: BackendID = .fishS2Pro
     @State private var deletingVariantSlug: String?
+    @State private var recordingVariant: RecordVariantTarget?
+
+    /// Target of the guided record-a-take flow (sheet item).
+    private struct RecordVariantTarget: Identifiable {
+        let baseSlug: String
+        let baseName: String
+        let emotion: Emotion
+        var id: String { "\(baseSlug)-\(emotion.rawValue)" }
+    }
 
     // Edit-mode
     @State private var editName = ""
@@ -44,6 +54,11 @@ struct CreateVoiceView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .sheet(item: $savingCandidate) { saveSheet($0) }
+        .sheet(item: $recordingVariant) { target in
+            RecordEmotionVariantSheet(
+                baseSlug: target.baseSlug, baseName: target.baseName,
+                emotion: target.emotion, onSaved: {})
+        }
         .confirmationDialog(
             "Delete this variant?",
             isPresented: Binding(get: { deletingVariantSlug != nil },
@@ -65,12 +80,16 @@ struct CreateVoiceView: View {
 
     @ViewBuilder private var createContent: some View {
         @Bindable var model = model
-        header(title: "Create a Voice",
-               subtitle: model.createVoiceSource == .describe
-                   ? "Describe a voice, audition takes until one clicks, then save it to your "
-                     + "library — every clone model (and the whole app) can reuse it from then on."
-                   : "Record or drop a clip of a voice you have the rights to use — it becomes "
-                     + "a reusable Library voice for every clone model (and the whole app).")
+        HStack(alignment: .top) {
+            header(title: "Create a Voice",
+                   subtitle: model.createVoiceSource == .describe
+                       ? "Describe a voice, audition takes until one clicks, then save it to your "
+                         + "library — every clone model (and the whole app) can reuse it from then on."
+                       : "Record or drop a clip of a voice you have the rights to use — it becomes "
+                         + "a reusable Library voice for every clone model (and the whole app).")
+            Spacer()
+            docsHelpButton
+        }
         Picker("", selection: $model.createVoiceSource) {
             Text("From a description").tag(AppModel.CreateVoiceSource.describe)
             Text("From a recording").tag(AppModel.CreateVoiceSource.record)
@@ -158,10 +177,9 @@ struct CreateVoiceView: View {
             zoneLabel("DESCRIBE THE VOICE")
             Text("Timbre, age, accent, mood, pace — plain English, ~1–3 sentences.")
                 .font(.caption2).foregroundStyle(.secondary)
-            TextEditor(text: $model.foundryDescription)
-                .font(.callout).frame(height: 70).scrollContentBackground(.hidden)
+            ExpandableTextEditor(text: $model.foundryDescription, accessibilityID: "foundry-description")
+                .font(.callout).scrollContentBackground(.hidden)
                 .padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("foundry-description")
             if model.foundryDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(#"e.g. "elderly storyteller, gravelly and slow, with a knowing warmth""#)
                     .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
@@ -183,10 +201,9 @@ struct CreateVoiceView: View {
             Text("What each candidate says while you audition. A varied ~6–8s line makes the "
                  + "cleanest clone reference; edit it or use your own.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $model.foundryAuditionLine)
-                .font(.callout).frame(height: 54).scrollContentBackground(.hidden)
+            ExpandableTextEditor(text: $model.foundryAuditionLine, accessibilityID: "foundry-audition-line")
+                .font(.callout).scrollContentBackground(.hidden)
                 .padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("foundry-audition-line")
         }
     }
 
@@ -212,25 +229,19 @@ struct CreateVoiceView: View {
         VStack(alignment: .leading, spacing: 8) {
             zoneLabel("CANDIDATES — PICK ONE TO SAVE")
             ForEach(model.foundryCandidates) { candidate in
-                GroupBox {
-                    HStack(spacing: 12) {
-                        WaveformView(wavData: candidate.wavData).frame(height: 40)
-                        Text(String(format: "%.1fs", candidate.seconds))
-                            .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
-                        Button(player.playingID == candidate.id.uuidString ? "Stop" : "Play") {
-                            player.toggle(id: candidate.id.uuidString, data: candidate.wavData)
-                        }.accessibilityIdentifier("foundry-play")
-                        Button("Save as Voice…") {
-                            saveName = ""; saveError = nil; savingCandidate = candidate
-                        }.buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
-                    }
-                    .padding(6)
-                }
+                FoundryCandidateRow(
+                    candidate: candidate, player: player,
+                    onSave: { saveName = ""; saveError = nil; savingCandidate = candidate },
+                    onUsePrompt: {
+                        model.foundryDescription = candidate.description
+                        model.foundryAuditionLine = candidate.auditionLine
+                        model.foundryLanguage = candidate.language ?? "auto"
+                    })
             }
         }
     }
 
-    private func saveSheet(_ candidate: Variant) -> some View {
+    private func saveSheet(_ candidate: FoundryCandidate) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Save this voice").font(.title3.bold())
             Text("It joins your library as a clone reference — the audition line becomes its "
@@ -251,7 +262,7 @@ struct CreateVoiceView: View {
         .padding(22).frame(width: 440)
     }
 
-    private func commitSave(_ candidate: Variant) {
+    private func commitSave(_ candidate: FoundryCandidate) {
         do { try model.saveFoundryVoice(candidate, name: saveName); savingCandidate = nil }
         catch { saveError = model.describeAny(error) }
     }
@@ -263,6 +274,7 @@ struct CreateVoiceView: View {
             header(title: "Edit Voice", subtitle: "Rename, refine the reference, and bake acted "
                    + "emotion variants of this voice — the whole app uses them.")
             Spacer()
+            docsHelpButton
             Button("Done") { model.editingVoiceSlug = nil }
                 .accessibilityIdentifier("edit-done")
         }
@@ -322,9 +334,9 @@ struct CreateVoiceView: View {
             }
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption2).foregroundStyle(.secondary)
-            TextEditor(text: $editRefText).font(.callout).frame(height: 54)
-                .scrollContentBackground(.hidden).padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("edit-ref-text")
+            ExpandableTextEditor(text: $editRefText, accessibilityID: "edit-ref-text")
+                .font(.callout).scrollContentBackground(.hidden)
+                .padding(6).background(boxBG).overlay(boxStroke)
         }
         .fileImporter(isPresented: $audioImporter,
                       allowedContentTypes: [.audio, .wav, .mpeg4Audio],
@@ -382,6 +394,9 @@ struct CreateVoiceView: View {
             .filter { seen.insert($0).inserted }
         let existing = known.filter { (try? model.voices.get("\(targetSlug)-\($0)")) != nil }
         let unbaked = VoiceExpression.allCases.filter { !existing.contains($0.rawValue) }
+        // No neutral chip: VoiceLibrary.resolve always maps .neutral to the base
+        // voice, so a recorded "-neutral" take would never be played.
+        let unrecorded = Emotion.allCases.filter { $0 != .neutral && !existing.contains($0.rawValue) }
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 zoneLabel("EMOTION VARIANTS")
@@ -414,9 +429,21 @@ struct CreateVoiceView: View {
                 }
             }
             if !unbaked.isEmpty {
-                Text("Add a variant").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
+                Text("Bake a take").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
                 FlowLayout(spacing: 6) {
                     ForEach(unbaked, id: \.self) { expr in addVariantChip(expr, targetSlug: targetSlug) }
+                }
+            }
+            if !unrecorded.isEmpty {
+                Text("Record a take").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
+                Text("Read a guided script in character — the only way to get emotional "
+                     + "range on chatterbox-turbo (no emotion knob; the reference clip carries it).")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+                FlowLayout(spacing: 6) {
+                    ForEach(unrecorded, id: \.self) { emo in
+                        recordVariantChip(emo, targetSlug: targetSlug, baseName: name)
+                    }
                 }
             }
             if model.foundryBaking {
@@ -434,13 +461,10 @@ struct CreateVoiceView: View {
     private func variantManageRow(_ suffix: String, targetSlug: String) -> some View {
         let variantSlug = "\(targetSlug)-\(suffix)"
         let existing = try? model.voices.get(variantSlug)
-        let marker = VoiceExpression(rawValue: suffix)   // nil for legacy names (warm/hype)
+        let marker = VoiceExpression(rawValue: suffix)   // nil for recorded names (warm/hype)
         return HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
             Text(suffix.capitalized).font(.system(.callout, design: .monospaced))
-            if marker == nil {
-                Text("legacy").font(.caption2).foregroundStyle(Brand.fgFaint)
-            }
             Spacer()
             if let existing {
                 Button(player.playingID == variantSlug ? "Stop" : "Play") {
@@ -452,6 +476,12 @@ struct CreateVoiceView: View {
                     Task { await model.bakeExpressionVariants(
                         baseSlug: targetSlug, expressions: [marker], baker: bakeBaker) }
                 }.font(.caption).buttonStyle(.bordered).disabled(model.foundryBaking)
+            } else if let emo = Emotion(rawValue: suffix) {
+                Button("Re-record") {
+                    let baseName = (try? model.voices.get(targetSlug).meta.name) ?? targetSlug
+                    recordingVariant = RecordVariantTarget(
+                        baseSlug: targetSlug, baseName: baseName, emotion: emo)
+                }.font(.caption).buttonStyle(.bordered)
             }
             Button(role: .destructive) {
                 deletingVariantSlug = variantSlug
@@ -481,6 +511,25 @@ struct CreateVoiceView: View {
         .accessibilityIdentifier("variant-add-\(expr.rawValue)")
     }
 
+    private func recordVariantChip(_ emotion: Emotion, targetSlug: String,
+                                   baseName: String) -> some View {
+        Button {
+            recordingVariant = RecordVariantTarget(
+                baseSlug: targetSlug, baseName: baseName, emotion: emotion)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "mic.fill").font(.system(size: 8, weight: .bold))
+                Text(emotion.rawValue).font(.system(.caption, design: .monospaced))
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(Color.white.opacity(0.04)))
+            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .foregroundStyle(Brand.fgDim)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("record-variant-\(emotion.rawValue)")
+    }
+
     // MARK: - Shared chrome
 
     private func header(title: String, subtitle: String) -> some View {
@@ -489,6 +538,16 @@ struct CreateVoiceView: View {
             Text(subtitle).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var docsHelpButton: some View {
+        Button { openWindow(id: "docs") } label: {
+            Image(systemName: "questionmark.circle")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Brand.fgDim)
+        .help("Open documentation")
+        .accessibilityIdentifier("create-voice-docs-help")
     }
 
     private func errorText(_ text: String) -> some View {
@@ -505,5 +564,56 @@ struct CreateVoiceView: View {
     }
     private var boxStroke: some View {
         RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1)
+    }
+}
+
+/// One generated qwen3-design candidate: waveform + play/save, plus an info
+/// toggle revealing the prompt that produced it and a button to reload that
+/// prompt into the editable fields above.
+private struct FoundryCandidateRow: View {
+    let candidate: FoundryCandidate
+    let player: PreviewPlayer
+    let onSave: () -> Void
+    let onUsePrompt: () -> Void
+
+    @State private var expanded = false
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    WaveformView(wavData: candidate.wavData).frame(height: 40)
+                    Text(String(format: "%.1fs", candidate.seconds))
+                        .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
+                    Button(player.playingID == candidate.id ? "Stop" : "Play") {
+                        player.toggle(id: candidate.id, data: candidate.wavData)
+                    }.accessibilityIdentifier("foundry-play")
+                    Button {
+                        expanded.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
+                    .help("Show the prompt that made this candidate")
+                    .accessibilityIdentifier("foundry-info-toggle")
+                    Button("Save as Voice…", action: onSave)
+                        .buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
+                }
+                if expanded {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(candidate.description).font(.caption).foregroundStyle(.secondary)
+                        Text("\u{201C}\(candidate.auditionLine)\u{201D}").font(.caption2).italic()
+                            .foregroundStyle(Brand.fgFaint)
+                        if let language = candidate.language {
+                            Text("Language: \(language)").font(.caption2).foregroundStyle(Brand.fgFaint)
+                        }
+                        Button("Use this prompt", action: onUsePrompt)
+                            .font(.caption).accessibilityIdentifier("foundry-use-prompt")
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(6)
+        }
     }
 }

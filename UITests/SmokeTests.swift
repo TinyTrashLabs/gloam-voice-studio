@@ -315,4 +315,63 @@ final class SmokeTests: XCTestCase {
                       "assistant reply should appear in the transcript. "
                       + "debugDescription:\n\(app.debugDescription)")
     }
+
+    @MainActor
+    func testRecordEmotionVariantGuidedFlow() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) { consentButton.click() }
+
+        // ── Step 1: Create a base voice (saving keeps us on the Create Voice
+        // page, where the variants panel appears for the just-saved voice). ──
+        app.buttons["new-voice"].firstMatch.click()
+        let nameField = app.textFields["voice-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.click()
+        nameField.typeText("Variant Voice")
+        app.buttons["use-sample-ref"].click()
+        app.buttons["voice-save"].click()
+
+        // ── Step 2: Open the guided record flow for the warm take. ──────────
+        let warmChip = app.buttons["record-variant-warm"].firstMatch
+        XCTAssertTrue(warmChip.waitForExistence(timeout: 5),
+                      "record-variant-warm chip should appear in the variants panel")
+        warmChip.click()
+
+        // ── Step 3: Prepare step shows the passage and the warm delivery note. ──
+        let passage = app.staticTexts.containing(
+            NSPredicate(format: "value CONTAINS 'lighthouse keeper' OR label CONTAINS 'lighthouse keeper'")
+        ).firstMatch
+        XCTAssertTrue(passage.waitForExistence(timeout: 5),
+                      "Prepare step should show the fixed recording passage")
+        let warmNote = app.staticTexts.containing(
+            NSPredicate(format: "value CONTAINS 'Read warmly' OR label CONTAINS 'Read warmly'")
+        ).firstMatch
+        XCTAssertTrue(warmNote.waitForExistence(timeout: 5),
+                      "Prepare step should show the warm-specific delivery note")
+
+        // ── Step 4: Save via the sample-reference shortcut (no real mic). ────
+        let sample = app.buttons["record-variant-sample"].firstMatch
+        XCTAssertTrue(sample.waitForExistence(timeout: 5),
+                      "record-variant-sample shortcut should be visible in --uitest mode")
+        sample.click()
+
+        // ── Step 5: The saved <slug>-warm variant appears as a managed row. ──
+        let warmRow = app.groups["variant-row-warm"].firstMatch
+        let warmRowAny = app.descendants(matching: .any)["variant-row-warm"].firstMatch
+        XCTAssertTrue(warmRow.waitForExistence(timeout: 5) || warmRowAny.waitForExistence(timeout: 5),
+                      "variant-row-warm should appear after the take is saved. "
+                      + "debugDescription:\n\(app.debugDescription)")
+
+        // The sidebar's ⋯ menu must no longer offer the removed legacy item.
+        let voiceRow = app.staticTexts["Variant Voice"].firstMatch
+        XCTAssertTrue(voiceRow.waitForExistence(timeout: 5))
+        voiceRow.rightClick()
+        XCTAssertFalse(app.menuItems["New Emotion Variant…"].waitForExistence(timeout: 2),
+                       "the legacy New Emotion Variant… menu item should be gone")
+        app.typeKey(.escape, modifierFlags: [])
+    }
 }
