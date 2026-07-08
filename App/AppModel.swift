@@ -240,6 +240,19 @@ final class AppModel {
     /// When non-nil, the Create Voice page opens in Edit mode for this voice.
     var editingVoiceSlug: String?
 
+    /// What to resume once a pending download/license prompt clears.
+    /// `.studioGenerate` re-checks Studio's picker before resuming (see
+    /// `resumePendingSynthesisAction`) since it's driven by shared, mutable
+    /// picker state the user could change while the prompt was up;
+    /// `.chatRegenerate` has no equivalent staleness risk — its target
+    /// backend is baked into the action itself, chosen from a per-message
+    /// menu, not read from shared state.
+    enum PendingSynthesisAction: Equatable {
+        case studioGenerate
+        case chatRegenerate(conversationID: String, messageID: String, backend: BackendID)
+    }
+    var pendingSynthesisAction: PendingSynthesisAction?
+
     // Download-on-demand: set when Generate hits a model that isn't downloaded,
     // so the UI can offer to fetch it (instead of a red error). Drives a sheet.
     var downloadPrompt: BackendID?
@@ -405,12 +418,14 @@ final class AppModel {
         // since a backend can already be downloaded (e.g. via the download-prompt
         // path below, before this gate existed) yet still unacknowledged.
         if backend.spec.needsLicenseAck && !didAckFishLicense {
+            pendingSynthesisAction = .studioGenerate
             licensePromptBackend = backend
             return
         }
         // Model not on disk yet → offer to download it (no red error). The sheet's
         // confirm starts a background download and generates once it's ready.
         if downloads.state(for: backend) != .ready {
+            pendingSynthesisAction = .studioGenerate
             downloadPrompt = backend
             return
         }
@@ -443,24 +458,27 @@ final class AppModel {
     }
 
     /// Confirm the license offered by `licensePromptBackend`: acknowledge it,
-    /// then either generate right away (already downloaded) or fall into the
-    /// same download-and-auto-generate flow as `confirmDownloadFromPrompt`.
+    /// then either resume right away (already downloaded) or fall into the
+    /// same download-and-auto-resume flow as `confirmDownloadFromPrompt`.
     func confirmLicensePrompt() {
         guard let pending = licensePromptBackend else { return }
         licensePromptBackend = nil
         didAckFishLicense = true   // didSet also acks it with the engine
         if downloads.state(for: pending) == .ready {
-            if backend == pending { Task { await generate(takes: 1) } }
+            resumePendingSynthesisAction(matching: pending)
         } else {
             downloadPrompt = pending
             confirmDownloadFromPrompt()
         }
     }
 
-    func cancelLicensePrompt() { licensePromptBackend = nil }
+    func cancelLicensePrompt() {
+        licensePromptBackend = nil
+        pendingSynthesisAction = nil
+    }
 
     /// Confirm the download offered by `downloadPrompt`: start a background
-    /// download (progress shows in the toolbar) and auto-generate once ready.
+    /// download (progress shows in the toolbar) and auto-resume once ready.
     func confirmDownloadFromPrompt() {
         guard let pending = downloadPrompt else { return }
         downloadPrompt = nil
@@ -470,9 +488,10 @@ final class AppModel {
                 try? await Task.sleep(for: .milliseconds(400))
                 switch downloads.state(for: pending) {
                 case .ready:
-                    if backend == pending { await generate(takes: 1) }
+                    resumePendingSynthesisAction(matching: pending)
                     return
                 case .failed, .notDownloaded:
+                    pendingSynthesisAction = nil
                     return   // user cancelled or download failed; surfaced in Settings
                 case .downloading:
                     continue
@@ -481,7 +500,30 @@ final class AppModel {
         }
     }
 
-    func cancelDownloadPrompt() { downloadPrompt = nil }
+    func cancelDownloadPrompt() {
+        downloadPrompt = nil
+        pendingSynthesisAction = nil
+    }
+
+    /// Dispatches whatever action was waiting on a download/license prompt
+    /// that just cleared for `pending`. `.studioGenerate` preserves the
+    /// pre-existing staleness guard (only resumes if Studio's picker still
+    /// points at `pending` — the user could have changed it while the
+    /// prompt was up); `.chatRegenerate` always resumes, since its target
+    /// backend was chosen explicitly and can't have gone stale the same way.
+    private func resumePendingSynthesisAction(matching pending: BackendID) {
+        let action = pendingSynthesisAction
+        pendingSynthesisAction = nil
+        switch action {
+        case .studioGenerate:
+            if backend == pending { Task { await self.generate(takes: 1) } }
+        case .chatRegenerate(let conversationID, let messageID, let backend):
+            Task { await self.chat.resumeRegenerate(
+                conversationID: conversationID, messageID: messageID, backend: backend) }
+        case nil:
+            break
+        }
+    }
 
     // MARK: Direction presets
 

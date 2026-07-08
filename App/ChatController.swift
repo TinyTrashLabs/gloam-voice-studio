@@ -343,6 +343,51 @@ final class ChatController {
         }
     }
 
+    /// Regenerate a reply's audio with a specific model, chosen from the
+    /// bubble's menu. Checks the same download/license preconditions
+    /// Studio's Generate already does; if either blocks, stashes this as
+    /// the pending action so the shared prompt sheet resumes it once
+    /// cleared (see AppModel.PendingSynthesisAction).
+    func regenerateAudio(for message: ChatMessage, backend: BackendID) async {
+        guard let convo = current else { return }
+        if backend.spec.needsLicenseAck && !app.didAckFishLicense {
+            app.pendingSynthesisAction = .chatRegenerate(
+                conversationID: convo.id, messageID: message.id, backend: backend)
+            app.licensePromptBackend = backend
+            return
+        }
+        if app.downloads.state(for: backend) != .ready {
+            app.pendingSynthesisAction = .chatRegenerate(
+                conversationID: convo.id, messageID: message.id, backend: backend)
+            app.downloadPrompt = backend
+            return
+        }
+        await synthesizeWholeReplyAndSave(
+            message: message, convoID: convo.id, backend: backend, play: true)
+    }
+
+    /// Re-resolves the conversation/message fresh by id and re-runs
+    /// regenerate — called after a download/license prompt clears, when the
+    /// state that triggered it may be stale (conversation switched, message
+    /// deleted in the meantime). No-ops if either is gone.
+    func resumeRegenerate(conversationID: String, messageID: String, backend: BackendID) async {
+        guard let convo = conversation(for: conversationID),
+              let message = convo.messages.first(where: { $0.id == messageID })
+        else { return }
+        await synthesizeWholeReplyAndSave(
+            message: message, convoID: conversationID, backend: backend, play: true)
+    }
+
+    /// Switch which saved take is active for a reply — instant, no
+    /// synthesis, no file changes.
+    func setCurrentTake(_ takeID: String, for message: ChatMessage) {
+        guard var convo = current,
+              let index = convo.messages.firstIndex(where: { $0.id == message.id })
+        else { return }
+        convo.messages[index].currentTakeID = takeID
+        commit(convo)
+    }
+
     /// Replay an assistant message. If it has a cached take, plays it
     /// directly — instant, no synthesis. Otherwise (chatAutoSpeak was off
     /// when this reply generated, or the take was pruned) synthesizes it
