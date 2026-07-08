@@ -461,6 +461,7 @@ final class ChatController {
         pendingSaveSampleRate = nil
         pendingSaveBackend = nil
         pendingSaveConvoID = convoID
+        pendingSaveMessageID = nil
         // pendingSaveMessageID is stamped later by finishReply.
         let (signals, continuation) = AsyncStream<Void>.makeStream()
         liveSignal = continuation
@@ -541,6 +542,7 @@ final class ChatController {
         pendingSaveSampleRate = nil
         pendingSaveBackend = nil
         pendingSaveConvoID = convoID
+        pendingSaveMessageID = nil
         speechTask = Task { [weak self] in
             guard let self else { return }
             defer {
