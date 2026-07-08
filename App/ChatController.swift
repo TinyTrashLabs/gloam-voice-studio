@@ -145,6 +145,7 @@ final class ChatController {
     func deleteConversation(_ conversation: Conversation) {
         if conversation.id == current?.id { stop(); current = nil }
         try? store.delete(conversation.id)
+        app.chatAudioStore.deleteAll(conversationID: conversation.id)
         refresh()
     }
 
