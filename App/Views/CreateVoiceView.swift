@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 /// panel, save-to-library, and page chrome.
 struct CreateVoiceView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     @State private var player = PreviewPlayer()
 
     // Create-mode
@@ -65,12 +66,16 @@ struct CreateVoiceView: View {
 
     @ViewBuilder private var createContent: some View {
         @Bindable var model = model
-        header(title: "Create a Voice",
-               subtitle: model.createVoiceSource == .describe
-                   ? "Describe a voice, audition takes until one clicks, then save it to your "
-                     + "library — every clone model (and the whole app) can reuse it from then on."
-                   : "Record or drop a clip of a voice you have the rights to use — it becomes "
-                     + "a reusable Library voice for every clone model (and the whole app).")
+        HStack(alignment: .top) {
+            header(title: "Create a Voice",
+                   subtitle: model.createVoiceSource == .describe
+                       ? "Describe a voice, audition takes until one clicks, then save it to your "
+                         + "library — every clone model (and the whole app) can reuse it from then on."
+                       : "Record or drop a clip of a voice you have the rights to use — it becomes "
+                         + "a reusable Library voice for every clone model (and the whole app).")
+            Spacer()
+            docsHelpButton
+        }
         Picker("", selection: $model.createVoiceSource) {
             Text("From a description").tag(AppModel.CreateVoiceSource.describe)
             Text("From a recording").tag(AppModel.CreateVoiceSource.record)
@@ -158,10 +163,9 @@ struct CreateVoiceView: View {
             zoneLabel("DESCRIBE THE VOICE")
             Text("Timbre, age, accent, mood, pace — plain English, ~1–3 sentences.")
                 .font(.caption2).foregroundStyle(.secondary)
-            TextEditor(text: $model.foundryDescription)
-                .font(.callout).frame(height: 70).scrollContentBackground(.hidden)
+            ExpandableTextEditor(text: $model.foundryDescription, accessibilityID: "foundry-description")
+                .font(.callout).scrollContentBackground(.hidden)
                 .padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("foundry-description")
             if model.foundryDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(#"e.g. "elderly storyteller, gravelly and slow, with a knowing warmth""#)
                     .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
@@ -183,10 +187,9 @@ struct CreateVoiceView: View {
             Text("What each candidate says while you audition. A varied ~6–8s line makes the "
                  + "cleanest clone reference; edit it or use your own.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $model.foundryAuditionLine)
-                .font(.callout).frame(height: 54).scrollContentBackground(.hidden)
+            ExpandableTextEditor(text: $model.foundryAuditionLine, accessibilityID: "foundry-audition-line")
+                .font(.callout).scrollContentBackground(.hidden)
                 .padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("foundry-audition-line")
         }
     }
 
@@ -263,6 +266,7 @@ struct CreateVoiceView: View {
             header(title: "Edit Voice", subtitle: "Rename, refine the reference, and bake acted "
                    + "emotion variants of this voice — the whole app uses them.")
             Spacer()
+            docsHelpButton
             Button("Done") { model.editingVoiceSlug = nil }
                 .accessibilityIdentifier("edit-done")
         }
@@ -322,9 +326,9 @@ struct CreateVoiceView: View {
             }
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption2).foregroundStyle(.secondary)
-            TextEditor(text: $editRefText).font(.callout).frame(height: 54)
-                .scrollContentBackground(.hidden).padding(6).background(boxBG).overlay(boxStroke)
-                .accessibilityIdentifier("edit-ref-text")
+            ExpandableTextEditor(text: $editRefText, accessibilityID: "edit-ref-text")
+                .font(.callout).scrollContentBackground(.hidden)
+                .padding(6).background(boxBG).overlay(boxStroke)
         }
         .fileImporter(isPresented: $audioImporter,
                       allowedContentTypes: [.audio, .wav, .mpeg4Audio],
@@ -489,6 +493,16 @@ struct CreateVoiceView: View {
             Text(subtitle).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var docsHelpButton: some View {
+        Button { openWindow(id: "docs") } label: {
+            Image(systemName: "questionmark.circle")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Brand.fgDim)
+        .help("Open documentation")
+        .accessibilityIdentifier("create-voice-docs-help")
     }
 
     private func errorText(_ text: String) -> some View {

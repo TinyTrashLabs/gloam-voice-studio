@@ -67,9 +67,8 @@ struct VoiceEditorForm: View {
                 .accessibilityIdentifier("voice-name")
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $refText).frame(height: 70)
+            ExpandableTextEditor(text: $refText, accessibilityID: "voice-ref-text")
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
-                .accessibilityIdentifier("voice-ref-text")
             if transcribing {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
