@@ -317,6 +317,124 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testChatReplyAutoSavesATakeAndRegenerateAddsASecond() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) { consentButton.click() }
+
+        app.buttons["new-voice"].firstMatch.click()
+        let nameField = app.textFields["voice-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.click()
+        nameField.typeText("Audio Chat Voice")
+        app.buttons["use-sample-ref"].click()
+        app.buttons["voice-save"].click()
+        let voiceRow = app.staticTexts["Audio Chat Voice"].firstMatch
+        XCTAssertTrue(voiceRow.waitForExistence(timeout: 5))
+        voiceRow.click()
+
+        let chatSegment = app.radioButtons["Chat"].firstMatch
+        XCTAssertTrue(chatSegment.waitForExistence(timeout: 5))
+        chatSegment.click()
+
+        let composer = app.textFields["chat-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        composer.typeText("Hello there")
+        app.buttons["chat-send"].firstMatch.click()
+
+        let reply = app.staticTexts["Hi there! This is a test reply."]
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
+
+        // chatAutoSpeak defaults on — the reply's audio should already be
+        // saved as a take (auto-save from Task 4) without any click.
+        let menuButton = app.buttons["chat-audio-menu"].firstMatch
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 10),
+                      "audio menu should appear on the assistant bubble")
+        menuButton.click()
+        let firstTake = app.menuItems["chatterbox-turbo"].firstMatch
+        XCTAssertTrue(firstTake.waitForExistence(timeout: 5),
+                      "an auto-saved take for the default chat TTS backend should be listed. "
+                      + "debugDescription:\n\(app.debugDescription)")
+        app.typeKey(.escape, modifierFlags: [])
+
+        // Regenerate with a second model — should add a second take.
+        menuButton.click()
+        let regenerateSubmenu = app.menuItems["Regenerate with…"].firstMatch
+        XCTAssertTrue(regenerateSubmenu.waitForExistence(timeout: 5))
+        regenerateSubmenu.click()
+        let qwenOption = app.menuItems["qwen3-0.6b"].firstMatch
+        XCTAssertTrue(qwenOption.waitForExistence(timeout: 5))
+        qwenOption.click()
+
+        // Regeneration runs async; poll the menu until the second take shows up.
+        menuButton.click()
+        let secondTake = app.menuItems["qwen3-0.6b"].firstMatch
+        XCTAssertTrue(secondTake.waitForExistence(timeout: 10),
+                      "regenerated take should appear in the Takes list. "
+                      + "debugDescription:\n\(app.debugDescription)")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
+    func testChatAutoSpeakOffDefersAudioUntilFirstPlay() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        let consentButton = app.buttons["consent-accept"]
+        if consentButton.waitForExistence(timeout: 3) { consentButton.click() }
+
+        app.buttons["new-voice"].firstMatch.click()
+        let nameField = app.textFields["voice-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.click()
+        nameField.typeText("Quiet Chat Voice")
+        app.buttons["use-sample-ref"].click()
+        app.buttons["voice-save"].click()
+        let voiceRow = app.staticTexts["Quiet Chat Voice"].firstMatch
+        XCTAssertTrue(voiceRow.waitForExistence(timeout: 5))
+        voiceRow.click()
+
+        let chatSegment = app.radioButtons["Chat"].firstMatch
+        XCTAssertTrue(chatSegment.waitForExistence(timeout: 5))
+        chatSegment.click()
+
+        // Turn "Speak replies" off in the inspector before sending.
+        let speakToggle = app.switches["Speak replies"].firstMatch
+        XCTAssertTrue(speakToggle.waitForExistence(timeout: 5),
+                      "Speak replies toggle should be visible in the chat inspector")
+        speakToggle.click()
+
+        let composer = app.textFields["chat-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        composer.typeText("Hello there")
+        app.buttons["chat-send"].firstMatch.click()
+
+        let reply = app.staticTexts["Hi there! This is a test reply."]
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
+
+        // Nothing was synthesized — the audio menu shouldn't offer any takes yet.
+        let menuButton = app.buttons["chat-audio-menu"].firstMatch
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 5))
+        menuButton.click()
+        XCTAssertFalse(app.menuItems["chatterbox-turbo"].waitForExistence(timeout: 2),
+                       "no take should exist before any playback was requested")
+        app.typeKey(.escape, modifierFlags: [])
+
+        // First click synthesizes AND saves.
+        app.buttons["chat-speak"].firstMatch.click()
+        menuButton.click()
+        XCTAssertTrue(app.menuItems["chatterbox-turbo"].waitForExistence(timeout: 10),
+                      "the on-demand synthesis triggered by the speaker click should save a take")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
     func testRecordEmotionVariantGuidedFlow() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest"]

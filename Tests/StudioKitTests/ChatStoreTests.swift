@@ -64,6 +64,35 @@ final class ChatStoreTests: XCTestCase {
     func testLoadMissingReturnsNil() {
         XCTAssertNil(store.load(UUID().uuidString))
     }
+
+    func testAudioTakeFieldsRoundtrip() throws {
+        var convo = Conversation.new(voiceSlug: "willow")
+        convo.messages = [
+            ChatMessage(id: UUID().uuidString, role: "assistant", text: "hello!",
+                        createdAt: ChatStore.timestamp(),
+                        audioTakeIDs: ["20260708-090000-0001", "20260708-090100-0002"],
+                        currentTakeID: "20260708-090100-0002"),
+        ]
+        try store.save(convo)
+        let loaded = store.load(convo.id)
+        XCTAssertEqual(loaded?.messages[0].audioTakeIDs,
+                       ["20260708-090000-0001", "20260708-090100-0002"])
+        XCTAssertEqual(loaded?.messages[0].currentTakeID, "20260708-090100-0002")
+    }
+
+    func testOldConversationJSONWithoutAudioFieldsDecodes() throws {
+        // Simulates a conversation saved before this feature existed — no
+        // audioTakeIDs/currentTakeID keys present at all.
+        let json = """
+        {"id":"\(UUID().uuidString)","voiceSlug":"willow","title":"Old chat",
+         "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
+         "messages":[{"id":"\(UUID().uuidString)","role":"assistant","text":"hi",
+                      "createdAt":"2026-01-01T00:00:00Z"}]}
+        """
+        let decoded = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.messages[0].audioTakeIDs)
+        XCTAssertNil(decoded.messages[0].currentTakeID)
+    }
 }
 
 extension ChatStoreTests {

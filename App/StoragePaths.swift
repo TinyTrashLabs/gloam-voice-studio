@@ -8,6 +8,7 @@ enum StoragePaths {
     static var voices: URL { appSupport.appendingPathComponent("Voices") }
     static var history: URL { appSupport.appendingPathComponent("History") }
     static var foundryCandidates: URL { appSupport.appendingPathComponent("FoundryCandidates") }
+    static var chatAudio: URL { appSupport.appendingPathComponent("ChatAudio") }
     static var models: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Models")

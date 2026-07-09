@@ -82,9 +82,14 @@ transcript karaoke-highlights the word being spoken.
   minP/repetition/presence/frequency behind the disclosure, with reset.
 
 **Conversation niceties:** rename/delete via right-click; retry button on
-failed replies; replay any reply from its speaker icon; image attachment for
-vision models (gemma-4); dictating silences speech so replies can't transcribe
-themselves into your draft.
+failed replies; replay any reply from its speaker icon — instant after the
+first play, since reply audio is saved automatically; the chevron beside
+the speaker icon lists every saved take, lets you regenerate the reply with
+a different model (including `fish-s2-pro`, not offered in the live chat
+picker since it's too slow for real-time — regenerate has no such
+constraint), and export the current take as a WAV; image attachment for
+vision models (gemma-4); dictating silences speech so replies can't
+transcribe themselves into your draft.
 
 ## Settings
 

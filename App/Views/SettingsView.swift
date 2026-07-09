@@ -232,6 +232,13 @@ struct StorageSettings: View {
                 Text("Older qwen3-design candidates beyond this count are pruned automatically.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Chat audio") {
+                Stepper("Keep last \(model.chatAudioRetentionCap) takes",
+                        value: $model.chatAudioRetentionCap, in: 5...500, step: 5)
+                    .accessibilityIdentifier("chat-audio-retention-cap")
+                Text("Older chat reply takes beyond this count are pruned automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear { recalc() }
@@ -242,6 +249,7 @@ struct StorageSettings: View {
             ("Voices", StoragePaths.directorySize(StoragePaths.voices)),
             ("History", StoragePaths.directorySize(StoragePaths.history)),
             ("Voice Candidates", StoragePaths.directorySize(StoragePaths.foundryCandidates)),
+            ("Chat Audio", StoragePaths.directorySize(StoragePaths.chatAudio)),
             ("Models", StoragePaths.directorySize(StoragePaths.models)),
         ]
     }

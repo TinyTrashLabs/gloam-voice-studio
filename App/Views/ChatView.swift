@@ -1,6 +1,7 @@
 import EngineKit
 import StudioKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Chat tab: conversations with the sidebar-selected voice. Layout mirrors
 /// LM Studio: conversation list | transcript + composer | inspector.
@@ -14,6 +15,7 @@ struct ChatView: View {
     /// the reply — and orphan the session so a late Whisper final can't write
     /// the already-sent text back into the cleared draft.
     @State private var dictation = DictationController()
+    @State private var exportDoc: DataDocument?
 
     /// Pin the transcript to its end on the NEXT runloop pass, after layout
     /// has absorbed whatever change triggered this.
@@ -54,6 +56,10 @@ struct ChatView: View {
         }
         .task(id: model.selectedVoiceSlug) { model.chat.refresh() }
         .onChange(of: model.selectedVoiceSlug) { model.chat.stop() }
+        .fileExporter(isPresented: .init(get: { exportDoc != nil },
+                                         set: { if !$0 { exportDoc = nil } }),
+                      document: exportDoc, contentType: .wav,
+                      defaultFilename: "gloam-chat-take") { _ in exportDoc = nil }
     }
 
     private var emptyState: some View {
@@ -241,8 +247,11 @@ struct ChatView: View {
                         BouncingDots(color: Brand.fgFaint)
                     }
                     if message.role == "assistant", !isStreamingBubble {
+                        let isPending = model.chat.pendingAudioMessageIDs.contains(message.id)
                         Button { model.chat.speak(message) } label: {
-                            if isSpeakingThis {
+                            if isPending {
+                                ProgressView().controlSize(.mini)
+                            } else if isSpeakingThis {
                                 // Same EQ motif the sidebar uses for a playing
                                 // sample — "this voice is speaking now".
                                 EqualizerBars()
@@ -252,8 +261,20 @@ struct ChatView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .disabled(isPending)
                         .foregroundStyle(isSpeakingThis ? Brand.accent : Brand.fgFaint)
-                        .help(isSpeakingThis ? "Speaking…" : "Speak this reply")
+                        .help(isPending ? "Synthesizing…"
+                              : (isSpeakingThis ? "Speaking…" : "Speak this reply"))
+                        .accessibilityIdentifier("chat-speak")
+                        Menu {
+                            chatAudioMenu(for: message)
+                        } label: {
+                            Image(systemName: "chevron.down").font(.system(size: 8))
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .foregroundStyle(Brand.fgFaint)
+                        .help("Takes, regenerate, export")
+                        .accessibilityIdentifier("chat-audio-menu")
                     }
                 }
                 if let attachments = message.attachments, !attachments.isEmpty {
@@ -301,6 +322,51 @@ struct ChatView: View {
             Spacer(minLength: 40)
         }
         .accessibilityIdentifier("chat-message-\(message.role)")
+    }
+
+    @ViewBuilder
+    private func chatAudioMenu(for message: ChatMessage) -> some View {
+        let takes = (message.audioTakeIDs ?? []).compactMap { model.chatAudioStore.entry($0) }
+        if !takes.isEmpty {
+            Section("Takes") {
+                ForEach(takes, id: \.id) { entry in
+                    Button {
+                        model.chat.setCurrentTake(entry.id, for: message)
+                    } label: {
+                        if entry.id == message.currentTakeID {
+                            Label(entry.backend, systemImage: "checkmark")
+                        } else {
+                            Text(entry.backend)
+                        }
+                    }
+                }
+            }
+            Divider()
+        }
+        Menu("Regenerate with…") {
+            ForEach(BackendID.allCases, id: \.self) { backend in
+                Button(backend.rawValue) {
+                    Task { await model.chat.regenerateAudio(for: message, backend: backend) }
+                }
+            }
+        }
+        if message.currentTakeID != nil {
+            Button("Export…") { exportCurrentTake(message) }
+        }
+    }
+
+    private func exportCurrentTake(_ message: ChatMessage) {
+        guard let takeID = message.currentTakeID,
+              let url = try? model.chatAudioStore.wavURL(takeID),
+              let data = try? Data(contentsOf: url),
+              let entry = model.chatAudioStore.entry(takeID)
+        else { return }
+        // Re-encode with the provenance tag for files leaving the app —
+        // mirrors Studio's Export (StudioView.swift).
+        let pcm = data.dropFirst(44)
+        exportDoc = DataDocument(data: WAVEncoder.encode(
+            pcm16: Data(pcm), sampleRate: entry.sampleRate,
+            provenance: WAVEncoder.provenanceComment))
     }
 
     private var composer: some View {
