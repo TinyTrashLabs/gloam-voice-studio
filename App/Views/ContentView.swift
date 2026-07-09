@@ -275,6 +275,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(pickerBackends, id: \.self) { b in
                 let loaded = model.loadedBackend == b
+                let ramOK = model.hasSufficientRAM(for: b)
                 Button {
                     model.backend = b
                     if model.downloads.state(for: b) == .ready {
@@ -304,7 +305,8 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(model.modelOpInFlight)
+                .disabled(model.modelOpInFlight || !ramOK)
+                .help(ramOK ? "" : "This Mac doesn't have enough RAM for \(modelDisplayName(b)) — \(model.ramRequirementLabel(minRAMBytes: b.spec.minRAMBytes)).")
             }
             // Voice Foundry model — residency only. It's Creation-only, so this row
             // loads/unloads qwen3-design WITHOUT making it the Studio speak-backend.

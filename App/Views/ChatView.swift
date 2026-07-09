@@ -362,9 +362,12 @@ struct ChatView: View {
         }
         Menu("Regenerate with…") {
             ForEach(BackendID.allCases, id: \.self) { backend in
-                Button(backend.rawValue) {
+                let ramOK = model.hasSufficientRAM(for: backend)
+                Button(ramOK ? backend.rawValue
+                       : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))") {
                     Task { await model.chat.regenerateAudio(for: message, backend: backend) }
                 }
+                .disabled(!ramOK)
             }
         }
         if message.currentTakeID != nil {

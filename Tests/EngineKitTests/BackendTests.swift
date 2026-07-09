@@ -37,6 +37,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
+        XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
         XCTAssertEqual(BackendID.chatterbox.emotionMechanism, .liveKnob(.exaggeration))
     }
 
@@ -47,6 +48,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertTrue(spec.needsRefAudio)
+        XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
         XCTAssertEqual(BackendID.chatterboxTurbo.emotionMechanism, .variantClipOnly)
     }
 
@@ -57,7 +59,15 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(spec.honorsTags)
         XCTAssertTrue(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio)
+        XCTAssertEqual(spec.minRAMBytes, 16_000_000_000)
         XCTAssertEqual(BackendID.fishS2Pro.emotionMechanism, .inlineMarker)
+    }
+
+    func testQwenSpecsMinRAM() {
+        XCTAssertEqual(BackendID.qwen06B.spec.minRAMBytes, 8_000_000_000)
+        XCTAssertEqual(BackendID.qwen17B.spec.minRAMBytes, 8_000_000_000)
+        XCTAssertEqual(BackendID.qwenDesign.spec.minRAMBytes, 8_000_000_000)
+        XCTAssertEqual(BackendID.qwenCustom.spec.minRAMBytes, 8_000_000_000)
     }
 
     func testFishRefAudioSampleRateIsCodecRate() {

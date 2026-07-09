@@ -193,6 +193,8 @@ public struct BackendSpec: Sendable, Equatable {
     public let needsLicenseAck: Bool
     /// chatterbox family: a reference clip is always required. fish: stock voice OK.
     public let needsRefAudio: Bool
+    /// Minimum physical RAM (decimal bytes) to safely load/run this backend.
+    public let minRAMBytes: Int64
 }
 
 extension BackendID {
@@ -201,31 +203,38 @@ extension BackendID {
         case .qwen06B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false)
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
         case .qwen17B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false)
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
         case .qwenDesign:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false)
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
         case .qwenCustom:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: false)
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
         case .chatterbox:
             BackendSpec(modelRepo: "mlx-community/Chatterbox-TTS-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true)
+                        needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 8_000_000_000)
         case .chatterboxTurbo:
             BackendSpec(modelRepo: "mlx-community/chatterbox-turbo-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
-                        needsLicenseAck: false, needsRefAudio: true)
+                        needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 8_000_000_000)
         case .fishS2Pro:
             BackendSpec(modelRepo: "mlx-community/fish-audio-s2-pro-bf16",
                         defaultSampleRate: 44100, honorsTags: true,
-                        needsLicenseAck: true, needsRefAudio: false)
+                        needsLicenseAck: true, needsRefAudio: false,
+                        minRAMBytes: 16_000_000_000)
         }
     }
 }
