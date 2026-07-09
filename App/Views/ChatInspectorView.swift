@@ -35,7 +35,11 @@ struct ChatInspectorView: View {
             sectionHeader("MODEL")
             Picker("", selection: $appModel.chatLLM) {
                 ForEach(LLMBackendID.allCases, id: \.self) { llm in
-                    Text(llm.rawValue).tag(llm)
+                    Text(model.hasSufficientRAM(for: llm)
+                         ? llm.rawValue
+                         : "\(llm.rawValue) (\(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes)))")
+                        .tag(llm)
+                        .disabled(!model.hasSufficientRAM(for: llm))
                 }
             }
             .labelsHidden()

@@ -74,9 +74,10 @@ memory even though the on-disk bundle is fresh — quit and relaunch.
 
 ## Release / App Store
 
-Don't use this recipe for shipping. Release builds (Release config, signed,
-`.pkg` for the Mac App Store) go through a separate local build pipeline that
-isn't part of the public tree — out of scope for this skill.
+Don't use this recipe for shipping. Mac App Store builds (`.pkg`, `fastlane
+build_pkg`) go through a separate local pipeline outside this skill's scope.
+For a signed, notarized `.zip` for direct/GitHub distribution, see the
+`release-notarized` skill.
 
 ## If `project.yml` changed
 

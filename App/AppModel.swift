@@ -76,6 +76,9 @@ final class AppModel {
     let chatSpeechEngine: GloamEngine
     let downloads: ModelDownloadManager
     let speech: SpeechManager
+    /// This machine's RAM/chip snapshot, read once at launch (it can't change
+    /// while the app runs) — drives RAM-gating in the model pickers.
+    let deviceCapabilities: EngineCapabilities
     private var server: LocalAPIServer?
     @ObservationIgnored private var serverSync: Task<Void, Never>?
 
@@ -143,6 +146,21 @@ final class AppModel {
     /// labels in the chat voice picker.
     private(set) var ttsSpeedEMA: [String: Double] {
         didSet { UserDefaults.standard.set(ttsSpeedEMA, forKey: "ttsSpeedEMA") }
+    }
+
+    /// Whether this Mac has enough RAM to safely load/run `backend`.
+    func hasSufficientRAM(for backend: BackendID) -> Bool {
+        deviceCapabilities.physicalMemoryBytes >= UInt64(backend.spec.minRAMBytes)
+    }
+
+    /// Whether this Mac has enough RAM to safely load/run `llm`.
+    func hasSufficientRAM(for llm: LLMBackendID) -> Bool {
+        deviceCapabilities.physicalMemoryBytes >= UInt64(llm.minRAMBytes)
+    }
+
+    /// "needs 16GB RAM" — for the disabled-row label/tooltip in model pickers.
+    func ramRequirementLabel(minRAMBytes: Int64) -> String {
+        "needs \(minRAMBytes / 1_000_000_000)GB RAM"
     }
 
     func recordTTSSpeed(backend: BackendID, audioSeconds: Double, wallSeconds: Double) {
@@ -333,6 +351,7 @@ final class AppModel {
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
+        deviceCapabilities = EngineCapabilities.current()
         // qwen3-design is Creation-only now (it lives in the Voice Foundry, not the
         // Studio picker) — redirect a persisted design backend to a real clone model.
         let loadedBackend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")

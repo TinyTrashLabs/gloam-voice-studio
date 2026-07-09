@@ -60,7 +60,13 @@ struct BackendsSettings: View {
         @Bindable var model = model
         Form {
             Picker("Generate with", selection: $model.backend) {
-                ForEach(backends, id: \.self) { Text($0.rawValue).tag($0) }
+                ForEach(backends, id: \.self) { backend in
+                    Text(model.hasSufficientRAM(for: backend)
+                         ? backend.rawValue
+                         : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))")
+                        .tag(backend)
+                        .disabled(!model.hasSufficientRAM(for: backend))
+                }
             }
             Section("Models") {
                 ForEach(backends, id: \.self) { backend in
@@ -101,36 +107,46 @@ struct BackendsSettings: View {
                 }
             }
             Spacer()
-            switch state {
-            case .notDownloaded:
-                if backend.spec.needsLicenseAck && !model.didAckFishLicense {
-                    Button("Review License…") { model.licensePromptBackend = backend }
-                        .help("Review the research/personal-use license before downloading")
-                } else {
-                    Button("Download") { model.downloads.download(backend) }
-                        .help("Download this model to your Mac")
+            if !model.hasSufficientRAM(for: backend) {
+                Text(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes).capitalized)
+                    .foregroundStyle(.red)
+                    .help("This Mac's RAM is below what \(backend.rawValue) needs to run safely.")
+                if state != .notDownloaded {
+                    Button("Delete") { model.downloads.delete(backend) }
+                        .help("Delete this model from disk")
                 }
-            case .downloading(let fraction):
-                ProgressView(value: fraction).frame(width: 120)
-                Text(String(format: "%.0f%%", fraction * 100))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Button("Cancel") { model.downloads.cancelDownload(backend) }
-                    .help("Cancel the download")
-            case .ready:
-                if backend.spec.needsLicenseAck && !model.didAckFishLicense {
-                    Text("Needs license").foregroundStyle(.orange)
-                    Button("Review License…") { model.licensePromptBackend = backend }
-                        .help("Acknowledge the research/personal-use license to enable generation")
-                } else {
-                    Text("Ready").foregroundStyle(.green)
+            } else {
+                switch state {
+                case .notDownloaded:
+                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                        Button("Review License…") { model.licensePromptBackend = backend }
+                            .help("Review the research/personal-use license before downloading")
+                    } else {
+                        Button("Download") { model.downloads.download(backend) }
+                            .help("Download this model to your Mac")
+                    }
+                case .downloading(let fraction):
+                    ProgressView(value: fraction).frame(width: 120)
+                    Text(String(format: "%.0f%%", fraction * 100))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { model.downloads.cancelDownload(backend) }
+                        .help("Cancel the download")
+                case .ready:
+                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                        Text("Needs license").foregroundStyle(.orange)
+                        Button("Review License…") { model.licensePromptBackend = backend }
+                            .help("Acknowledge the research/personal-use license to enable generation")
+                    } else {
+                        Text("Ready").foregroundStyle(.green)
+                    }
+                    Button("Delete") { model.downloads.delete(backend) }
+                        .help("Delete this model from disk")
+                case .failed(let message):
+                    Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
+                    Button("Retry") { model.downloads.download(backend) }
+                        .help("Retry the download")
                 }
-                Button("Delete") { model.downloads.delete(backend) }
-                    .help("Delete this model from disk")
-            case .failed(let message):
-                Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
-                Button("Retry") { model.downloads.download(backend) }
-                    .help("Retry the download")
             }
         }
     }

@@ -68,6 +68,18 @@ public enum LLMBackendID: String, CaseIterable, Sendable, Codable {
         }
     }
 
+    /// Minimum physical RAM (decimal bytes) to safely load/run this backend.
+    public var minRAMBytes: Int64 {
+        switch self {
+        case .qwen3_1_7b: 8_000_000_000
+        case .gemma4_e2b: 8_000_000_000
+        case .qwen3_8b:   16_000_000_000
+        case .gemma4_e4b: 16_000_000_000
+        case .gemma4_26b: 32_000_000_000
+        case .gemma4_31b: 64_000_000_000
+        }
+    }
+
     /// On-disk folder name under the managed Models directory.
     public var diskFolder: String { "llm-\(rawValue)" }
 
