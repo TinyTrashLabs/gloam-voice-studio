@@ -174,7 +174,11 @@ struct CreateVoiceView: View {
     private var describeCard: some View {
         @Bindable var model = model
         return VStack(alignment: .leading, spacing: 8) {
-            zoneLabel("DESCRIBE THE VOICE")
+            HStack {
+                zoneLabel("DESCRIBE THE VOICE")
+                Spacer()
+                ExpandButton(text: $model.foundryDescription, kind: .voiceDescription)
+            }
             Text("Timbre, age, accent, mood, pace — plain English, ~1–3 sentences.")
                 .font(.caption2).foregroundStyle(.secondary)
             ExpandableTextEditor(text: $model.foundryDescription, accessibilityID: "foundry-description")
