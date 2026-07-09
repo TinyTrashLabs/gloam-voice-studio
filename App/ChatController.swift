@@ -653,7 +653,6 @@ final class ChatController {
         pendingSaveSampleRate = nil
         pendingSaveBackend = nil
         pendingSaveConvoID = convoID
-        pendingSaveMessageID = nil
         speechTask = Task { [weak self] in
             guard let self else { return }
             defer {
