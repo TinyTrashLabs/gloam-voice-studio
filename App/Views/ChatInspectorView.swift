@@ -183,7 +183,11 @@ struct ChatInspectorView: View {
 
     private var personaSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("PERSONA")
+            HStack {
+                sectionHeader("PERSONA")
+                Spacer()
+                ExpandButton(text: $personaDraft, kind: .persona)
+            }
             Text("How this voice behaves in chat. Leave blank for a stay-in-character default.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
             TextEditor(text: $personaDraft)
@@ -193,8 +197,11 @@ struct ChatInspectorView: View {
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
                 .accessibilityIdentifier("chat-persona-editor")
-            TextField("Greeting (optional)", text: $greetingDraft)
-                .textFieldStyle(.roundedBorder).font(.caption)
+            HStack {
+                TextField("Greeting (optional)", text: $greetingDraft)
+                    .textFieldStyle(.roundedBorder).font(.caption)
+                ExpandButton(text: $greetingDraft, kind: .greeting)
+            }
             Button("Save Persona") { savePersona() }
                 .font(.caption)
                 .disabled(model.selectedVoiceSlug == nil)
