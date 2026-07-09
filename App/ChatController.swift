@@ -172,10 +172,6 @@ final class ChatController {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming else { return }
-        guard app.downloads.state(for: app.chatLLM) == .ready else {
-            chatError = "Download the \(app.chatLLM.rawValue) model first (chat panel → Model)."
-            return
-        }
         if current == nil { newConversation() }
         guard var convo = current else { return }
 
@@ -223,10 +219,6 @@ final class ChatController {
             convo.messages.removeLast()
         }
         guard convo.messages.last?.role == "user" else { return }
-        guard app.downloads.state(for: app.chatLLM) == .ready else {
-            chatError = "Download the \(app.chatLLM.rawValue) model first (chat panel → Model)."
-            return
-        }
         commit(convo)
         startStream(for: convo)
     }
@@ -245,6 +237,7 @@ final class ChatController {
             guard let self else { return }
             var sawFinished = false
             do {
+                try await self.app.ensureLLMReady(self.app.chatLLM)
                 let stream = await self.app.engine.chatStream(
                     backend: self.app.chatLLM, request: request)
                 for try await event in stream {
