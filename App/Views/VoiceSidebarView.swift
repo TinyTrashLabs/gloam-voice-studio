@@ -19,6 +19,7 @@ struct VoiceSidebarView: View {
     @State private var refPlayer = PreviewPlayer()
     @State private var hoveredSlug: String?
     @State private var catalogPresented = false
+    @State private var pendingDeleteSlug: String?
 
     var body: some View {
         @Bindable var model = model
@@ -123,6 +124,20 @@ struct VoiceSidebarView: View {
                                                        set: { if !$0 { actionError = nil } })) {
                 Button("OK") { actionError = nil }
             } message: { Text(actionError ?? "") }
+            .confirmationDialog(
+                "Delete “\(pendingDeleteSlug.flatMap { try? model.voices.get($0).meta.name } ?? "")”?",
+                isPresented: .init(get: { pendingDeleteSlug != nil },
+                                   set: { if !$0 { pendingDeleteSlug = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let slug = pendingDeleteSlug { delete(slug) }
+                    pendingDeleteSlug = nil
+                }
+                .accessibilityIdentifier("confirm-delete-voice")
+            } message: {
+                Text("This permanently deletes the voice and cannot be undone.")
+            }
             .onReceive(NotificationCenter.default.publisher(for: .gloamMigrate)) { _ in
                 migratePresented = true
             }
@@ -288,7 +303,7 @@ struct VoiceSidebarView: View {
         Button("Export…") { export(voice.slug) }
             .help("Export voice as a .gvoice pack")
         Divider()
-        Button("Delete", role: .destructive) { delete(voice.slug) }
+        Button("Delete", role: .destructive) { pendingDeleteSlug = voice.slug }
             .help("Permanently delete this voice")
     }
 

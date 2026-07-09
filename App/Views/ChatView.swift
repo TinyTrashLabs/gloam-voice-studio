@@ -10,6 +10,7 @@ struct ChatView: View {
     @State private var imageImporterPresented = false
     @State private var renamingConversation: Conversation?
     @State private var renameDraft = ""
+    @State private var pendingDeleteConversation: Conversation?
     /// Owned here (not by the DictationButton) so send can cancel an open mic:
     /// sending mid-dictation must close capture — the echo guard would mute
     /// the reply — and orphan the session so a late Whisper final can't write
@@ -111,6 +112,22 @@ struct ChatView: View {
         } message: { _ in
             Text("Give this chat a new title.")
         }
+        .confirmationDialog(
+            "Delete “\(pendingDeleteConversation?.title ?? "")”?",
+            isPresented: Binding(get: { pendingDeleteConversation != nil },
+                                 set: { if !$0 { pendingDeleteConversation = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let convo = pendingDeleteConversation {
+                    model.chat.deleteConversation(convo)
+                }
+                pendingDeleteConversation = nil
+            }
+            .accessibilityIdentifier("confirm-delete-conversation")
+        } message: {
+            Text("The conversation and any saved reply audio move to the Trash.")
+        }
     }
 
     private func conversationRow(_ convo: Conversation) -> some View {
@@ -132,7 +149,7 @@ struct ChatView: View {
                 renameDraft = convo.title
                 renamingConversation = convo
             }
-            Button("Delete", role: .destructive) { model.chat.deleteConversation(convo) }
+            Button("Delete", role: .destructive) { pendingDeleteConversation = convo }
         }
     }
 
