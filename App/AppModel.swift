@@ -170,7 +170,10 @@ final class AppModel {
     /// yourself" error.
     func ensureLLMReady(_ backend: LLMBackendID) async throws {
         if case .ready = downloads.state(for: backend) { return }
-        if case .notDownloaded = downloads.state(for: backend) { downloads.download(backend) }
+        switch downloads.state(for: backend) {
+        case .downloading: break   // already in flight — just wait below
+        default: downloads.download(backend)   // .notDownloaded OR .failed → (re)start
+        }
         while true {
             switch downloads.state(for: backend) {
             case .ready: return
