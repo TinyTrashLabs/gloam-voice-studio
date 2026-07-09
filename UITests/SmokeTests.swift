@@ -351,7 +351,7 @@ final class SmokeTests: XCTestCase {
 
         // chatAutoSpeak defaults on — the reply's audio should already be
         // saved as a take (auto-save from Task 4) without any click.
-        let menuButton = app.buttons["chat-audio-menu"].firstMatch
+        let menuButton = app.menuButtons["chat-audio-menu"].firstMatch
         XCTAssertTrue(menuButton.waitForExistence(timeout: 10),
                       "audio menu should appear on the assistant bubble")
         menuButton.click()
@@ -404,7 +404,7 @@ final class SmokeTests: XCTestCase {
         chatSegment.click()
 
         // Turn "Speak replies" off in the inspector before sending.
-        let speakToggle = app.switches["Speak replies"].firstMatch
+        let speakToggle = app.checkBoxes["Speak replies"].firstMatch
         XCTAssertTrue(speakToggle.waitForExistence(timeout: 5),
                       "Speak replies toggle should be visible in the chat inspector")
         speakToggle.click()
@@ -419,7 +419,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(reply.waitForExistence(timeout: 10))
 
         // Nothing was synthesized — the audio menu shouldn't offer any takes yet.
-        let menuButton = app.buttons["chat-audio-menu"].firstMatch
+        let menuButton = app.menuButtons["chat-audio-menu"].firstMatch
         XCTAssertTrue(menuButton.waitForExistence(timeout: 5))
         menuButton.click()
         XCTAssertFalse(app.menuItems["chatterbox-turbo"].waitForExistence(timeout: 2),
