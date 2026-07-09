@@ -163,6 +163,35 @@ final class AppModel {
         "needs \(minRAMBytes / 1_000_000_000)GB RAM"
     }
 
+    /// Triggers a real download if `backend` isn't on disk yet, and waits for
+    /// it to finish (or throws) — the download itself is already
+    /// async/background via ModelDownloadManager; this gives callers
+    /// something to await instead of hitting a dead-end "download it
+    /// yourself" error.
+    func ensureLLMReady(_ backend: LLMBackendID) async throws {
+        if case .ready = downloads.state(for: backend) { return }
+        if case .notDownloaded = downloads.state(for: backend) { downloads.download(backend) }
+        while true {
+            switch downloads.state(for: backend) {
+            case .ready: return
+            case .failed(let message): throw AppGenerationError(message: message)
+            default: try await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+    }
+
+    /// Expand `text` (a short, terse field value) into a fuller version
+    /// suited to `kind`, via the user's chosen chat LLM.
+    func expand(_ text: String, kind: PromptExpansionKind) async throws -> String {
+        try await ensureLLMReady(chatLLM)
+        let request = ChatRequest(messages: [
+            ChatTurn(role: .system, content: kind.instruction),
+            ChatTurn(role: .user, content: text),
+        ], maxTokens: 300)
+        let result = try await engine.chat(backend: chatLLM, request: request)
+        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func recordTTSSpeed(backend: BackendID, audioSeconds: Double, wallSeconds: Double) {
         guard wallSeconds > 0.2, audioSeconds > 0.2 else { return }   // ignore blips
         let ratio = audioSeconds / wallSeconds
