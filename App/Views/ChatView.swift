@@ -307,10 +307,18 @@ struct ChatView: View {
                 }
                 if isStreamingBubble, message.text.isEmpty {
                     // Nothing has streamed back yet — first-send model load can
-                    // take 10+ seconds, so show motion instead of a static "…".
+                    // take 10+ seconds, or much longer if the model needs to
+                    // download first (ChatController now auto-downloads rather
+                    // than dead-ending) — show real progress in that case so a
+                    // multi-minute download doesn't look like a hang.
                     HStack(spacing: 6) {
                         BouncingDots(color: Brand.fgDim)
-                        Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
+                        if case .downloading(let fraction) = model.downloads.state(for: model.chatLLM) {
+                            Text("Downloading… \(Int(fraction * 100))%")
+                                .font(.caption).foregroundStyle(Brand.fgDim)
+                        } else {
+                            Text("Thinking…").font(.caption).foregroundStyle(Brand.fgDim)
+                        }
                     }
                     .accessibilityIdentifier("chat-thinking")
                 } else if message.role == "assistant" {
