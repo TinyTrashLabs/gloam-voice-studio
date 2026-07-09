@@ -444,6 +444,7 @@ struct StudioView: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .accessibilityIdentifier("direction-presets")
+                        ExpandButton(text: $model.instruct, kind: .direction)
                     }
                     Text("Describe HOW it should sound — character, mood, pace, accent. Plain English, ~1–3 sentences.")
                         .font(.caption2).foregroundStyle(.secondary)
