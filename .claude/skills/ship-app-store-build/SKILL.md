@@ -21,67 +21,31 @@ last one it saw.
 
 ## Recipe (verified end-to-end 2026-07-09)
 
-`ship.sh` normally does staging + `fastlane mac beta` in one shot, but two
-bugs in its signing script (below) mean the direct call fails partway
-through. Do it in three steps instead so you can apply the workarounds
-in between:
+Run from the repo root, with Tailscale up (`infisical.tinytrashlabs.com`
+only resolves on the tailnet):
 
 ```bash
 cd /path/to/gloam-voice-studio   # repo root, not a worktree
-
-# 1. Stage signing from Infisical (reads macos.infisical.* from app-build.config.json)
-SCRIPT="$(find ~/.claude/plugins -path '*/scripts/infisical-macos-signing.sh' | head -1)"
-source secrets/env.sh   # INFISICAL_CLIENT_SECRET
-export INFISICAL_HOST="https://infisical.tinytrashlabs.com"
-export INFISICAL_PROJECT_ID="d5b50b4d-a82b-4cc7-b52c-7b375b31f7ac"
-export INFISICAL_CLIENT_ID="ba1f89ac-5083-45cd-98b4-386b02e5b00b"
-export INFISICAL_ENV="prod"
-eval "$(INFISICAL_MACOS_PATH=/gloam-voice-studio-macos-signing "$SCRIPT" "$PWD" fm.gloam.studio UT233385J9 "$PWD/secrets/api_key.json")"
-
-# 2. Apply the two workarounds (see Gotchas below)
-unset ASC_KEY_PATH
-DEST="$HOME/Library/MobileDevice/Provisioning Profiles"
-NEWEST="$(ls -t "$DEST"/*.provisionprofile | head -1)"
-export MAC_PROFILE_PATH="$NEWEST"
-
-# 3. Build, sign, and upload
-fastlane mac beta
+SHIP="$(find ~/.claude/plugins/marketplaces -path '*/skills/ship-beta/scripts/ship.sh' | head -1)"
+"$SHIP" macos
 ```
 
+`ship.sh macos` does everything: `xcodegen generate`, stages signing from
+Infisical (reads `macos.infisical.*` from `app-build.config.json`), then runs
 `fastlane mac beta` = preflight + `build_pkg` (archive → manual codesign with
 the project's real entitlements → productbuild `.pkg`) + `upload` (`xcrun
 altool --upload-app`). Takes several minutes, mostly the archive step.
 
-## Gotcha 1 — `ASC_KEY_PATH` points at a file that's already deleted
-
-`infisical-macos-signing.sh` writes the ASC API key to a `mktemp -d` scratch
-dir with `trap 'rm -rf "$WORK"' EXIT`, then **also** prints
-`export ASC_KEY_PATH="$P8"` pointing into that same dir. Since the script
-runs to completion (via `eval "$(...)"` command substitution) before its
-output is ever eval'd by the caller, the trap fires and deletes the file
-*before* `fastlane` reads it — `IO.read: No such file or directory
-@ rb_sysopen - .../tmp.XXXXXX/AuthKey.p8`. The same key material is *also*
-written to the persistent `secrets/api_key.json` (the script's 4th arg), and
-the Fastfile's `asc_key_material` already falls back to that file when
-`ASC_KEY_PATH` is unset — so the fix is just `unset ASC_KEY_PATH` after
-staging, not touching the plugin script.
-
-## Gotcha 2 — `MAC_PROFILE_PATH` is never exported at all
-
-`fastlane build_pkg`'s `UI.user_error!("MAC_PROFILE_PATH not set...")` check
-fires unconditionally when called after plain staging — the staging script's
-final `export ...` block simply doesn't include it (only `MAC_PROFILE_NAME`,
-the human-readable name). The script *does* install the actual profile file
-to `~/Library/MobileDevice/Provisioning Profiles/<uuid>.provisionprofile`
-first, though — so find the just-installed one (newest mtime) and export its
-path yourself. `security cms -D -i <path> | plutil -extract Name raw -` (or
-`/usr/libexec/PlistBuddy -c 'Print :Name'` on the decoded plist) confirms it's
-named "Gloam Voice Studio Mac App Store" if you want to double check before
-trusting "newest".
-
-Neither bug has been reported upstream to the `ios-android-builder` plugin
-yet — worth fixing there so other projects using the same plugin don't hit
-this too.
+As of the 2026-07-09 fix to `infisical-macos-signing.sh` (two real bugs —
+`ASC_KEY_PATH` pointing at a file its own cleanup trap deleted before
+`fastlane` read it, and `MAC_PROFILE_PATH` never being exported despite
+`build_pkg` requiring it) this runs straight through with no manual
+workarounds. If you hit either failure again, the plugin fix may not have
+propagated — check
+`~/.claude/plugins/marketplaces/tinytrashlabs/scripts/infisical-macos-signing.sh`
+for a `WORK="$(mktemp -d)"` line *without* `; trap 'rm -rf "$WORK"' EXIT`
+right after it, and an `export MAC_PROFILE_PATH=...` line near the bottom —
+if either is missing, the plugin regressed or you're on a stale checkout.
 
 ## After upload: export compliance
 
