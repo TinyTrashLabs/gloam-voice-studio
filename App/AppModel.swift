@@ -86,6 +86,11 @@ final class AppModel {
     var backend: BackendID {
         didSet {
             UserDefaults.standard.set(backend.rawValue, forKey: "defaultBackend")
+            // The API server's deps capture defaultBackend at build time — without
+            // this rebuild, a running server keeps serving the OLD engine for
+            // model-less requests in "Follow Studio engine" mode (bit gloam.fm on
+            // 2026-07-11: picker on turbo, server still on regular chatterbox).
+            scheduleServerSync()
             // Surface the license prompt the moment an unacknowledged backend is
             // picked — not just when Generate/Load later hits it as an error.
             if backend.spec.needsLicenseAck && !didAckFishLicense {
