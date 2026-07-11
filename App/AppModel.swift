@@ -93,7 +93,16 @@ final class AppModel {
             }
         }
     }
-    var serverEnabled = false { didSet { scheduleServerSync() } }
+    /// Persisted: a relaunch must bring the API server back in whatever state
+    /// the user left it. Losing this across restarts silently killed clients'
+    /// voice lanes (gloam.fm's DJ went mute for 2h on 2026-07-11 after an app
+    /// update relaunch reset it to off).
+    var serverEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(serverEnabled, forKey: "serverEnabled")
+            scheduleServerSync()
+        }
+    }
     /// LLM used by the chat tab (and as the API server's default LLM).
     var chatLLM: LLMBackendID {
         didSet {
@@ -406,6 +415,7 @@ final class AppModel {
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
+        serverEnabled = defaults.bool(forKey: "serverEnabled")
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
         chatLLM = defaults.string(forKey: "chatLLM")
@@ -463,6 +473,9 @@ final class AppModel {
             Task { await engine.acknowledgeLicense(for: .fishS2Pro) }
         }
         installMemoryPressureHandler()
+        // didSet observers don't fire during init — if the server was left on,
+        // start it now (this is the whole point of persisting the toggle).
+        if serverEnabled { scheduleServerSync() }
         foundryCandidates = foundryCandidateStore.list().compactMap { entry -> FoundryCandidate? in
             guard let url = try? foundryCandidateStore.wavURL(entry.id),
                   let wav = try? Data(contentsOf: url) else { return nil }
