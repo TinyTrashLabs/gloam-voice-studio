@@ -207,10 +207,16 @@ public enum APIRouter {
             // "neutral" always uses the base. A variant clip already carries its
             // emotion, so the live knob is left neutral; on the base clip, `emotion`
             // still drives the model knob (chatterbox exaggeration / fish temperature).
+            // A request that omits `voice` entirely falls back to the Settings →
+            // API server "Default voice" (empty = today's raw-backend behavior) —
+            // read live off `deps.defaultVoice()` so flipping the picker applies to
+            // the next request with no server restart.
             var refPath: String? = nil
             var refText: String? = nil
             var usedVariant = false
-            if let voice = req.voice {
+            let defaultVoice = deps.defaultVoice()
+            let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            if let voice = effectiveVoice {
                 let emo = req.emotion?.lowercased()
                 let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
                 if let variant, let found = try? deps.voices.get(variant) {
