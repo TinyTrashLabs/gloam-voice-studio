@@ -219,6 +219,14 @@ final class AppModel {
     var serverPort: Int {
         didSet { UserDefaults.standard.set(serverPort, forKey: "serverPort") }
     }
+    /// Slug of the library voice that answers `/v1/audio/speech` requests
+    /// which don't name a `voice` ("" = none — the raw backend voice, today's
+    /// behavior). Threaded into the server as a live closure (see
+    /// `performServerSync`), so this takes effect on the NEXT request with no
+    /// server restart — unlike `serverPort`, which needs one.
+    var serverDefaultVoice: String {
+        didSet { UserDefaults.standard.set(serverDefaultVoice, forKey: "serverDefaultVoice") }
+    }
     var didAcceptCloneConsent: Bool {
         didSet { UserDefaults.standard.set(didAcceptCloneConsent, forKey: "didAcceptCloneConsent") }
     }
@@ -390,6 +398,7 @@ final class AppModel {
             ?? .fishS2Pro
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
+        serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
         chatLLM = defaults.string(forKey: "chatLLM")
@@ -917,7 +926,10 @@ final class AppModel {
             server = LocalAPIServer(deps: APIDependencies(
                 engine: engine, voices: voices, defaultBackend: backend,
                 defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
-                log: apiLog))
+                log: apiLog,
+                // Live read (not a captured value): the Settings picker takes
+                // effect on the next request without rebuilding the server.
+                defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" }))
             try? await server?.start(port: serverPort)
         } else {
             await server?.stop()

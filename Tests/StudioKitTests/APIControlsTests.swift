@@ -128,6 +128,94 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(statuses, [200, 400])
     }
 
+    // MARK: - Default voice (Settings → API server → "Default voice")
+
+    func testDefaultVoiceUsedWhenRequestOmitsVoice() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defvoice-omit-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Cruz", refWav: Data([0, 1, 2]), refText: "cruz ref")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            // No "voice" field at all — the default should fill in.
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "cruz ref")
+        XCTAssertTrue(provider.model.last?.refAudioPath?.hasSuffix("cruz/ref.wav") == true,
+                       "expected cruz's ref.wav, got \(String(describing: provider.model.last?.refAudioPath))")
+    }
+
+    func testExplicitVoiceOverridesDefault() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defvoice-override-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Cruz", refWav: Data([0, 1, 2]), refText: "cruz ref")
+        _ = try voices.save(name: "Ava", refWav: Data([3, 4, 5]), refText: "ava ref")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"ava"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "ava ref")
+    }
+
+    func testEmptyDefaultPreservesRawBackendBehavior() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defvoice-empty-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        // No defaultVoice closure passed — falls back to the "" default.
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertNil(provider.model.last?.refAudioPath)
+        XCTAssertNil(provider.model.last?.refText)
+    }
+
+    func testDefaultVoiceWithEmotionRoutesToVariant() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defvoice-variant-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Ava", refWav: Data([0, 1, 2]), refText: "ava base")
+        _ = try voices.saveAt(slug: "ava-excited", name: "Ava (Excited)",
+                              refWav: Data([9, 9, 9]), refText: "ava excited")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B,
+                                   defaultVoice: { "ava" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "ava excited")
+    }
+
     func testBusyReturns503() async throws {
         final class SlowModel: SpeechModel, @unchecked Sendable {
             let sampleRate = 24000

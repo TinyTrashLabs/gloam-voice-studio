@@ -190,6 +190,20 @@ struct ServerSettings: View {
             TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
                 .disabled(model.serverEnabled)
             Section {
+                // Live setting — not disabled while the server runs, unlike Port:
+                // the router reads it fresh on every request, so flipping this
+                // applies to the next one with no restart.
+                Picker("Default voice", selection: $model.serverDefaultVoice) {
+                    Text("Backend voice (no reference)").tag("")
+                    ForEach(defaultVoiceLibrary, id: \.slug) { voice in
+                        Text(voice.name).tag(voice.slug)
+                    }
+                }
+                .accessibilityIdentifier("server-default-voice-picker")
+                Text("Answers API requests that don't name a voice.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
                 Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
                     .font(.system(.caption, design: .monospaced))
@@ -215,6 +229,14 @@ struct ServerSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Voice library for the Default voice picker — re-reads on library
+    /// mutations elsewhere in the app (bumps `voicesVersion`), same guard
+    /// `VoiceSidebarView.voiceList` uses.
+    private var defaultVoiceLibrary: [VoiceMeta] {
+        _ = model.voicesVersion
+        return model.voices.list()
     }
 
     private func consoleLine(_ e: APILogEntry) -> String {

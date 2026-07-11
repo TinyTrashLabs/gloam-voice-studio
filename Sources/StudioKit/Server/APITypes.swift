@@ -91,17 +91,25 @@ public struct APIDependencies: Sendable {
     public let defaultLLM: LLMBackendID?
     public let log: APILog
     public let gate: RequestGate
+    /// Slug of the library voice that answers `/v1/audio/speech` requests
+    /// which don't name a `voice` ("" = none — today's raw-backend behavior).
+    /// A closure, not a captured value, so flipping the Settings picker takes
+    /// effect on the NEXT request without restarting the server — same
+    /// resolver-closure shape as EngineKit's model-path providers.
+    public let defaultVoice: @Sendable () -> String
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
                 log: APILog = APILog(),
-                gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3)) {
+                gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
+                defaultVoice: @escaping @Sendable () -> String = { "" }) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
         self.defaultLLM = defaultLLM
         self.log = log
         self.gate = gate
+        self.defaultVoice = defaultVoice
     }
 }
 
