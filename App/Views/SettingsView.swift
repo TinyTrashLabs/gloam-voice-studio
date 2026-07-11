@@ -190,9 +190,20 @@ struct ServerSettings: View {
             TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
                 .disabled(model.serverEnabled)
             Section {
-                // Live setting — not disabled while the server runs, unlike Port:
-                // the router reads it fresh on every request, so flipping this
-                // applies to the next one with no restart.
+                // Live settings — not disabled while the server runs, unlike
+                // Port: the router reads them fresh on every request, so
+                // flipping these applies to the next one with no restart.
+                Picker("Default model", selection: $model.serverDefaultModel) {
+                    Text("Follow Studio engine (\(model.backend.rawValue))").tag("")
+                    ForEach(serverModelChoices, id: \.rawValue) { backend in
+                        Text(model.hasSufficientRAM(for: backend)
+                             ? backend.rawValue
+                             : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))")
+                            .tag(backend.rawValue)
+                            .disabled(!model.hasSufficientRAM(for: backend))
+                    }
+                }
+                .accessibilityIdentifier("server-default-model-picker")
                 Picker("Default voice", selection: $model.serverDefaultVoice) {
                     Text("Backend voice (no reference)").tag("")
                     ForEach(defaultVoiceLibrary, id: \.slug) { voice in
@@ -200,7 +211,7 @@ struct ServerSettings: View {
                     }
                 }
                 .accessibilityIdentifier("server-default-voice-picker")
-                Text("Answers API requests that don't name a voice.")
+                Text("Answer API requests that don't name a model or voice.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -230,6 +241,12 @@ struct ServerSettings: View {
         }
         .formStyle(.grouped)
     }
+
+    /// Same curated order as `ModelSettings.backends`. qwen3-design is offered
+    /// deliberately even though the Studio picker redirects away from it — an
+    /// API caller that always sends `instruct` may want the design model.
+    private let serverModelChoices: [BackendID] =
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
 
     /// Voice library for the Default voice picker — re-reads on library
     /// mutations elsewhere in the app (bumps `voicesVersion`), same guard

@@ -186,7 +186,12 @@ public enum APIRouter {
             guard !req.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw APIError(status: .badRequest, detail: "input is empty")
             }
-            let backend = req.model.flatMap(BackendID.init(rawValue:)) ?? deps.defaultBackend
+            // Model precedence: request `model` → Settings → API server
+            // "Default model" (live-read, `.migrating` so a retired persisted
+            // raw value still resolves) → the Studio's own engine.
+            let backend = req.model.flatMap(BackendID.init(rawValue:))
+                ?? BackendID.migrating(rawValue: deps.defaultModel())
+                ?? deps.defaultBackend
             let controls = backend.controls
 
             func blank(_ s: String?) -> Bool {

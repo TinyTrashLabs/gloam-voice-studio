@@ -15,7 +15,11 @@ final class CapturingModel: SpeechModel, @unchecked Sendable {
 }
 final class CapturingProvider: ModelProviding, @unchecked Sendable {
     let model = CapturingModel()
-    func loadModel(backend: BackendID) async throws -> any SpeechModel { model }
+    var lastBackend: BackendID?
+    func loadModel(backend: BackendID) async throws -> any SpeechModel {
+        lastBackend = backend
+        return model
+    }
     func didEvictModel() {}
 }
 
@@ -214,6 +218,107 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             }
         }
         XCTAssertEqual(provider.model.last?.refText, "ava excited")
+    }
+
+    // MARK: - Default model (Settings → API server → "Default model")
+
+    func testDefaultModelUsedWhenRequestOmitsModel() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defmodel-omit-\(UUID())")
+        // qwen06B, not fish: fish backends sit behind the license-ack gate
+        // (403), which is not what this test is about.
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B,
+                                   defaultModel: { "qwen3-0.6b" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.lastBackend, .qwen06B)
+    }
+
+    func testExplicitModelOverridesDefaultModel() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defmodel-override-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B,
+                                   defaultModel: { "fish-s2-pro" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.lastBackend, .qwen17B)
+    }
+
+    func testEmptyDefaultModelFollowsStudioEngine() async throws {
+        let provider = CapturingProvider()
+        // No defaultModel closure passed — falls back to defaultBackend.
+        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwen17B)))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.lastBackend, .qwen17B)
+    }
+
+    func testUnknownDefaultModelFollowsStudioEngine() async throws {
+        // A stale persisted raw value (e.g. a removed backend) must not 500 —
+        // it falls through to the Studio engine.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defmodel-stale-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B,
+                                   defaultModel: { "retired-backend" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.lastBackend, .qwen17B)
+    }
+
+    func testDefaultModelValidatesItsOwnControls() async throws {
+        // The resolved default's controls apply: qwen3-design requires
+        // `instruct`, so an instruct-less request 400s even though the
+        // request itself never named a model.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("defmodel-controls-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B,
+                                   defaultModel: { "qwen3-design" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String, "qwen3-design requires 'instruct'")
+            }
+        }
     }
 
     func testBusyReturns503() async throws {

@@ -227,6 +227,12 @@ final class AppModel {
     var serverDefaultVoice: String {
         didSet { UserDefaults.standard.set(serverDefaultVoice, forKey: "serverDefaultVoice") }
     }
+    /// Raw `BackendID` that answers API requests which don't name a `model`
+    /// ("" = follow the Studio's own engine picker). Live closure like
+    /// `serverDefaultVoice` — applies on the next request, no restart.
+    var serverDefaultModel: String {
+        didSet { UserDefaults.standard.set(serverDefaultModel, forKey: "serverDefaultModel") }
+    }
     var didAcceptCloneConsent: Bool {
         didSet { UserDefaults.standard.set(didAcceptCloneConsent, forKey: "didAcceptCloneConsent") }
     }
@@ -399,6 +405,7 @@ final class AppModel {
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
+        serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
         chatLLM = defaults.string(forKey: "chatLLM")
@@ -927,9 +934,10 @@ final class AppModel {
                 engine: engine, voices: voices, defaultBackend: backend,
                 defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
                 log: apiLog,
-                // Live read (not a captured value): the Settings picker takes
+                // Live reads (not captured values): the Settings pickers take
                 // effect on the next request without rebuilding the server.
-                defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" }))
+                defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
+                defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" }))
             try? await server?.start(port: serverPort)
         } else {
             await server?.stop()
