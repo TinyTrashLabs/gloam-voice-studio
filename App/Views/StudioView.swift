@@ -165,7 +165,7 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
-        case .textDriven:
+        case .textDriven, .none:
             EmptyView()
         }
     }
@@ -213,6 +213,85 @@ struct StudioView: View {
     static func speakerLabel(_ name: String) -> String {
         if let info = speakerInfo[name] { return "\(name) · \(info.lang)" }
         return name
+    }
+
+    /// hexgrad's own per-voice quality grade (A best, F+ weakest) plus language and
+    /// gender, keyed by voicepack name. Source: hexgrad/Kokoro-82M's VOICES.md + the
+    /// vendored mlx-audio-swift README (fetched during design). "—" = ungraded there.
+    static let kokoroVoiceInfo: [String: (language: String, gender: String, grade: String)] = [
+        "af_heart": ("American English", "Female", "A"),
+        "af_bella": ("American English", "Female", "A-"),
+        "af_nicole": ("American English", "Female", "B-"),
+        "af_aoede": ("American English", "Female", "C+"),
+        "af_kore": ("American English", "Female", "C+"),
+        "af_sarah": ("American English", "Female", "C+"),
+        "af_alloy": ("American English", "Female", "C"),
+        "af_nova": ("American English", "Female", "C"),
+        "af_sky": ("American English", "Female", "C-"),
+        "af_jessica": ("American English", "Female", "D"),
+        "af_river": ("American English", "Female", "D"),
+        "am_fenrir": ("American English", "Male", "C+"),
+        "am_michael": ("American English", "Male", "C+"),
+        "am_puck": ("American English", "Male", "C+"),
+        "am_echo": ("American English", "Male", "D"),
+        "am_eric": ("American English", "Male", "D"),
+        "am_liam": ("American English", "Male", "D"),
+        "am_onyx": ("American English", "Male", "D"),
+        "am_santa": ("American English", "Male", "D-"),
+        "am_adam": ("American English", "Male", "F+"),
+        "bf_emma": ("British English", "Female", "B-"),
+        "bf_isabella": ("British English", "Female", "C"),
+        "bf_alice": ("British English", "Female", "D"),
+        "bf_lily": ("British English", "Female", "D"),
+        "bm_fable": ("British English", "Male", "C"),
+        "bm_george": ("British English", "Male", "C"),
+        "bm_lewis": ("British English", "Male", "D+"),
+        "bm_daniel": ("British English", "Male", "D"),
+        "ff_siwis": ("French", "Female", "B-"),
+        "hf_alpha": ("Hindi", "Female", "C"),
+        "hf_beta": ("Hindi", "Female", "C"),
+        "hm_omega": ("Hindi", "Male", "C"),
+        "hm_psi": ("Hindi", "Male", "C"),
+        "if_sara": ("Italian", "Female", "C"),
+        "im_nicola": ("Italian", "Male", "C"),
+        "jf_alpha": ("Japanese", "Female", "C+"),
+        "jf_gongitsune": ("Japanese", "Female", "C"),
+        "jf_tebukuro": ("Japanese", "Female", "C"),
+        "jf_nezumi": ("Japanese", "Female", "C-"),
+        "jm_kumo": ("Japanese", "Male", "C-"),
+        "ef_dora": ("Spanish", "Female", "—"),
+        "em_alex": ("Spanish", "Male", "—"),
+        "em_santa": ("Spanish", "Male", "—"),
+        "pf_dora": ("Portuguese", "Female", "—"),
+        "pm_alex": ("Portuguese", "Male", "—"),
+        "pm_santa": ("Portuguese", "Male", "—"),
+        "zf_xiaobei": ("Chinese", "Female", "D"),
+        "zf_xiaoni": ("Chinese", "Female", "D"),
+        "zf_xiaoxiao": ("Chinese", "Female", "D"),
+        "zf_xiaoyi": ("Chinese", "Female", "D"),
+        "zm_yunjian": ("Chinese", "Male", "D"),
+        "zm_yunxi": ("Chinese", "Male", "D"),
+        "zm_yunxia": ("Chinese", "Male", "D"),
+        "zm_yunyang": ("Chinese", "Male", "D"),
+    ]
+
+    /// Display order for the grouped Kokoro speaker picker — matches the vendored
+    /// README's language ordering.
+    static let kokoroLanguageOrder = [
+        "American English", "British English", "French", "Hindi", "Italian",
+        "Japanese", "Spanish", "Portuguese", "Chinese",
+    ]
+
+    /// Voicepack names for one language, in `BackendID.kokoroVoices`' order.
+    static func kokoroVoices(in language: String) -> [String] {
+        BackendID.kokoroVoices.filter { kokoroVoiceInfo[$0]?.language == language }
+    }
+
+    /// Picker row label: "af_heart — A" so the grade is visible without opening
+    /// the picker or selecting the voice first.
+    static func kokoroVoiceLabel(_ name: String) -> String {
+        guard let info = kokoroVoiceInfo[name] else { return name }
+        return "\(name) — \(info.grade)"
     }
 
     static let languages: [(String, String)] = [
@@ -312,6 +391,9 @@ struct StudioView: View {
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:
             "Clone a voice; the emotional read comes from the reference clip. No manual delivery knobs."
+        case .kokoro:
+            "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
+            + "varies a lot by voice; the grade shown is the model author's own rating."
         }
     }
 
@@ -388,25 +470,47 @@ struct StudioView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Speaker (CustomVoice)
+            // Speaker (CustomVoice / Kokoro)
             if !controls.presetSpeakers.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                        Picker("", selection: $model.speaker) {
-                            ForEach(controls.presetSpeakers, id: \.self) { name in
-                                Text(Self.speakerLabel(name)).tag(name)
-                            }
-                        }.labelsHidden().frame(width: 220)
+                        if model.backend == .kokoro {
+                            Picker("", selection: $model.speaker) {
+                                ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
+                                    Section(lang) {
+                                        ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
+                                            Text(Self.kokoroVoiceLabel(name)).tag(name)
+                                        }
+                                    }
+                                }
+                            }.labelsHidden().frame(width: 220)
+                        } else {
+                            Picker("", selection: $model.speaker) {
+                                ForEach(controls.presetSpeakers, id: \.self) { name in
+                                    Text(Self.speakerLabel(name)).tag(name)
+                                }
+                            }.labelsHidden().frame(width: 220)
+                        }
                     }
-                    // Description of the currently-selected speaker (names alone are opaque).
-                    if let info = Self.speakerInfo[model.speaker] {
-                        Text("\(info.desc) · \(info.lang)")
-                            .font(.caption2).foregroundStyle(.secondary)
+                    if model.backend == .kokoro {
+                        if let info = Self.kokoroVoiceInfo[model.speaker] {
+                            Text("\(info.language) · \(info.gender) · Grade \(info.grade)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("A fixed pretrained voicepack — grade is the model author's own "
+                             + "quality rating (A best, F+ weakest). No cloning or Direction here.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    } else {
+                        // Description of the currently-selected speaker (names alone are opaque).
+                        if let info = Self.speakerInfo[model.speaker] {
+                            Text("\(info.desc) · \(info.lang)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
+                             + "Aiden are English. Your Direction below shapes how it speaks.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
                     }
-                    Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
-                         + "Aiden are English. Your Direction below shapes how it speaks.")
-                        .font(.caption2).foregroundStyle(Brand.fgFaint)
                 }
             }
             // Direction (instruct)
