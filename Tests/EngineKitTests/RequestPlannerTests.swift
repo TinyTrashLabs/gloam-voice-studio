@@ -238,4 +238,21 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertEqual(p.speaker, "Dylan")
         XCTAssertEqual(p.instruct, "calm")
     }
+
+    func testKokoroRequiresSpeaker() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .kokoro, request: SynthesisRequest(text: "hi"))) { error in
+            XCTAssertEqual(error as? EngineError, .speakerRequired(.kokoro))
+        }
+    }
+
+    func testKokoroResolvesSpeakerAndDropsRefAudioAndInstruct() throws {
+        let p = try RequestPlanner.plan(
+            backend: .kokoro,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      instruct: "warm", speaker: "af_heart"))
+        XCTAssertEqual(p.speaker, "af_heart")
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertNil(p.instruct)
+    }
 }
