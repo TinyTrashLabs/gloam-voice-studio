@@ -96,6 +96,14 @@ final class AppModel {
             if backend.spec.needsLicenseAck && !didAckFishLicense {
                 licensePromptBackend = backend
             }
+            // Two backends now have presetSpeakers (Qwen CustomVoice, Kokoro) with
+            // disjoint name sets — a stale speaker from the previous backend would
+            // silently fail generation instead of tripping RequestPlanner's
+            // speakerRequired check (the string is non-empty, just wrong).
+            let presets = backend.controls.presetSpeakers
+            if !presets.isEmpty && !presets.contains(speaker) {
+                speaker = presets[0]
+            }
         }
     }
     /// Persisted: a relaunch must bring the API server back in whatever state
