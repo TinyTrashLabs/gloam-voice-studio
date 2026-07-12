@@ -95,7 +95,7 @@ struct VoiceSidebarView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                ForEach(groupedVoices, id: \.base.slug) { group in
+                ForEach(groupedVoices(voiceList), id: \.base.slug) { group in
                     voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
                     if expandedBases.contains(group.base.slug) {
                         ForEach(group.variants, id: \.slug) { variant in
@@ -235,35 +235,6 @@ struct VoiceSidebarView: View {
         .contextMenu { voiceActions(voice) }
     }
 
-    /// Suffixes that mark a `<base>-<expression>` acted variant — the current Fish
-    /// expression set plus the legacy `Emotion` names, so old variants still collapse.
-    private static let emotionSuffixes = Set(
-        VoiceExpression.allCases.map { $0.rawValue } + Emotion.allCases.map { $0.rawValue })
-
-    /// Base voices, each with its acted `<slug>-<emotion>` variants folded under it.
-    /// A voice is only a variant when its slug is `<base>-<emotion>` AND `<base>`
-    /// exists — so a hyphenated name like `sam-elliott` stays its own base voice.
-    private var groupedVoices: [(base: VoiceMeta, variants: [VoiceMeta])] {
-        let all = voiceList
-        let slugs = Set(all.map { $0.slug })
-        func baseSlug(of meta: VoiceMeta) -> String? {
-            for suffix in Self.emotionSuffixes where meta.slug.hasSuffix("-\(suffix)") {
-                let base = String(meta.slug.dropLast(suffix.count + 1))
-                if !base.isEmpty && slugs.contains(base) { return base }
-            }
-            return nil
-        }
-        var variantsByBase: [String: [VoiceMeta]] = [:]
-        var bases: [VoiceMeta] = []
-        for meta in all {
-            if let base = baseSlug(of: meta) { variantsByBase[base, default: []].append(meta) }
-            else { bases.append(meta) }
-        }
-        return bases.map { base in
-            (base, (variantsByBase[base.slug] ?? []).sorted { $0.slug < $1.slug })
-        }
-    }
-
     private func variantEmotionLabel(_ slug: String) -> String {
         guard let dash = slug.lastIndex(of: "-") else { return slug }
         return String(slug[slug.index(after: dash)...]).capitalized
@@ -273,20 +244,10 @@ struct VoiceSidebarView: View {
         if expandedBases.contains(slug) { expandedBases.remove(slug) } else { expandedBases.insert(slug) }
     }
 
-    /// The base voice a slug belongs to (if it's an acted `<base>-<emotion>` variant).
-    private func baseSlug(for slug: String) -> String? {
-        let slugs = Set(voiceList.map { $0.slug })
-        for suffix in Self.emotionSuffixes where slug.hasSuffix("-\(suffix)") {
-            let base = String(slug.dropLast(suffix.count + 1))
-            if !base.isEmpty && slugs.contains(base) { return base }
-        }
-        return nil
-    }
-
     /// Open a voice in the Create Voice page's Edit mode (full page, not the modal
     /// sheet). A variant has no page of its own — it opens its base, where it's managed.
     private func openEdit(_ slug: String) {
-        model.editingVoiceSlug = baseSlug(for: slug) ?? slug
+        model.editingVoiceSlug = voiceBaseSlug(for: slug, in: voiceList) ?? slug
         sectionRaw = StudioSection.createVoice.rawValue
     }
 

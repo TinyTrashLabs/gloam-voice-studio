@@ -13,6 +13,9 @@ struct StudioView: View {
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var voicePickerOpen = false
+    /// Independent from the sidebar's own expansion state — expanding a group in
+    /// this popover must not affect (or be affected by) the sidebar.
+    @State private var pickerExpandedBases: Set<String> = []
     @State private var showSaveDirection = false
     @State private var saveDirectionName = ""
     @State private var lineSelection = NSRange(location: 0, length: 0)
@@ -638,46 +641,91 @@ struct StudioView: View {
     /// avatar views actually draw (native menus flatten them).
     @ViewBuilder
     private func voicePickerList(_ voices: [VoiceMeta]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if voices.isEmpty {
-                Text("No voices yet — add one in the sidebar.")
-                    .font(.callout)
-                    .foregroundStyle(Brand.fgDim)
-                    .padding(10)
-            }
-            ForEach(voices, id: \.slug) { voice in
-                let selected = model.selectedVoiceSlug == voice.slug
-                Button {
-                    model.selectedVoiceSlug = voice.slug
-                    voicePickerOpen = false
-                } label: {
-                    HStack(spacing: 8) {
-                        VoiceAvatarView(
-                            slug: voice.slug,
-                            name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
-                            size: 22)
-                        Text(voice.name).foregroundStyle(Brand.fg)
-                        Spacer(minLength: 12)
-                        if selected {
-                            Image(systemName: "checkmark")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Brand.accent)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                if voices.isEmpty {
+                    Text("No voices yet — add one in the sidebar.")
+                        .font(.callout)
+                        .foregroundStyle(Brand.fgDim)
+                        .padding(10)
+                }
+                ForEach(groupedVoices(voices), id: \.base.slug) { group in
+                    voicePickerRow(group.base, isVariant: false, variantCount: group.variants.count)
+                    if pickerExpandedBases.contains(group.base.slug) {
+                        ForEach(group.variants, id: \.slug) { variant in
+                            voicePickerRow(variant, isVariant: true, variantCount: 0)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(selected ? Color.white.opacity(0.07) : .clear))
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
+            .padding(6)
         }
-        .padding(6)
         .frame(width: 240)
+        .frame(maxHeight: 360)
         .background(Brand.ink2)
+    }
+
+    /// One VOICE-popover row. A base voice with acted variants shows a disclosure
+    /// chevron and count badge; variants render indented, same visual language as
+    /// the sidebar's `voiceRow` (VoiceSidebarView.swift) but without its hover-only
+    /// play/edit/menu controls — this popover only selects.
+    @ViewBuilder
+    private func voicePickerRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
+        let selected = model.selectedVoiceSlug == voice.slug
+        HStack(spacing: 8) {
+            if isVariant {
+                Color.clear.frame(width: 16)
+            } else if variantCount > 0 {
+                Button {
+                    if pickerExpandedBases.contains(voice.slug) {
+                        pickerExpandedBases.remove(voice.slug)
+                    } else {
+                        pickerExpandedBases.insert(voice.slug)
+                    }
+                } label: {
+                    Image(systemName: pickerExpandedBases.contains(voice.slug)
+                          ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(Brand.fgDim)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Color.clear.frame(width: 12)
+            }
+            Button {
+                model.selectedVoiceSlug = voice.slug
+                voicePickerOpen = false
+            } label: {
+                HStack(spacing: 8) {
+                    VoiceAvatarView(
+                        slug: voice.slug,
+                        name: voice.name,
+                        avatarURL: model.voices.avatarURL(voice.slug),
+                        size: isVariant ? 18 : 22)
+                    Text(voice.name).foregroundStyle(Brand.fg)
+                    if variantCount > 0 {
+                        Text("\(variantCount)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                            .foregroundStyle(Brand.fgDim)
+                    }
+                    Spacer(minLength: 12)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Brand.accent)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? Color.white.opacity(0.07) : .clear))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     /// Tiny monospaced zone eyebrow label.
