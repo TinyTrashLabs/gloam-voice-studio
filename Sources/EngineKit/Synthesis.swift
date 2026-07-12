@@ -148,8 +148,15 @@ enum RequestPlanner {
             throw EngineError.instructRequired(backend)
         }
 
-        // Speaker: CustomVoice only; required.
-        let speaker = controls.presetSpeakers.isEmpty ? nil : clean(request.speaker)
+        // Speaker: CustomVoice/Kokoro only; required, and must be a name the
+        // backend actually recognizes. A stale speaker from a previously
+        // active backend (e.g. app-launch restore, where AppModel.backend's
+        // didSet never fires during init and so never gets a chance to reset
+        // it; or a chat "Regenerate with…" override, which bypasses the
+        // Studio bench's own reset entirely) must fail loudly here instead of
+        // reaching the model with an invalid voicepack/name.
+        let cleanedSpeaker = controls.presetSpeakers.isEmpty ? nil : clean(request.speaker)
+        let speaker = cleanedSpeaker.flatMap { controls.presetSpeakers.contains($0) ? $0 : nil }
         if !controls.presetSpeakers.isEmpty && speaker == nil {
             throw EngineError.speakerRequired(backend)
         }

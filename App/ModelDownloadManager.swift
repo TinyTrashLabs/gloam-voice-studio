@@ -25,10 +25,12 @@ final class ModelDownloadManager {
         .chatterbox: 2_300_000_000,
         .chatterboxTurbo: 2_300_000_000,
         .fishS2Pro: 11_100_000_000,
-        // The HF repo is 389MB total, but half of that is redundant .pt (PyTorch)
-        // copies of the same 54 voicepacks alongside the .safetensors MLX actually
-        // reads — downloadRepoSnapshot below skips .pt, so ~200MB is what's real.
-        .kokoro: 200_000_000,
+        // The HF repo is 389MB total; only the 54 small per-voice .pt (PyTorch)
+        // duplicates (~28MB combined) are redundant — the 327MB main-model
+        // safetensors file has no .pt counterpart. downloadRepoSnapshot below
+        // skips .pt, so ~361MB is the real download (confirmed via a live
+        // `spike` CLI run: 361,127,491 bytes).
+        .kokoro: 365_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
