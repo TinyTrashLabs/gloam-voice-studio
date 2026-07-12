@@ -8,6 +8,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case chatterbox
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
+    case kokoro
 
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
@@ -71,6 +72,40 @@ extension BackendID {
     }
 }
 
+extension BackendID {
+    /// All 54 Kokoro voicepacks, grouped by language (American English, British
+    /// English, French, Hindi, Italian, Japanese, Spanish, Portuguese, Chinese) and,
+    /// within each language, ordered by hexgrad's own VOICES.md quality grade
+    /// (best first). Source: hexgrad/Kokoro-82M's VOICES.md + the vendored
+    /// mlx-audio-swift README's per-language voice lists (fetched during design,
+    /// not from training-data memory).
+    public static let kokoroVoices: [String] = [
+        // American English
+        "af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore", "af_sarah",
+        "af_alloy", "af_nova", "af_sky", "af_jessica", "af_river",
+        "am_fenrir", "am_michael", "am_puck", "am_echo", "am_eric", "am_liam",
+        "am_onyx", "am_santa", "am_adam",
+        // British English
+        "bf_emma", "bf_isabella", "bf_alice", "bf_lily",
+        "bm_fable", "bm_george", "bm_lewis", "bm_daniel",
+        // French
+        "ff_siwis",
+        // Hindi
+        "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+        // Italian
+        "if_sara", "im_nicola",
+        // Japanese
+        "jf_alpha", "jf_gongitsune", "jf_tebukuro", "jf_nezumi", "jm_kumo",
+        // Spanish
+        "ef_dora", "em_alex", "em_santa",
+        // Portuguese
+        "pf_dora", "pm_alex", "pm_santa",
+        // Chinese
+        "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+        "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+    ]
+}
+
 /// Which sampling sliders a backend exposes in the Advanced disclosure.
 /// A nil range hides that knob.
 public struct Knobs: Sendable, Equatable {
@@ -112,6 +147,9 @@ public enum EmotionMechanism: Sendable, Equatable {
     /// (e.g. `[whisper] …`). The planner injects it; the model reads it as literal
     /// text and never speaks it.
     case inlineMarker
+    /// No emotion control at all — a fixed preset-voicepack model (Kokoro) with no
+    /// clone, no knob, and no acted-variant convention to fall back on.
+    case none
 }
 
 /// Data-driven description of a backend's Direct-pane controls. The UI renders
@@ -167,6 +205,9 @@ extension BackendID {
         case .chatterboxTurbo:
             ControlSurface(voiceClone: .required, instruct: .none,
                            language: false, knobs: Knobs())
+        case .kokoro:
+            ControlSurface(voiceClone: .none, presetSpeakers: Self.kokoroVoices,
+                           instruct: .none, language: false, knobs: Knobs())
         }
     }
 }
@@ -180,6 +221,7 @@ extension BackendID {
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
+        case .kokoro: .none
         }
     }
 }
@@ -235,6 +277,11 @@ extension BackendID {
                         defaultSampleRate: 44100, honorsTags: true,
                         needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 16_000_000_000)
+        case .kokoro:
+            BackendSpec(modelRepo: "mlx-community/Kokoro-82M-bf16",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
         }
     }
 }

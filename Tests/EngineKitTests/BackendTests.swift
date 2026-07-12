@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 7)
+        XCTAssertEqual(BackendID.allCases.count, 8)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 7)
+        XCTAssertEqual(BackendID.allCases.count, 8)
     }
 
     func testQwenFamilyFlag() {
@@ -132,5 +132,38 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(turbo.voiceClone, .required)
         XCTAssertNil(turbo.knobs.exaggeration)
         XCTAssertNil(turbo.knobs.temperature)
+    }
+
+    func testKokoroRawValue() {
+        XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
+        XCTAssertEqual(BackendID.allCases.count, 8)
+    }
+
+    func testKokoroSpec() {
+        let spec = BackendID.kokoro.spec
+        XCTAssertEqual(spec.modelRepo, "mlx-community/Kokoro-82M-bf16")
+        XCTAssertEqual(spec.defaultSampleRate, 24000)
+        XCTAssertFalse(spec.honorsTags)
+        XCTAssertFalse(spec.needsLicenseAck)
+        XCTAssertFalse(spec.needsRefAudio)
+        XCTAssertEqual(BackendID.kokoro.emotionMechanism, .none)
+    }
+
+    func testKokoroControls() {
+        let controls = BackendID.kokoro.controls
+        XCTAssertEqual(controls.voiceClone, .none)
+        XCTAssertEqual(controls.instruct, .none)
+        XCTAssertFalse(controls.language)
+        XCTAssertNil(controls.knobs.temperature)
+        XCTAssertNil(controls.knobs.exaggeration)
+        XCTAssertNil(controls.knobs.cfgWeight)
+        XCTAssertEqual(controls.presetSpeakers.count, 54)
+        XCTAssertEqual(controls.presetSpeakers.first, "af_heart")
+        XCTAssertTrue(controls.presetSpeakers.contains("am_adam"))
+        XCTAssertEqual(Set(controls.presetSpeakers).count, 54, "no duplicate voice names")
+    }
+
+    func testKokoroIsNotQwen() {
+        XCTAssertFalse(BackendID.kokoro.isQwen)
     }
 }
