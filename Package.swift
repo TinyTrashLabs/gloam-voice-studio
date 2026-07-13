@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "gloam-voice-studio",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
         .library(name: "StudioKit", targets: ["StudioKit"]),
