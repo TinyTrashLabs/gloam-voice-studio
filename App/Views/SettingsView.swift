@@ -54,7 +54,8 @@ struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
 
     private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
+         .kokoro]
 
     var body: some View {
         @Bindable var model = model

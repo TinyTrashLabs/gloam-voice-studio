@@ -107,7 +107,9 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 // instruct (honored only on the no-ref path — planner already enforced this).
                 audio = try await model.generate(
                     text: request.text,
-                    voice: backend.isQwen ? request.instruct : nil,
+                    voice: backend.isQwen ? request.instruct
+                        : backend == .kokoro ? request.speaker
+                        : nil,
                     refAudio: refAudio,
                     refText: request.refText,
                     language: request.language,

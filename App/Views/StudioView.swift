@@ -13,6 +13,9 @@ struct StudioView: View {
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var voicePickerOpen = false
+    /// Independent from the sidebar's own expansion state — expanding a group in
+    /// this popover must not affect (or be affected by) the sidebar.
+    @State private var pickerExpandedBases: Set<String> = []
     @State private var showSaveDirection = false
     @State private var saveDirectionName = ""
     @State private var lineSelection = NSRange(location: 0, length: 0)
@@ -165,7 +168,7 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
-        case .textDriven:
+        case .textDriven, .none:
             EmptyView()
         }
     }
@@ -213,6 +216,85 @@ struct StudioView: View {
     static func speakerLabel(_ name: String) -> String {
         if let info = speakerInfo[name] { return "\(name) · \(info.lang)" }
         return name
+    }
+
+    /// hexgrad's own per-voice quality grade (A best, F+ weakest) plus language and
+    /// gender, keyed by voicepack name. Source: hexgrad/Kokoro-82M's VOICES.md + the
+    /// vendored mlx-audio-swift README (fetched during design). "—" = ungraded there.
+    static let kokoroVoiceInfo: [String: (language: String, gender: String, grade: String)] = [
+        "af_heart": ("American English", "Female", "A"),
+        "af_bella": ("American English", "Female", "A-"),
+        "af_nicole": ("American English", "Female", "B-"),
+        "af_aoede": ("American English", "Female", "C+"),
+        "af_kore": ("American English", "Female", "C+"),
+        "af_sarah": ("American English", "Female", "C+"),
+        "af_alloy": ("American English", "Female", "C"),
+        "af_nova": ("American English", "Female", "C"),
+        "af_sky": ("American English", "Female", "C-"),
+        "af_jessica": ("American English", "Female", "D"),
+        "af_river": ("American English", "Female", "D"),
+        "am_fenrir": ("American English", "Male", "C+"),
+        "am_michael": ("American English", "Male", "C+"),
+        "am_puck": ("American English", "Male", "C+"),
+        "am_echo": ("American English", "Male", "D"),
+        "am_eric": ("American English", "Male", "D"),
+        "am_liam": ("American English", "Male", "D"),
+        "am_onyx": ("American English", "Male", "D"),
+        "am_santa": ("American English", "Male", "D-"),
+        "am_adam": ("American English", "Male", "F+"),
+        "bf_emma": ("British English", "Female", "B-"),
+        "bf_isabella": ("British English", "Female", "C"),
+        "bf_alice": ("British English", "Female", "D"),
+        "bf_lily": ("British English", "Female", "D"),
+        "bm_fable": ("British English", "Male", "C"),
+        "bm_george": ("British English", "Male", "C"),
+        "bm_lewis": ("British English", "Male", "D+"),
+        "bm_daniel": ("British English", "Male", "D"),
+        "ff_siwis": ("French", "Female", "B-"),
+        "hf_alpha": ("Hindi", "Female", "C"),
+        "hf_beta": ("Hindi", "Female", "C"),
+        "hm_omega": ("Hindi", "Male", "C"),
+        "hm_psi": ("Hindi", "Male", "C"),
+        "if_sara": ("Italian", "Female", "C"),
+        "im_nicola": ("Italian", "Male", "C"),
+        "jf_alpha": ("Japanese", "Female", "C+"),
+        "jf_gongitsune": ("Japanese", "Female", "C"),
+        "jf_tebukuro": ("Japanese", "Female", "C"),
+        "jf_nezumi": ("Japanese", "Female", "C-"),
+        "jm_kumo": ("Japanese", "Male", "C-"),
+        "ef_dora": ("Spanish", "Female", "—"),
+        "em_alex": ("Spanish", "Male", "—"),
+        "em_santa": ("Spanish", "Male", "—"),
+        "pf_dora": ("Portuguese", "Female", "—"),
+        "pm_alex": ("Portuguese", "Male", "—"),
+        "pm_santa": ("Portuguese", "Male", "—"),
+        "zf_xiaobei": ("Chinese", "Female", "D"),
+        "zf_xiaoni": ("Chinese", "Female", "D"),
+        "zf_xiaoxiao": ("Chinese", "Female", "D"),
+        "zf_xiaoyi": ("Chinese", "Female", "D"),
+        "zm_yunjian": ("Chinese", "Male", "D"),
+        "zm_yunxi": ("Chinese", "Male", "D"),
+        "zm_yunxia": ("Chinese", "Male", "D"),
+        "zm_yunyang": ("Chinese", "Male", "D"),
+    ]
+
+    /// Display order for the grouped Kokoro speaker picker — matches the vendored
+    /// README's language ordering.
+    static let kokoroLanguageOrder = [
+        "American English", "British English", "French", "Hindi", "Italian",
+        "Japanese", "Spanish", "Portuguese", "Chinese",
+    ]
+
+    /// Voicepack names for one language, in `BackendID.kokoroVoices`' order.
+    static func kokoroVoices(in language: String) -> [String] {
+        BackendID.kokoroVoices.filter { kokoroVoiceInfo[$0]?.language == language }
+    }
+
+    /// Picker row label: "af_heart — A" so the grade is visible without opening
+    /// the picker or selecting the voice first.
+    static func kokoroVoiceLabel(_ name: String) -> String {
+        guard let info = kokoroVoiceInfo[name] else { return name }
+        return "\(name) — \(info.grade)"
     }
 
     static let languages: [(String, String)] = [
@@ -312,6 +394,9 @@ struct StudioView: View {
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:
             "Clone a voice; the emotional read comes from the reference clip. No manual delivery knobs."
+        case .kokoro:
+            "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
+            + "varies a lot by voice; the grade shown is the model author's own rating."
         }
     }
 
@@ -388,25 +473,47 @@ struct StudioView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Speaker (CustomVoice)
+            // Speaker (CustomVoice / Kokoro)
             if !controls.presetSpeakers.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                        Picker("", selection: $model.speaker) {
-                            ForEach(controls.presetSpeakers, id: \.self) { name in
-                                Text(Self.speakerLabel(name)).tag(name)
-                            }
-                        }.labelsHidden().frame(width: 220)
+                        if model.backend == .kokoro {
+                            Picker("", selection: $model.speaker) {
+                                ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
+                                    Section(lang) {
+                                        ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
+                                            Text(Self.kokoroVoiceLabel(name)).tag(name)
+                                        }
+                                    }
+                                }
+                            }.labelsHidden().frame(width: 220)
+                        } else {
+                            Picker("", selection: $model.speaker) {
+                                ForEach(controls.presetSpeakers, id: \.self) { name in
+                                    Text(Self.speakerLabel(name)).tag(name)
+                                }
+                            }.labelsHidden().frame(width: 220)
+                        }
                     }
-                    // Description of the currently-selected speaker (names alone are opaque).
-                    if let info = Self.speakerInfo[model.speaker] {
-                        Text("\(info.desc) · \(info.lang)")
-                            .font(.caption2).foregroundStyle(.secondary)
+                    if model.backend == .kokoro {
+                        if let info = Self.kokoroVoiceInfo[model.speaker] {
+                            Text("\(info.language) · \(info.gender) · Grade \(info.grade)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("A fixed pretrained voicepack — grade is the model author's own "
+                             + "quality rating (A best, F+ weakest). No cloning or Direction here.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    } else {
+                        // Description of the currently-selected speaker (names alone are opaque).
+                        if let info = Self.speakerInfo[model.speaker] {
+                            Text("\(info.desc) · \(info.lang)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
+                             + "Aiden are English. Your Direction below shapes how it speaks.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
                     }
-                    Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
-                         + "Aiden are English. Your Direction below shapes how it speaks.")
-                        .font(.caption2).foregroundStyle(Brand.fgFaint)
                 }
             }
             // Direction (instruct)
@@ -534,46 +641,91 @@ struct StudioView: View {
     /// avatar views actually draw (native menus flatten them).
     @ViewBuilder
     private func voicePickerList(_ voices: [VoiceMeta]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if voices.isEmpty {
-                Text("No voices yet — add one in the sidebar.")
-                    .font(.callout)
-                    .foregroundStyle(Brand.fgDim)
-                    .padding(10)
-            }
-            ForEach(voices, id: \.slug) { voice in
-                let selected = model.selectedVoiceSlug == voice.slug
-                Button {
-                    model.selectedVoiceSlug = voice.slug
-                    voicePickerOpen = false
-                } label: {
-                    HStack(spacing: 8) {
-                        VoiceAvatarView(
-                            slug: voice.slug,
-                            name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
-                            size: 22)
-                        Text(voice.name).foregroundStyle(Brand.fg)
-                        Spacer(minLength: 12)
-                        if selected {
-                            Image(systemName: "checkmark")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Brand.accent)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                if voices.isEmpty {
+                    Text("No voices yet — add one in the sidebar.")
+                        .font(.callout)
+                        .foregroundStyle(Brand.fgDim)
+                        .padding(10)
+                }
+                ForEach(groupedVoices(voices), id: \.base.slug) { group in
+                    voicePickerRow(group.base, isVariant: false, variantCount: group.variants.count)
+                    if pickerExpandedBases.contains(group.base.slug) {
+                        ForEach(group.variants, id: \.slug) { variant in
+                            voicePickerRow(variant, isVariant: true, variantCount: 0)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(selected ? Color.white.opacity(0.07) : .clear))
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
+            .padding(6)
         }
-        .padding(6)
         .frame(width: 240)
+        .frame(maxHeight: 360)
         .background(Brand.ink2)
+    }
+
+    /// One VOICE-popover row. A base voice with acted variants shows a disclosure
+    /// chevron and count badge; variants render indented, same visual language as
+    /// the sidebar's `voiceRow` (VoiceSidebarView.swift) but without its hover-only
+    /// play/edit/menu controls — this popover only selects.
+    @ViewBuilder
+    private func voicePickerRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
+        let selected = model.selectedVoiceSlug == voice.slug
+        HStack(spacing: 8) {
+            if isVariant {
+                Color.clear.frame(width: 16)
+            } else if variantCount > 0 {
+                Button {
+                    if pickerExpandedBases.contains(voice.slug) {
+                        pickerExpandedBases.remove(voice.slug)
+                    } else {
+                        pickerExpandedBases.insert(voice.slug)
+                    }
+                } label: {
+                    Image(systemName: pickerExpandedBases.contains(voice.slug)
+                          ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(Brand.fgDim)
+                        .frame(width: 12)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Color.clear.frame(width: 12)
+            }
+            Button {
+                model.selectedVoiceSlug = voice.slug
+                voicePickerOpen = false
+            } label: {
+                HStack(spacing: 8) {
+                    VoiceAvatarView(
+                        slug: voice.slug,
+                        name: voice.name,
+                        avatarURL: model.voices.avatarURL(voice.slug),
+                        size: isVariant ? 18 : 22)
+                    Text(voice.name).foregroundStyle(Brand.fg)
+                    if variantCount > 0 {
+                        Text("\(variantCount)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                            .foregroundStyle(Brand.fgDim)
+                    }
+                    Spacer(minLength: 12)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Brand.accent)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? Color.white.opacity(0.07) : .clear))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     /// Tiny monospaced zone eyebrow label.

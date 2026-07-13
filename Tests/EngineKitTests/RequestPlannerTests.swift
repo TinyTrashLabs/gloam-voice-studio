@@ -238,4 +238,41 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertEqual(p.speaker, "Dylan")
         XCTAssertEqual(p.instruct, "calm")
     }
+
+    func testKokoroRequiresSpeaker() {
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .kokoro, request: SynthesisRequest(text: "hi"))) { error in
+            XCTAssertEqual(error as? EngineError, .speakerRequired(.kokoro))
+        }
+    }
+
+    func testKokoroResolvesSpeakerAndDropsRefAudioAndInstruct() throws {
+        let p = try RequestPlanner.plan(
+            backend: .kokoro,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      instruct: "warm", speaker: "af_heart"))
+        XCTAssertEqual(p.speaker, "af_heart")
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertNil(p.instruct)
+    }
+
+    func testKokoroRejectsSpeakerNotInPresetList() {
+        // "Vivian" is a Qwen name, not a Kokoro voicepack — this is the exact
+        // shape of a stale speaker surviving an app-launch restore (backend
+        // set during AppModel.init, whose didSet never fires) or a chat
+        // "Regenerate with…" override that bypasses the Studio bench's reset.
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .kokoro, request: SynthesisRequest(text: "hi", speaker: "Vivian"))) { error in
+            XCTAssertEqual(error as? EngineError, .speakerRequired(.kokoro))
+        }
+    }
+
+    func testCustomRejectsSpeakerNotInPresetList() {
+        // Same membership check applies to qwenCustom: "af_heart" is a Kokoro
+        // voicepack, not a valid CustomVoice speaker name.
+        XCTAssertThrowsError(try RequestPlanner.plan(
+            backend: .qwenCustom, request: SynthesisRequest(text: "hi", speaker: "af_heart"))) { error in
+            XCTAssertEqual(error as? EngineError, .speakerRequired(.qwenCustom))
+        }
+    }
 }

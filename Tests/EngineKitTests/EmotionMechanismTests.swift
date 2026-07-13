@@ -36,6 +36,10 @@ final class EmotionMechanismTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterboxTurbo.emotionMechanism, .variantClipOnly)
     }
 
+    func testKokoroHasNoEmotionMechanism() {
+        XCTAssertEqual(BackendID.kokoro.emotionMechanism, .none)
+    }
+
     // MARK: planner resolves the emotion knob FROM the mechanism (not honorsTags)
 
     // MARK: inline-marker (Fish): emotion is a leading [marker] injected into text
@@ -111,5 +115,14 @@ final class EmotionMechanismTests: XCTestCase {
             request: SynthesisRequest(text: "hi", emotion: .hype, instruct: "gentle old narrator"))
         XCTAssertNil(plan.temperature)
         XCTAssertNil(plan.exaggeration)
+    }
+
+    func testNoneMechanismMapsEmotionToNoLiveKnob() throws {
+        // Kokoro has no knobs at all; the emotion enum must not leak onto any field.
+        let plan = try RequestPlanner.plan(
+            backend: .kokoro,
+            request: SynthesisRequest(text: "hi", emotion: .hype, speaker: "af_heart"))
+        XCTAssertNil(plan.exaggeration)
+        XCTAssertNil(plan.temperature)
     }
 }

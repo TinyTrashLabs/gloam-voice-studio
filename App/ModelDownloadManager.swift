@@ -25,6 +25,12 @@ final class ModelDownloadManager {
         .chatterbox: 2_300_000_000,
         .chatterboxTurbo: 2_300_000_000,
         .fishS2Pro: 11_100_000_000,
+        // The HF repo is 389MB total; only the 54 small per-voice .pt (PyTorch)
+        // duplicates (~28MB combined) are redundant — the 327MB main-model
+        // safetensors file has no .pt counterpart. downloadRepoSnapshot below
+        // skips .pt, so ~361MB is the real download (confirmed via a live
+        // `spike` CLI run: 361,127,491 bytes).
+        .kokoro: 365_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
@@ -161,7 +167,10 @@ final class ModelDownloadManager {
         }
         let (listData, _) = try await URLSession.shared.data(from: treeURL)
         let files = try JSONDecoder().decode([Entry].self, from: listData)
-            .filter { $0.type == "file" }
+            // MLX only ever reads .safetensors — Kokoro's repo carries 54 redundant
+            // .pt (PyTorch) copies of the same voicepacks that would otherwise
+            // roughly double its download for nothing.
+            .filter { $0.type == "file" && !$0.path.hasSuffix(".pt") }
         guard !files.isEmpty else {
             throw DownloadError(message: "No files found in \(repo)")
         }
