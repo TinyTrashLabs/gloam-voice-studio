@@ -200,11 +200,21 @@ public enum APIRouter {
             if controls.instruct == .required && blank(req.instruct) {
                 throw APIError(status: .badRequest, detail: "\(backend.rawValue) requires 'instruct'")
             }
-            if !controls.presetSpeakers.isEmpty,
-               blank(req.speaker) || !controls.presetSpeakers.contains(req.speaker ?? "") {
-                throw APIError(status: .badRequest,
-                               detail: "\(backend.rawValue) requires a preset 'speaker'")
-            }
+            // Preset-speaker backends (Kokoro): the OpenAI-compat `voice` field IS the
+            // voicepack name, so accept it as the speaker. An absent/unknown speaker
+            // (e.g. the gloam brain sends a clone-style `voice` slug it can't satisfy)
+            // falls back to the backend's default — its best-first `presetSpeakers.first`
+            // — rather than 400, mirroring the clone path's `defaultVoice` fallback below.
+            // Immutable (`let`) so it can be captured by the concurrent synthesize
+            // closure below — a reassigned `var` can't cross that boundary.
+            let effectiveSpeaker: String? = {
+                let s = blank(req.speaker) ? req.voice : req.speaker
+                if !controls.presetSpeakers.isEmpty,
+                   blank(s) || !controls.presetSpeakers.contains(s ?? "") {
+                    return controls.presetSpeakers.first
+                }
+                return s
+            }()
 
             // Resolve `voice` + `emotion` to an acted `<voice>-<emotion>` variant clip
             // when one exists (e.g. "ogre" + "excited" → the ogre-excited clip); else
@@ -249,7 +259,7 @@ public enum APIRouter {
                                 temperatureOverride: req.temperature,
                                 exaggerationOverride: req.exaggeration,
                                 exaggerationCeiling: req.exaggeration_ceiling,
-                                instruct: req.instruct, speaker: req.speaker, language: req.language,
+                                instruct: req.instruct, speaker: effectiveSpeaker, language: req.language,
                                 topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                     }
                 } catch is RequestGate.Busy {
