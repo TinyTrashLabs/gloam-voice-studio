@@ -57,6 +57,12 @@ let package = Package(
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                // Linked (though used transitively via Tokenizers) so the swift-jinja
+                // < 2.4.0 constraint above is RETAINED when EngineKit is consumed as a
+                // dependency. SPM prunes a non-root package's unused dependency
+                // declarations, which silently dropped the pin for the iOS app and let
+                // jinja float to the incompatible 2.4.0.
+                .product(name: "Jinja", package: "swift-jinja"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
             ],
