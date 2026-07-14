@@ -76,6 +76,8 @@ final class AppModel {
     let chatSpeechEngine: GloamEngine
     let downloads: ModelDownloadManager
     let speech: SpeechManager
+    /// One-shot mic→transcript capture backing the local API's `listen` tool.
+    private let listenService = ListenService()
     /// This machine's RAM/chip snapshot, read once at launch (it can't change
     /// while the app runs) — drives RAM-gating in the model pickers.
     let deviceCapabilities: EngineCapabilities
@@ -963,7 +965,19 @@ final class AppModel {
                 // Live reads (not captured values): the Settings pickers take
                 // effect on the next request without rebuilding the server.
                 defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
-                defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" }))
+                defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" },
+                // Native SpeechKit STT, wired to the same engine the RECORD
+                // button uses. Closures hop to the main actor on demand.
+                transcribe: { [speech] wav, hint in
+                    let transcriber = await speech.makeTranscriber()
+                    let fallback = await speech.effectiveLanguageHint
+                    return try await transcriber
+                        .transcribe(wavData: wav, languageHint: hint ?? fallback).text
+                },
+                listen: { [speech, listenService] maxSeconds, silenceSeconds, language in
+                    try await listenService.listen(speech: speech, maxSeconds: maxSeconds,
+                                                   silenceSeconds: silenceSeconds, language: language)
+                }))
             try? await server?.start(port: serverPort)
         } else {
             await server?.stop()
