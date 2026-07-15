@@ -56,6 +56,14 @@ struct VoiceImportRequest: Codable {
     let data: String              // base64 .gvoice zip
 }
 
+struct ListenRequest: Codable {
+    let maxSeconds: Double?
+    let silenceSeconds: Double?
+    let language: String?
+}
+
+struct TranscriptResponse: Codable, ResponseEncodable { let text: String }
+
 struct SpeechRequest: Codable {
     let input: String
     let model: String?

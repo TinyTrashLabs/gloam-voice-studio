@@ -85,4 +85,81 @@ final class STTRouteTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(text, "hello from the mic")
         }
     }
+
+    // MARK: POST /listen (HTTP)
+
+    func testPostListenReturnsTranscript() async throws {
+        let app = makeApp(listen: { _, _, _ in "hello over http" })
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/listen", method: .post,
+                                     body: ByteBuffer(string: "{}")) { resp in
+                XCTAssertEqual(resp.status, .ok)
+                let json = try JSONSerialization.jsonObject(
+                    with: Data(buffer: resp.body)) as? [String: Any]
+                XCTAssertEqual(json?["text"] as? String, "hello over http")
+            }
+        }
+    }
+
+    func testPostListenForwardsOptions() async throws {
+        let received = Received()
+        let app = makeApp(listen: { maxSeconds, silenceSeconds, language in
+            await received.set(maxSeconds: maxSeconds, silenceSeconds: silenceSeconds,
+                               language: language)
+            return "ok"
+        })
+        try await app.test(.router) { client in
+            try await client.execute(
+                uri: "/listen", method: .post,
+                body: ByteBuffer(string: #"{"maxSeconds":5,"silenceSeconds":0.8,"language":"es"}"#)
+            ) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        let got = await received.value
+        XCTAssertEqual(got.maxSeconds, 5)
+        XCTAssertEqual(got.silenceSeconds, 0.8)
+        XCTAssertEqual(got.language, "es")
+    }
+
+    func testPostListenDefaultsOptionsWhenOmitted() async throws {
+        let received = Received()
+        let app = makeApp(listen: { maxSeconds, silenceSeconds, language in
+            await received.set(maxSeconds: maxSeconds, silenceSeconds: silenceSeconds,
+                               language: language)
+            return "ok"
+        })
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/listen", method: .post,
+                                     body: ByteBuffer(string: "{}")) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        let got = await received.value
+        XCTAssertEqual(got.maxSeconds, 30)
+        XCTAssertEqual(got.silenceSeconds, 1.2)
+        XCTAssertNil(got.language)
+    }
+
+    func testPostListenFailurePropagatesAsServerError() async throws {
+        struct Boom: Error {}
+        let app = makeApp(listen: { _, _, _ in throw Boom() })
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/listen", method: .post,
+                                     body: ByteBuffer(string: "{}")) { resp in
+                XCTAssertEqual(resp.status, .internalServerError)
+                let json = try JSONSerialization.jsonObject(
+                    with: Data(buffer: resp.body)) as? [String: Any]
+                XCTAssertNotNil(json?["detail"] as? String)
+            }
+        }
+    }
+
+    private actor Received {
+        private(set) var value: (maxSeconds: Double, silenceSeconds: Double, language: String?)
+            = (0, 0, nil)
+        func set(maxSeconds: Double, silenceSeconds: Double, language: String?) {
+            value = (maxSeconds, silenceSeconds, language)
+        }
+    }
 }
