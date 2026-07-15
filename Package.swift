@@ -19,12 +19,18 @@ let package = Package(
         // docs/chatterbox-quality-todo.md.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "45bd8266cefc169108df24963ad6ac66def545b0"),
+            revision: "00d93dfba543f4bb26004e6acae597188ac8b947"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
-        // TTL fork of upstream 3.31.4 + one fix: the Gemma4 VLM backbone wires
-        // kvSharedOnly so QAT checkpoints (gemma-4-e2b/e4b) load — upstream PR
-        // pending; repin to a release once merged.
-        .package(url: "https://github.com/TinyTrashLabs/mlx-swift-lm.git", exact: "3.31.5"),
+        // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
+        // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
+        // #402 was closed as a duplicate in favor of #390). No tagged release
+        // includes it yet, so pin the exact commit rather than wait; repin to a
+        // real release once ml-explore/mlx-swift-lm cuts one past 2026-07-10.
+        // mlx-audio-swift's own mlx-swift-lm dependency (above) is pinned to the
+        // same commit (TinyTrashLabs/mlx-audio-swift#4) so both chains agree —
+        // otherwise SwiftPM sees two remotes for one package identity.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git",
+                revision: "09deb8c4e9056fcd76b60718bb50325d1730572b"),
         // HuggingFace Hub client + Tokenizers — back the mlx-swift-lm #huggingFace…
         // macros (mlx-swift-lm 3.x ships the integration as macros the consumer
         // wires to concrete impls, not a bundled dependency). Both are already in
