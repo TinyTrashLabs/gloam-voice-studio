@@ -32,6 +32,15 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     public func didEvictModel() {
         Memory.clearCache()
     }
+
+    /// Cap MLX's Metal buffer-reuse cache. The default is unbounded: freed GPU
+    /// buffers are retained for reuse and only trimmed on eviction, so a long
+    /// live set accumulates gigabytes and iOS jetsam-kills the app (2026-07-13).
+    /// Call ONCE at startup on a memory-constrained host (iPhone). Desktop leaves
+    /// it at the default, where a larger cache speeds the on-device LLM.
+    public static func configureMemory(cacheLimitBytes: Int) {
+        Memory.cacheLimit = cacheLimitBytes
+    }
 }
 
 final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
@@ -93,6 +102,11 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
             if let topK = request.topK { params.topK = topK }
             if let rep = request.repetitionPenalty { params.repetitionPenalty = rep }
 
+            // NOTE: this MUST run on the GPU on iOS — MLX has NO CPU backend there
+            // ("[Compiled::eval_cpu] CPU compilation not supported on the platform"),
+            // so a CPU device pin fatal-errors on the first synth. And iOS forbids GPU
+            // work while backgrounded. Net: on-device synth is FOREGROUND-ONLY on iOS;
+            // the caller must not invoke it while the app is backgrounded (2026-07-13).
             let audio: MLXArray
             if backend == .qwenCustom, let qwen = model as? Qwen3TTSModel {
                 // CustomVoice: stable preset speaker + optional instruct compose.
@@ -115,7 +129,15 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                     language: request.language,
                     generationParameters: params)
             }
-            return audio.asArray(Float.self)
+            let samples = audio.asArray(Float.self)
+            // Release the per-line GPU scratch NOW. MLX keeps freed Metal buffers in
+            // a reuse cache that was otherwise only trimmed on model eviction — across
+            // a live set that cache climbed unbounded and iOS jetsam-killed the app at
+            // ~3.4 GB, 36 s in (2026-07-13, iPhone). Trimming after each synthesized
+            // line holds steady-state memory flat (the cap in configureMemory() bounds
+            // any single line's peak).
+            Memory.clearCache()
+            return samples
         } catch let error as EngineError {
             throw error
         } catch {

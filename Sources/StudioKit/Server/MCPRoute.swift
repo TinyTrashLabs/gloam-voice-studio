@@ -79,6 +79,38 @@ enum MCPRoute {
                     "required": ["text"],
                 ],
             ],
+            [
+                "name": "transcribe",
+                "description": "Transcribe speech from a base64-encoded WAV to "
+                    + "text using the studio's native on-device recognizer.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "audio": ["type": "string",
+                                  "description": "Base64-encoded WAV audio to transcribe"],
+                        "language": ["type": "string",
+                                     "description": "BCP-47 language hint (optional)"],
+                    ],
+                    "required": ["audio"],
+                ],
+            ],
+            [
+                "name": "listen",
+                "description": "Open the microphone, listen for one spoken "
+                    + "utterance, and return the transcript (native on-device "
+                    + "recognition). Blocks until you stop speaking.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "maxSeconds": ["type": "number",
+                                       "description": "Hard cap on recording length (default 30)"],
+                        "silenceSeconds": ["type": "number",
+                                           "description": "Trailing silence that ends the turn (default 1.2)"],
+                        "language": ["type": "string",
+                                     "description": "BCP-47 language hint (optional)"],
+                    ],
+                ],
+            ],
         ]
     }
 
@@ -144,6 +176,32 @@ enum MCPRoute {
                 return toolResult(id: id, content: content)
             } catch {
                 return toolError(id: id, "synthesis failed: \(error)")
+            }
+        case "transcribe":
+            guard let b64 = arguments["audio"] as? String,
+                  let audio = Data(base64Encoded: b64), !audio.isEmpty else {
+                return toolError(id: id, "transcribe requires base64 'audio' (wav)")
+            }
+            let language = arguments["language"] as? String
+            do {
+                let text = try await deps.gate.run {
+                    try await deps.transcribe(audio, language)
+                }
+                return toolResult(id: id, content: [["type": "text", "text": text]])
+            } catch {
+                return toolError(id: id, "transcription failed: \(error)")
+            }
+        case "listen":
+            let maxSeconds = (arguments["maxSeconds"] as? NSNumber)?.doubleValue ?? 30
+            let silenceSeconds = (arguments["silenceSeconds"] as? NSNumber)?.doubleValue ?? 1.2
+            let language = arguments["language"] as? String
+            do {
+                let text = try await deps.gate.run {
+                    try await deps.listen(maxSeconds, silenceSeconds, language)
+                }
+                return toolResult(id: id, content: [["type": "text", "text": text]])
+            } catch {
+                return toolError(id: id, "listen failed: \(error)")
             }
         default:
             return toolError(id: id, "unknown tool")

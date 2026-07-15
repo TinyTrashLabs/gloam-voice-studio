@@ -50,7 +50,7 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
                 #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]
             XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
-                           ["list_voices", "speak"])
+                           ["list_voices", "listen", "speak", "transcribe"])
         }
     }
 

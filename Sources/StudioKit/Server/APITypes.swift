@@ -56,6 +56,14 @@ struct VoiceImportRequest: Codable {
     let data: String              // base64 .gvoice zip
 }
 
+struct ListenRequest: Codable {
+    let maxSeconds: Double?
+    let silenceSeconds: Double?
+    let language: String?
+}
+
+struct TranscriptResponse: Codable, ResponseEncodable { let text: String }
+
 struct SpeechRequest: Codable {
     let input: String
     let model: String?
@@ -82,6 +90,18 @@ struct SpeechRequest: Codable {
     let response_format: String?
 }
 
+/// Thrown by the default STT closures when the server was built without a
+/// speech-to-text engine wired in (e.g. a headless run before Speech
+/// Recognition is authorized). Public so any consumer's default init compiles.
+public struct STTUnavailable: Error, Sendable {
+    public let detail: String
+    public init(detail: String =
+        "speech-to-text is not configured — launch the studio GUI once to grant "
+        + "Speech Recognition, or install a Whisper model") {
+        self.detail = detail
+    }
+}
+
 /// Everything the HTTP layer needs. The engine and stores are owned by the
 /// app; the server only borrows them.
 public struct APIDependencies: Sendable {
@@ -102,13 +122,25 @@ public struct APIDependencies: Sendable {
     /// Live-read like `defaultVoice` so the Settings picker applies to the
     /// next request with no server restart.
     public let defaultModel: @Sendable () -> String
+    /// Transcribe a WAV to text (native SpeechKit engine, supplied by the app).
+    /// Given: WAV bytes + optional BCP-47 language hint. Defaults to unavailable.
+    public let transcribe: @Sendable (_ wav: Data, _ languageHint: String?) async throws -> String
+    /// Open the mic, listen for one utterance, and return the transcript.
+    /// Given: max seconds, trailing-silence seconds, optional language hint.
+    /// Defaults to unavailable.
+    public let listen: @Sendable (_ maxSeconds: Double, _ silenceSeconds: Double,
+                                  _ language: String?) async throws -> String
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
                 log: APILog = APILog(),
                 gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
                 defaultVoice: @escaping @Sendable () -> String = { "" },
-                defaultModel: @escaping @Sendable () -> String = { "" }) {
+                defaultModel: @escaping @Sendable () -> String = { "" },
+                transcribe: @escaping @Sendable (Data, String?) async throws -> String
+                    = { _, _ in throw STTUnavailable() },
+                listen: @escaping @Sendable (Double, Double, String?) async throws -> String
+                    = { _, _, _ in throw STTUnavailable() }) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
@@ -117,6 +149,8 @@ public struct APIDependencies: Sendable {
         self.gate = gate
         self.defaultVoice = defaultVoice
         self.defaultModel = defaultModel
+        self.transcribe = transcribe
+        self.listen = listen
     }
 }
 

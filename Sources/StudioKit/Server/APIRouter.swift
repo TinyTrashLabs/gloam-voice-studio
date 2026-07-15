@@ -288,6 +288,21 @@ public enum APIRouter {
             }
         }
 
+        router.post("listen") { request, context in
+            let req = try await request.decode(as: ListenRequest.self, context: context)
+            do {
+                let text = try await deps.gate.run {
+                    try await deps.listen(req.maxSeconds ?? 30, req.silenceSeconds ?? 1.2, req.language)
+                }
+                return TranscriptResponse(text: text)
+            } catch is RequestGate.Busy {
+                throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+            } catch {
+                logError("listen failed: \(error)")
+                throw APIError(status: .internalServerError, detail: "listen failed: \(error)")
+            }
+        }
+
         return router
     }
 

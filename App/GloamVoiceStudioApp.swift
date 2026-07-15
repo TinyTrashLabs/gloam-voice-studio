@@ -1,6 +1,5 @@
 import SwiftUI
 
-@main
 struct GloamVoiceStudioApp: App {
     @State private var model = AppModel()
 
