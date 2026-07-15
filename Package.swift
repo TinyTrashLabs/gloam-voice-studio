@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "gloam-voice-studio",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
         .library(name: "StudioKit", targets: ["StudioKit"]),
@@ -31,6 +31,13 @@ let package = Package(
         // the resolved graph transitively (via mlx-audio-swift / WhisperKit).
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMinor(from: "0.9.0")),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMinor(from: "1.3.3")),
+        // Pin swift-jinja below 2.4.0. 2.4.0 re-keyed `Jinja.Value.object` from
+        // `[String: Value]` to `[ObjectKey: Value]`, which swift-transformers 1.3.3's
+        // Config.swift does not compile against (String vs ObjectKey). Our own lock
+        // and the macOS app hold 2.3.6, but a fresh consumer resolve (the iOS app)
+        // grabbed 2.4.0 and broke the build. Constrain here so EVERY consumer's
+        // resolution lands on the compatible 2.3.6.
+        .package(url: "https://github.com/huggingface/swift-jinja.git", "2.0.0" ..< "2.4.0"),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", .upToNextMajor(from: "2.5.0")),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMajor(from: "1.0.0")),
@@ -50,6 +57,12 @@ let package = Package(
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                // Linked (though used transitively via Tokenizers) so the swift-jinja
+                // < 2.4.0 constraint above is RETAINED when EngineKit is consumed as a
+                // dependency. SPM prunes a non-root package's unused dependency
+                // declarations, which silently dropped the pin for the iOS app and let
+                // jinja float to the incompatible 2.4.0.
+                .product(name: "Jinja", package: "swift-jinja"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
             ],
