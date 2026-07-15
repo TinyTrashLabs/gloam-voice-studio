@@ -952,37 +952,55 @@ final class AppModel {
         }
     }
 
+    /// Deps are immutable — rebuilt fresh by every caller so defaultLLM/
+    /// defaultBackend stay current at start time.
+    private func makeDependencies() -> APIDependencies {
+        APIDependencies(
+            engine: engine, voices: voices, defaultBackend: backend,
+            defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
+            log: apiLog,
+            // Live reads (not captured values): the Settings pickers take
+            // effect on the next request without rebuilding the server.
+            defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
+            defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" },
+            // Native SpeechKit STT, wired to the same engine the RECORD
+            // button uses. Closures hop to the main actor on demand.
+            transcribe: { [speech] wav, hint in
+                let transcriber = await speech.makeTranscriber()
+                let fallback = await speech.effectiveLanguageHint
+                return try await transcriber
+                    .transcribe(wavData: wav, languageHint: hint ?? fallback).text
+            },
+            listen: { [speech, listenService] maxSeconds, silenceSeconds, language in
+                try await listenService.listen(speech: speech, maxSeconds: maxSeconds,
+                                               silenceSeconds: silenceSeconds, language: language)
+            })
+    }
+
     private func performServerSync() async {
         if serverEnabled {
-            // Deps are immutable — rebuild the server when settings change so
-            // defaultLLM/defaultBackend stay current.
             await server?.stop()
             server = nil
-            server = LocalAPIServer(deps: APIDependencies(
-                engine: engine, voices: voices, defaultBackend: backend,
-                defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
-                log: apiLog,
-                // Live reads (not captured values): the Settings pickers take
-                // effect on the next request without rebuilding the server.
-                defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
-                defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" },
-                // Native SpeechKit STT, wired to the same engine the RECORD
-                // button uses. Closures hop to the main actor on demand.
-                transcribe: { [speech] wav, hint in
-                    let transcriber = await speech.makeTranscriber()
-                    let fallback = await speech.effectiveLanguageHint
-                    return try await transcriber
-                        .transcribe(wavData: wav, languageHint: hint ?? fallback).text
-                },
-                listen: { [speech, listenService] maxSeconds, silenceSeconds, language in
-                    try await listenService.listen(speech: speech, maxSeconds: maxSeconds,
-                                                   silenceSeconds: silenceSeconds, language: language)
-                }))
+            server = LocalAPIServer(deps: makeDependencies())
             try? await server?.start(port: serverPort)
         } else {
             await server?.stop()
             server = nil
         }
+    }
+
+    /// `--serve` headless entry point: starts the API server directly on the
+    /// given port, bypassing the persisted `serverEnabled`/`serverPort`
+    /// settings entirely so a one-off headless `--port` never leaks into the
+    /// next normal GUI launch.
+    func startHeadlessServer(port: Int) async {
+        server = LocalAPIServer(deps: makeDependencies())
+        try? await server?.start(port: port)
+    }
+
+    /// Stops the server for a clean process exit (SIGINT/SIGTERM in `--serve`).
+    func shutdownForExit() async {
+        await server?.stop()
     }
 
     // MARK: memory pressure
