@@ -59,7 +59,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(
             get: { model.licensePromptBackend != nil },
             set: { if !$0 { model.cancelLicensePrompt() } })) {
-            FishLicenseSheet()
+            LicenseSheet()
         }
     }
 

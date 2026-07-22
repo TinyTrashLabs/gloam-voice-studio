@@ -344,7 +344,7 @@ final class ChatController {
     /// cleared (see AppModel.PendingSynthesisAction).
     func regenerateAudio(for message: ChatMessage, backend: BackendID) async {
         guard let convo = current else { return }
-        if backend.spec.needsLicenseAck && !app.didAckFishLicense {
+        if backend.spec.needsLicenseAck && !app.didAck(backend) {
             app.pendingSynthesisAction = .chatRegenerate(
                 conversationID: convo.id, messageID: message.id, backend: backend)
             app.licensePromptBackend = backend

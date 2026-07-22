@@ -83,7 +83,7 @@ struct BackendsSettings: View {
         .sheet(isPresented: Binding(
             get: { model.licensePromptBackend != nil },
             set: { if !$0 { model.cancelLicensePrompt() } })) {
-            FishLicenseSheet()
+            LicenseSheet()
         }
         .onAppear { model.downloads.refresh() }
     }
@@ -119,7 +119,7 @@ struct BackendsSettings: View {
             } else {
                 switch state {
                 case .notDownloaded:
-                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                    if backend.spec.needsLicenseAck && !model.didAck(backend) {
                         Button("Review License…") { model.licensePromptBackend = backend }
                             .help("Review this model's license before downloading")
                     } else {
@@ -134,7 +134,7 @@ struct BackendsSettings: View {
                     Button("Cancel") { model.downloads.cancelDownload(backend) }
                         .help("Cancel the download")
                 case .ready:
-                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                    if backend.spec.needsLicenseAck && !model.didAck(backend) {
                         Text("Needs license").foregroundStyle(.orange)
                         Button("Review License…") { model.licensePromptBackend = backend }
                             .help("Acknowledge this model's license to enable generation")
@@ -164,19 +164,26 @@ struct BackendsSettings: View {
     }
 }
 
-struct FishLicenseSheet: View {
+/// License-acknowledgement sheet for whichever backend is pending in
+/// `licensePromptBackend` — Fish shows its research/personal-use notice,
+/// SuperTonic its Open RAIL-M use restrictions (via `licenseNotice(for:)`).
+struct LicenseSheet: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let backend = model.licensePromptBackend ?? model.backend
         VStack(alignment: .leading, spacing: 14) {
-            Text("Fish Audio Research License").font(.title3.bold())
-            Text(fishLicenseNotice)
+            Text(backend == .supertonic
+                 ? "SuperTonic — BigScience Open RAIL-M License"
+                 : "Fish Audio Research License")
+                .font(.title3.bold())
+            Text(licenseNotice(for: backend))
             Text("The weights are downloaded from HuggingFace under your own acceptance; the app never redistributes them.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { model.cancelLicensePrompt() }
-                Button("I Confirm — Personal Use") { model.confirmLicensePrompt() }
+                Button("I Agree to the Use Restrictions") { model.confirmLicensePrompt() }
                     .keyboardShortcut(.defaultAction)
             }
         }
