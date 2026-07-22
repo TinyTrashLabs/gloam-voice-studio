@@ -13,7 +13,7 @@ the backend is gated behind an explicit in-app acknowledgement.
 
 ## Converted weights are MODIFIED FILES
 
-The weights the app downloads (`TinyTrashLabs/supertonic-3-mlx`) are
+The weights the app downloads (`tinytrashlabs/supertonic-3-mlx`) are
 format-converted from the original ONNX exports (fp32, opset 19, the
 `onnx/` dir of `Supertone/supertonic-3`): safetensors container, renamed
 tensor keys, Conv axis order `[O,I,K] → [O,K,I]`, and the CFG scale (4.0) +

@@ -174,7 +174,7 @@ final class BackendTests: XCTestCase {
 
     func testSupertonicSpec() {
         let spec = BackendID.supertonic.spec
-        XCTAssertEqual(spec.modelRepo, "TinyTrashLabs/supertonic-3-mlx")
+        XCTAssertEqual(spec.modelRepo, "tinytrashlabs/supertonic-3-mlx")
         XCTAssertEqual(spec.defaultSampleRate, 44100)
         XCTAssertFalse(spec.honorsTags)
         // Open RAIL-M use-based restrictions — explicit ack like Fish.

@@ -296,7 +296,7 @@ extension BackendID {
         case .supertonic:
             // Weights are BigScience Open RAIL-M (use-based restrictions) — require
             // an explicit ack like Fish. See docs/supertonic-licensing.md.
-            BackendSpec(modelRepo: "TinyTrashLabs/supertonic-3-mlx",
+            BackendSpec(modelRepo: "tinytrashlabs/supertonic-3-mlx",
                         defaultSampleRate: 44100, honorsTags: false,
                         needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
