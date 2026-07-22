@@ -221,10 +221,19 @@ guard let backendRaw = args["backend"], let backend = BackendID(rawValue: backen
       let text = args["text"], let out = args["out"]
 else { usage() }
 
-let engine = GloamEngine(provider: MLXModelProvider())
+// `--model-dir <path>`: load the backend's weights from a local directory
+// (config.json + safetensors) instead of the HF repo — lets a converted-weights
+// checkout (e.g. SuperTonic) be smoke-tested before the repo is published.
+let modelDir = args["model-dir"]
+let resolver: (@Sendable (BackendID) -> String?)? =
+    modelDir.map { dir in { @Sendable _ in dir } }
+let engine = GloamEngine(provider: MLXModelProvider(modelPathResolver: resolver))
 
 do {
     if ackFish { await engine.acknowledgeLicense(for: .fishS2Pro) }
+    // A license-gated backend (fish, supertonic) can't synthesize un-acked; the
+    // CLI is a dev tool, so acking the selected backend here is the ack.
+    if backend.spec.needsLicenseAck { await engine.acknowledgeLicense(for: backend) }
     let request = SynthesisRequest(
         text: text,
         refAudioPath: args["ref"],
