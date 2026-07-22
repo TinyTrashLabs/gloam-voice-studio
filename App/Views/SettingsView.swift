@@ -55,7 +55,7 @@ struct BackendsSettings: View {
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro]
+         .kokoro, .supertonic]
 
     var body: some View {
         @Bindable var model = model
@@ -121,7 +121,7 @@ struct BackendsSettings: View {
                 case .notDownloaded:
                     if backend.spec.needsLicenseAck && !model.didAckFishLicense {
                         Button("Review License…") { model.licensePromptBackend = backend }
-                            .help("Review the research/personal-use license before downloading")
+                            .help("Review this model's license before downloading")
                     } else {
                         Button("Download") { model.downloads.download(backend) }
                             .help("Download this model to your Mac")
@@ -137,7 +137,7 @@ struct BackendsSettings: View {
                     if backend.spec.needsLicenseAck && !model.didAckFishLicense {
                         Text("Needs license").foregroundStyle(.orange)
                         Button("Review License…") { model.licensePromptBackend = backend }
-                            .help("Acknowledge the research/personal-use license to enable generation")
+                            .help("Acknowledge this model's license to enable generation")
                     } else {
                         Text("Ready").foregroundStyle(.green)
                     }
@@ -154,8 +154,13 @@ struct BackendsSettings: View {
 
     private func sizeLabel(_ backend: BackendID) -> String {
         let bytes = model.downloads.approxBytes(for: backend)
+        let license: String = if backend.spec.needsLicenseAck {
+            backend == .supertonic
+                ? " · Open RAIL-M use restrictions"
+                : " · research/personal license"
+        } else { "" }
         return "≈ " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-            + (backend.spec.needsLicenseAck ? " · research/personal license" : "")
+            + license
     }
 }
 

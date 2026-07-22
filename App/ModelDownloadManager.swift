@@ -31,6 +31,9 @@ final class ModelDownloadManager {
         // skips .pt, so ~361MB is the real download (confirmed via a live
         // `spike` CLI run: 361,127,491 bytes).
         .kokoro: 365_000_000,
+        // tinytrashlabs/supertonic-3-mlx is ~382MB on HF; measured download
+        // 400,154,382 bytes.
+        .supertonic: 400_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
