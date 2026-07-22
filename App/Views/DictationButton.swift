@@ -27,6 +27,7 @@ struct DictationButton: View {
                     .foregroundStyle(controller.isActive ? .red : .secondary)
                     .symbolEffect(.pulse, isActive: controller.isActive)
             }
+            .accessibilityLabel(controller.isActive ? "Stop Dictation" : "Dictate")
             .help(controller.isActive ? "Stop dictation" : "Dictate")
             .accessibilityIdentifier("dictate")
             if controller.isProcessing {

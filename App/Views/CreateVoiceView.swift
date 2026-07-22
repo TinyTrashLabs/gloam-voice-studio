@@ -335,12 +335,19 @@ struct CreateVoiceView: View {
                 }
                 Button("Replace…") { audioImporter = true }
                 Text(editReplaceDesc).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("or drop an audio file anywhere on this card").font(.caption).foregroundStyle(.secondary)
             }
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption2).foregroundStyle(.secondary)
-            ExpandableTextEditor(text: $editRefText, accessibilityID: "edit-ref-text")
+            ExpandableTextEditor(text: $editRefText, accessibilityID: "edit-ref-text",
+                                 onFileDrop: { $0.forEach(applyReplacementAudio) })
                 .font(.callout).scrollContentBackground(.hidden)
                 .padding(6).background(boxBG).overlay(boxStroke)
+        }
+        .contentShape(Rectangle())
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            loadDroppedReplacement(providers); return true
         }
         .fileImporter(isPresented: $audioImporter,
                       allowedContentTypes: [.audio, .wav, .mpeg4Audio],
@@ -348,12 +355,25 @@ struct CreateVoiceView: View {
             guard case .success(let urls) = result, let url = urls.first else { return }
             _ = url.startAccessingSecurityScopedResource()
             defer { url.stopAccessingSecurityScopedResource() }
-            do {
-                try RefAudioValidator.validate(url: url)
-                editReplaceData = try Data(contentsOf: url)
-                editReplaceDesc = "New reference: \(url.lastPathComponent) (saved on Save)"
-                editError = nil
-            } catch { editError = model.describeAny(error) }
+            applyReplacementAudio(url: url)
+        }
+    }
+
+    private func applyReplacementAudio(url: URL) {
+        do {
+            try RefAudioValidator.validate(url: url)
+            editReplaceData = try Data(contentsOf: url)
+            editReplaceDesc = "New reference: \(url.lastPathComponent) (saved on Save)"
+            editError = nil
+        } catch { editError = model.describeAny(error) }
+    }
+
+    private func loadDroppedReplacement(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { applyReplacementAudio(url: url) }
+            }
         }
     }
 
@@ -491,6 +511,7 @@ struct CreateVoiceView: View {
                 deletingVariantSlug = variantSlug
             } label: { Image(systemName: "trash") }
                 .font(.caption).buttonStyle(.bordered)
+                .accessibilityLabel("Delete \(suffix.capitalized) Variant")
                 .accessibilityIdentifier("variant-delete-\(suffix)")
         }
         .padding(.vertical, 6)
@@ -550,6 +571,7 @@ struct CreateVoiceView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Brand.fgDim)
+        .accessibilityLabel("Open Documentation")
         .help("Open documentation")
         .accessibilityIdentifier("create-voice-docs-help")
     }
@@ -598,6 +620,7 @@ private struct FoundryCandidateRow: View {
                         Image(systemName: "info.circle")
                     }
                     .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
+                    .accessibilityLabel(expanded ? "Hide Prompt Details" : "Show Prompt Details")
                     .help("Show the prompt that made this candidate")
                     .accessibilityIdentifier("foundry-info-toggle")
                     Button("Save as Voice…", action: onSave)

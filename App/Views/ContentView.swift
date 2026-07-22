@@ -134,6 +134,7 @@ struct ContentView: View {
                 Image(systemName: "clock.arrow.circlepath")
                     .foregroundStyle(historyVisible ? Brand.accent : Brand.fgDim)
             }
+            .accessibilityLabel(historyVisible ? "Hide History" : "Show History")
             .accessibilityIdentifier("open-history")
             .help("Toggle the history panel (⌘Y)")
             .keyboardShortcut("y", modifiers: .command)
@@ -141,6 +142,7 @@ struct ContentView: View {
             SettingsLink {
                 Image(systemName: "gearshape")
             }
+            .accessibilityLabel("Settings")
             .accessibilityIdentifier("open-settings")
         }
     }

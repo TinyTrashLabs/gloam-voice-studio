@@ -689,6 +689,8 @@ struct StudioView: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(pickerExpandedBases.contains(voice.slug)
+                                     ? "Collapse variants" : "Expand variants")
             } else {
                 Color.clear.frame(width: 12)
             }
