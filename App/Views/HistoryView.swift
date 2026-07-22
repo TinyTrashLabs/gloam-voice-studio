@@ -70,12 +70,14 @@ struct HistoryView: View {
                             } label: {
                                 Image(systemName: player.playingID == entry.id ? "stop.fill" : "play.fill")
                             }
+                            .accessibilityLabel(player.playingID == entry.id ? "Stop" : "Play")
                             .accessibilityIdentifier("play-entry")
                             .buttonStyle(.borderless)
                             .controlSize(.small)
                             Button(role: .destructive) {
                                 pendingDelete = entry
                             } label: { Image(systemName: "trash") }
+                            .accessibilityLabel("Delete")
                             .accessibilityIdentifier("delete-entry")
                             .buttonStyle(.borderless)
                             .controlSize(.small)

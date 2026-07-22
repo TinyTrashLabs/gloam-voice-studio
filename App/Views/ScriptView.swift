@@ -59,6 +59,7 @@ private struct LineRow: View {
                 Button { expanded.toggle() } label: {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                 }
+                .accessibilityLabel(expanded ? "Hide takes & direction" : "Show takes & direction")
                 .help("Takes & direction")
                 .accessibilityIdentifier("expand-line")
                 statusDot
@@ -81,12 +82,14 @@ private struct LineRow: View {
                     Button { Task { await script.generate(lineID: line.id) } } label: {
                         Image(systemName: "waveform.badge.plus")
                     }
+                    .accessibilityLabel("Generate This Line")
                     .help("Generate this line")
                     .accessibilityIdentifier("generate-line")
                 }
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }
+                .accessibilityLabel("Delete Line")
                 .help("Delete this line")
             }
             if case .failed(let message) = script.status[line.id] ?? .idle {
@@ -153,6 +156,8 @@ private struct LineRow: View {
                     Image(systemName: line.starredTakeID == take.id
                           ? "star.fill" : "star")
                 }
+                .accessibilityLabel(line.starredTakeID == take.id
+                                     ? "Starred — used in exports" : "Use this take in exports")
                 .help("Use this take in exports")
                 .accessibilityIdentifier("star-take")
                 if let wav = script.takeWavData(take.id) {
@@ -168,6 +173,7 @@ private struct LineRow: View {
                     script.deleteTake(line.id, takeID: take.id)
                 } label: { Image(systemName: "trash") }
                 .controlSize(.small)
+                .accessibilityLabel("Delete Take")
                 .help("Delete this take")
                 Spacer()
             }

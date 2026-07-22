@@ -85,6 +85,7 @@ struct ChatView: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
+                .accessibilityLabel("New Chat")
                 .accessibilityIdentifier("chat-new-conversation")
                 .help("New chat")
             }
@@ -223,6 +224,7 @@ struct ChatView: View {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(Brand.fgFaint)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Remove Attachment")
                     .help("Remove attachment")
                     Spacer()
                 }
@@ -280,6 +282,8 @@ struct ChatView: View {
                         .buttonStyle(.plain)
                         .disabled(isPending)
                         .foregroundStyle(isSpeakingThis ? Brand.accent : Brand.fgFaint)
+                        .accessibilityLabel(isPending ? "Synthesizing…"
+                              : (isSpeakingThis ? "Speaking…" : "Speak this reply"))
                         .help(isPending ? "Synthesizing…"
                               : (isSpeakingThis ? "Speaking…" : "Speak this reply"))
                         .accessibilityIdentifier("chat-speak")
@@ -290,6 +294,7 @@ struct ChatView: View {
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .foregroundStyle(Brand.fgFaint)
+                        .accessibilityLabel("Takes, Regenerate, Export")
                         .help("Takes, regenerate, export")
                         .accessibilityIdentifier("chat-audio-menu")
                     }
@@ -416,6 +421,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
+                .accessibilityLabel("Attach Image")
                 .accessibilityIdentifier("chat-attach-image")
                 .help("Attach an image for the model to look at")
                 .fileImporter(isPresented: $imageImporterPresented,
@@ -449,6 +455,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
+                .accessibilityLabel("Stop")
                 .accessibilityIdentifier("chat-stop")
                 .help("Stop generating / speaking")
             } else {
@@ -460,6 +467,7 @@ struct ChatView: View {
                     .isEmpty ? Brand.fgFaint : Brand.accent)
                 .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .padding(.bottom, 9)
+                .accessibilityLabel("Send")
                 .accessibilityIdentifier("chat-send")
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Send (⏎)")

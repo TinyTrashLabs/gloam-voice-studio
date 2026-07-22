@@ -31,6 +31,7 @@ struct VoiceEditorForm: View {
     @State private var transcriptNote: String?
     @State private var avatarVersion = 0
     @State private var avatarImporterPresented = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -65,7 +66,8 @@ struct VoiceEditorForm: View {
                 .accessibilityIdentifier("voice-name")
             Text("Reference transcript (what the clip says — improves cloning)")
                 .font(.caption).foregroundStyle(.secondary)
-            ExpandableTextEditor(text: $refText, accessibilityID: "voice-ref-text")
+            ExpandableTextEditor(text: $refText, accessibilityID: "voice-ref-text",
+                                 onFileDrop: loadDroppedURLs)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
             if transcribing {
                 HStack(spacing: 6) {
@@ -96,6 +98,7 @@ struct VoiceEditorForm: View {
                                         .foregroundStyle(Brand.fgFaint)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(clip.label)")
                                 .help("Remove this clip")
                             }
                         }
@@ -115,15 +118,16 @@ struct VoiceEditorForm: View {
                             }
                             .accessibilityIdentifier("use-sample-ref")
                         }
-                        Text("or drop audio files").foregroundStyle(.secondary)
+                        Text("or drop an audio file anywhere on this card").foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(8)
             }
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                loadDrop(providers); return true
-            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isDropTargeted ? Brand.accent : .clear, lineWidth: 2)
+            )
 
             if let error { Text(error).foregroundStyle(.red).font(.callout) }
 
@@ -137,6 +141,13 @@ struct VoiceEditorForm: View {
                     .disabled(name.isEmpty || (editingSlug == nil && refClips.isEmpty))
                     .accessibilityIdentifier("voice-save")
             }
+        }
+        // Whole-card drop target (not just the small box below) so a drop
+        // anywhere on this form is recognized — the narrow zone was what
+        // confused the App Review tester.
+        .contentShape(Rectangle())
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            loadDrop(providers); return true
         }
         .sheet(isPresented: $showRecorder) {
             RecorderView { data, seconds in
@@ -203,15 +214,19 @@ struct VoiceEditorForm: View {
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                DispatchQueue.main.async {
-                    do {
-                        try RefAudioValidator.validate(url: url)
-                        let data = try Data(contentsOf: url)
-                        error = nil
-                        addClip(data, label: url.lastPathComponent)
-                    } catch { self.error = "\(error)" }
-                }
+                DispatchQueue.main.async { loadDroppedURLs([url]) }
             }
+        }
+    }
+
+    private func loadDroppedURLs(_ urls: [URL]) {
+        for url in urls {
+            do {
+                try RefAudioValidator.validate(url: url)
+                let data = try Data(contentsOf: url)
+                error = nil
+                addClip(data, label: url.lastPathComponent)
+            } catch { self.error = "\(error)" }
         }
     }
 

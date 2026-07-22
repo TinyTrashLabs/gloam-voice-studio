@@ -72,16 +72,19 @@ struct VoiceSidebarView: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("new-voice")
+                .accessibilityLabel("New Voice")
                 .help("Create a new voice from a recording or audio file")
                 Button { importerPresented = true } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Import Voice Pack")
                 .help("Import .gvoice voice packs")
                 Button { catalogPresented = true } label: {
                     Image(systemName: "person.crop.circle.badge.plus")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Browse Voice Catalog")
                 .help("Browse free downloadable voices")
                 .accessibilityIdentifier("browse-catalog")
             }
@@ -171,6 +174,7 @@ struct VoiceSidebarView: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(expandedBases.contains(voice.slug) ? "Collapse variants" : "Expand variants")
             } else {
                 Color.clear.frame(width: 12)
             }
@@ -209,6 +213,7 @@ struct VoiceSidebarView: View {
                     .contentShape(Circle())
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(isPlaying ? "Stop preview" : "Play sample")
                 .help(isPlaying ? "Stop preview" : "Play sample")
                 .accessibilityIdentifier("play-voice")
             }
@@ -217,6 +222,7 @@ struct VoiceSidebarView: View {
                     Image(systemName: "pencil")
                 }
                 .buttonStyle(.borderless).foregroundStyle(Brand.fgDim)
+                .accessibilityLabel("Edit Voice")
                 .help("Edit this voice (name, reference, emotion variants)")
                 .accessibilityIdentifier("edit-voice")
             }
@@ -224,6 +230,7 @@ struct VoiceSidebarView: View {
                 Image(systemName: "ellipsis").foregroundStyle(Brand.fgDim)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("More Actions")
             .help("More actions").accessibilityIdentifier("voice-menu")
         }
         .contentShape(Rectangle())
