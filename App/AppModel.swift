@@ -95,7 +95,7 @@ final class AppModel {
             scheduleServerSync()
             // Surface the license prompt the moment an unacknowledged backend is
             // picked — not just when Generate/Load later hits it as an error.
-            if backend.spec.needsLicenseAck && !didAckFishLicense {
+            if backend.spec.needsLicenseAck && !didAck(backend) {
                 licensePromptBackend = backend
             }
             // Two backends now have presetSpeakers (Qwen CustomVoice, Kokoro) with
@@ -260,14 +260,21 @@ final class AppModel {
     var didAcceptCloneConsent: Bool {
         didSet { UserDefaults.standard.set(didAcceptCloneConsent, forKey: "didAcceptCloneConsent") }
     }
-    var didAckFishLicense: Bool {
-        didSet {
-            UserDefaults.standard.set(didAckFishLicense, forKey: "didAckFishLicense")
-            if didAckFishLicense {
-                let engine = engine
-                Task { await engine.acknowledgeLicense(for: .fishS2Pro) }
-            }
-        }
+    /// Backends whose license the user has acknowledged, persisted per-backend:
+    /// Fish (research/personal license) and SuperTonic (Open RAIL-M) carry
+    /// DISTINCT licenses, so one ack must never unlock the other.
+    private(set) var ackedLicenses: Set<BackendID> = []
+
+    func didAck(_ backend: BackendID) -> Bool { ackedLicenses.contains(backend) }
+
+    /// Record the user's ack for one backend: persist it and tell the engine
+    /// (the engine refuses to synthesize an un-acked licensed backend).
+    func ackLicense(_ backend: BackendID) {
+        ackedLicenses.insert(backend)
+        UserDefaults.standard.set(ackedLicenses.map(\.rawValue).sorted(),
+                                  forKey: "ackedLicenses")
+        let engine = engine
+        Task { await engine.acknowledgeLicense(for: backend) }
     }
 
     // Engine residency (mirrored from the engine actor for the toolbar UI)
@@ -432,7 +439,12 @@ final class AppModel {
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         serverEnabled = defaults.bool(forKey: "serverEnabled")
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
-        didAckFishLicense = defaults.bool(forKey: "didAckFishLicense")
+        // Per-backend license acks; migrate the old Fish-only bool so existing
+        // users aren't re-prompted for a license they already acknowledged.
+        var acked = Set((defaults.stringArray(forKey: "ackedLicenses") ?? [])
+            .compactMap(BackendID.init(rawValue:)))
+        if defaults.bool(forKey: "didAckFishLicense") { acked.insert(.fishS2Pro) }
+        ackedLicenses = acked
         chatLLM = defaults.string(forKey: "chatLLM")
             .flatMap(LLMBackendID.init(rawValue:)) ?? .qwen3_1_7b
         chatAutoSpeak = defaults.object(forKey: "chatAutoSpeak") as? Bool ?? true
@@ -483,9 +495,10 @@ final class AppModel {
             chatSpeechEngine = GloamEngine(
                 provider: MLXModelProvider(modelPathResolver: ttsResolver))
         }
-        if didAckFishLicense {
+        if !ackedLicenses.isEmpty {
             let engine = engine
-            Task { await engine.acknowledgeLicense(for: .fishS2Pro) }
+            let acks = ackedLicenses
+            Task { for b in acks { await engine.acknowledgeLicense(for: b) } }
         }
         installMemoryPressureHandler()
         // didSet observers don't fire during init — if the server was left on,
@@ -512,7 +525,7 @@ final class AppModel {
         // License needed but never acknowledged — regardless of download state,
         // since a backend can already be downloaded (e.g. via the download-prompt
         // path below, before this gate existed) yet still unacknowledged.
-        if backend.spec.needsLicenseAck && !didAckFishLicense {
+        if backend.spec.needsLicenseAck && !didAck(backend) {
             pendingSynthesisAction = .studioGenerate
             licensePromptBackend = backend
             return
@@ -558,7 +571,7 @@ final class AppModel {
     func confirmLicensePrompt() {
         guard let pending = licensePromptBackend else { return }
         licensePromptBackend = nil
-        didAckFishLicense = true   // didSet also acks it with the engine
+        ackLicense(pending)   // persists and acks it with the engine
         if downloads.state(for: pending) == .ready {
             resumePendingSynthesisAction(matching: pending)
         } else {
@@ -671,7 +684,7 @@ final class AppModel {
 
     func loadModel(_ backend: BackendID) async {
         guard downloads.state(for: backend) == .ready, !modelOpInFlight else { return }
-        if backend.spec.needsLicenseAck && !didAckFishLicense {
+        if backend.spec.needsLicenseAck && !didAck(backend) {
             licensePromptBackend = backend
             return
         }
@@ -728,9 +741,9 @@ final class AppModel {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings first.")
         }
-        if backend.spec.needsLicenseAck && !didAckFishLicense {
+        if backend.spec.needsLicenseAck && !didAck(backend) {
             throw AppGenerationError(
-                message: "Acknowledge the Fish license in Settings first.")
+                message: "Acknowledge the \(backend.rawValue) license in Settings first.")
         }
         var refPath: String?
         var refText: String?
@@ -871,7 +884,7 @@ final class AppModel {
         guard let (meta, refURL) = try? voices.get(baseSlug) else {
             foundryError = "Base voice '\(baseSlug)' is missing."; return
         }
-        if baker.spec.needsLicenseAck && !didAckFishLicense {
+        if baker.spec.needsLicenseAck && !didAck(baker) {
             foundryError = "Baking with \(baker.rawValue) needs its license — acknowledge it in Settings first."
             return
         }

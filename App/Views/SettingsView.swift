@@ -55,7 +55,7 @@ struct BackendsSettings: View {
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro]
+         .kokoro, .supertonic]
 
     var body: some View {
         @Bindable var model = model
@@ -83,7 +83,7 @@ struct BackendsSettings: View {
         .sheet(isPresented: Binding(
             get: { model.licensePromptBackend != nil },
             set: { if !$0 { model.cancelLicensePrompt() } })) {
-            FishLicenseSheet()
+            LicenseSheet()
         }
         .onAppear { model.downloads.refresh() }
     }
@@ -119,9 +119,9 @@ struct BackendsSettings: View {
             } else {
                 switch state {
                 case .notDownloaded:
-                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                    if backend.spec.needsLicenseAck && !model.didAck(backend) {
                         Button("Review License…") { model.licensePromptBackend = backend }
-                            .help("Review the research/personal-use license before downloading")
+                            .help("Review this model's license before downloading")
                     } else {
                         Button("Download") { model.downloads.download(backend) }
                             .help("Download this model to your Mac")
@@ -134,10 +134,10 @@ struct BackendsSettings: View {
                     Button("Cancel") { model.downloads.cancelDownload(backend) }
                         .help("Cancel the download")
                 case .ready:
-                    if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                    if backend.spec.needsLicenseAck && !model.didAck(backend) {
                         Text("Needs license").foregroundStyle(.orange)
                         Button("Review License…") { model.licensePromptBackend = backend }
-                            .help("Acknowledge the research/personal-use license to enable generation")
+                            .help("Acknowledge this model's license to enable generation")
                     } else {
                         Text("Ready").foregroundStyle(.green)
                     }
@@ -154,24 +154,36 @@ struct BackendsSettings: View {
 
     private func sizeLabel(_ backend: BackendID) -> String {
         let bytes = model.downloads.approxBytes(for: backend)
+        let license: String = if backend.spec.needsLicenseAck {
+            backend == .supertonic
+                ? " · Open RAIL-M use restrictions"
+                : " · research/personal license"
+        } else { "" }
         return "≈ " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-            + (backend.spec.needsLicenseAck ? " · research/personal license" : "")
+            + license
     }
 }
 
-struct FishLicenseSheet: View {
+/// License-acknowledgement sheet for whichever backend is pending in
+/// `licensePromptBackend` — Fish shows its research/personal-use notice,
+/// SuperTonic its Open RAIL-M use restrictions (via `licenseNotice(for:)`).
+struct LicenseSheet: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let backend = model.licensePromptBackend ?? model.backend
         VStack(alignment: .leading, spacing: 14) {
-            Text("Fish Audio Research License").font(.title3.bold())
-            Text(fishLicenseNotice)
+            Text(backend == .supertonic
+                 ? "SuperTonic — BigScience Open RAIL-M License"
+                 : "Fish Audio Research License")
+                .font(.title3.bold())
+            Text(licenseNotice(for: backend))
             Text("The weights are downloaded from HuggingFace under your own acceptance; the app never redistributes them.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { model.cancelLicensePrompt() }
-                Button("I Confirm — Personal Use") { model.confirmLicensePrompt() }
+                Button("I Agree to the Use Restrictions") { model.confirmLicensePrompt() }
                     .keyboardShortcut(.defaultAction)
             }
         }

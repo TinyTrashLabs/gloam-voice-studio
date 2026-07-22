@@ -59,7 +59,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(
             get: { model.licensePromptBackend != nil },
             set: { if !$0 { model.cancelLicensePrompt() } })) {
-            FishLicenseSheet()
+            LicenseSheet()
         }
     }
 
@@ -154,7 +154,8 @@ struct ContentView: View {
     private var pickerBackends: [BackendID] {
         // qwen3-design is intentionally absent — it's Creation-only, in the Voice
         // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro]
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
+         .supertonic]
     }
 
     private func modelDisplayName(_ b: BackendID) -> String {

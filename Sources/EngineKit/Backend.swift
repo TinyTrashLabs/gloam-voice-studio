@@ -9,6 +9,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
     case kokoro
+    case supertonic
 
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
@@ -103,6 +104,12 @@ extension BackendID {
         // Chinese
         "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
         "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+    ]
+
+    /// SuperTonic 3's 10 preset voice styles, as shipped in the converted-weights
+    /// repo's voice_styles/ directory (Supertone/supertonic-3 presets).
+    public static let supertonicVoices: [String] = [
+        "M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5",
     ]
 }
 
@@ -208,6 +215,9 @@ extension BackendID {
         case .kokoro:
             ControlSurface(voiceClone: .none, presetSpeakers: Self.kokoroVoices,
                            instruct: .none, language: false, knobs: Knobs())
+        case .supertonic:
+            ControlSurface(voiceClone: .none, presetSpeakers: Self.supertonicVoices,
+                           instruct: .none, language: false, knobs: Knobs())
         }
     }
 }
@@ -222,6 +232,7 @@ extension BackendID {
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
         case .kokoro: .none
+        case .supertonic: .none                      // no emotion knob, no clone (Slice 1)
         }
     }
 }
@@ -281,6 +292,13 @@ extension BackendID {
             BackendSpec(modelRepo: "mlx-community/Kokoro-82M-bf16",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
+        case .supertonic:
+            // Weights are BigScience Open RAIL-M (use-based restrictions) — require
+            // an explicit ack like Fish. See docs/supertonic-licensing.md.
+            BackendSpec(modelRepo: "tinytrashlabs/supertonic-3-mlx",
+                        defaultSampleRate: 44100, honorsTags: false,
+                        needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
         }
     }

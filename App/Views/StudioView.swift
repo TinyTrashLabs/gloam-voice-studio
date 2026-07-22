@@ -397,6 +397,9 @@ struct StudioView: View {
         case .kokoro:
             "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
             + "varies a lot by voice; the grade shown is the model author's own rating."
+        case .supertonic:
+            "Pick a preset voice — SuperTonic doesn't clone or take free-text direction. "
+            + "Fast, multilingual, 44.1 kHz."
         }
     }
 
@@ -503,6 +506,10 @@ struct StudioView: View {
                         }
                         Text("A fixed pretrained voicepack — grade is the model author's own "
                              + "quality rating (A best, F+ weakest). No cloning or Direction here.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    } else if model.backend == .supertonic {
+                        Text("A fixed preset voice style (M1–M5 male, F1–F5 female) shipped "
+                             + "with the model. No cloning, emotion, or Direction here.")
                             .font(.caption2).foregroundStyle(Brand.fgFaint)
                     } else {
                         // Description of the currently-selected speaker (names alone are opaque).
