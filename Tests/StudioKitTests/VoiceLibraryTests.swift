@@ -202,6 +202,75 @@ final class VoiceLibraryTests: XCTestCase {
 }
 
 extension VoiceLibraryTests {
+    /// Minimal valid SuperTonic style JSON: unit-norm rows ([1,0,0,...]) at the right dims.
+    private func validStyleData() -> Data {
+        func tensor(_ dims: [Int]) -> [String: Any] {
+            let rowLen = dims.last!, rows = dims.reduce(1, *) / rowLen
+            var data: [Double] = []
+            for _ in 0..<rows { var row = [Double](repeating: 0, count: rowLen); row[0] = 1.0; data += row }
+            return ["dims": dims, "data": data]
+        }
+        return try! JSONSerialization.data(withJSONObject: [
+            "style_ttl": tensor([1, 50, 256]), "style_dp": tensor([1, 8, 16]),
+        ])
+    }
+
+    func testImportCreatesSupertonicOnlyVoice() throws {
+        let slug = try lib.importVoiceFromSupertonic(validStyleData(), name: "Imported DJ")
+        XCTAssertEqual(slug, "imported-dj")
+        XCTAssertTrue(lib.hasSupertonicStyle(slug: slug))
+        let (meta, refURL) = try lib.get(slug)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: refURL.path)) // no ref.wav
+        XCTAssertEqual(meta.supertonicSource, "import")
+        XCTAssertTrue(meta.supertonicBakedAt?.hasSuffix("Z") ?? false)
+    }
+
+    func testImportRejectsInvalidStyle() {
+        XCTAssertThrowsError(try lib.importVoiceFromSupertonic(Data("nope".utf8), name: "Bad"))
+    }
+
+    func testWriteSupertonicStyleSetsMarkers() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
+        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
+        XCTAssertTrue(lib.hasSupertonicStyle(slug: "cruz"))
+        let meta = try lib.get("cruz").meta
+        XCTAssertEqual(meta.supertonicSource, "bake")
+        XCTAssertNotNil(meta.supertonicBakedAt)
+    }
+
+    func testDeleteSupertonicStyleClearsMarkers() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
+        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
+        try lib.deleteSupertonicStyle(slug: "cruz")
+        XCTAssertFalse(lib.hasSupertonicStyle(slug: "cruz"))
+        let meta = try lib.get("cruz").meta
+        XCTAssertNil(meta.supertonicSource)
+        XCTAssertNil(meta.supertonicBakedAt)
+    }
+
+    func testRefWavChangeInvalidatesSupertonicStyle() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
+        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
+        _ = try lib.update("cruz", refWav: Data([9, 9])) // new audio → stale bake
+        XCTAssertFalse(lib.hasSupertonicStyle(slug: "cruz"))
+        XCTAssertNil(try lib.get("cruz").meta.supertonicSource)
+    }
+
+    func testRefTextOnlyEditPreservesSupertonicStyle() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
+        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
+        _ = try lib.update("cruz", refText: "fixed typo") // transcript-only edit keeps the bake
+        XCTAssertTrue(lib.hasSupertonicStyle(slug: "cruz"))
+    }
+
+    func testRenameCarriesSupertonicStyle() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
+        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
+        let meta = try lib.update("cruz", name: "Night Cruz") // dir moves; style travels with it
+        XCTAssertEqual(meta.slug, "night-cruz")
+        XCTAssertTrue(lib.hasSupertonicStyle(slug: "night-cruz"))
+    }
+
     func testRenameCarriesVariantDirectories() throws {
         let lib = VoiceLibrary(directory: FileManager.default.temporaryDirectory
             .appendingPathComponent("voicelib-rename-\(UUID().uuidString)"))

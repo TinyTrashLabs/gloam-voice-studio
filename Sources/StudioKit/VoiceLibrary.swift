@@ -90,12 +90,14 @@ public struct VoiceLibrary: Sendable {
         return meta
     }
 
+    /// A voice is defined by its `meta.json`. `refURL` may point at a non-existent
+    /// file for a SuperTonic-only imported voice (no reference audio) — callers that
+    /// need the audio must check existence.
     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
         let voiceDir = directory.appendingPathComponent(slug)
         let metaURL = voiceDir.appendingPathComponent("meta.json")
         let refURL = voiceDir.appendingPathComponent("ref.wav")
         guard FileManager.default.fileExists(atPath: metaURL.path),
-              FileManager.default.fileExists(atPath: refURL.path),
               let data = try? Data(contentsOf: metaURL),
               let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data)
         else { throw StudioError.voiceNotFound(slug: slug) }
@@ -185,9 +187,79 @@ public struct VoiceLibrary: Sendable {
         if let refText { meta.refText = refText }
         if let refWav, !refWav.isEmpty {
             try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
+            // New reference audio invalidates any SuperTonic style baked from the old
+            // audio (the style encodes the voice's acoustic identity). A transcript-only
+            // edit does NOT invalidate — the style is a function of the audio, not refText.
+            let styleURL = voiceDir.appendingPathComponent("supertonic.json")
+            if FileManager.default.fileExists(atPath: styleURL.path) {
+                try FileManager.default.removeItem(at: styleURL)
+                meta.supertonicSource = nil
+                meta.supertonicBakedAt = nil
+            }
         }
         try write(meta, to: voiceDir)
         return meta
+    }
+
+    // MARK: SuperTonic style (per-voice `supertonic.json`)
+
+    /// URL of a voice's SuperTonic style descriptor (may not exist).
+    public func supertonicStyleURL(slug: String) -> URL {
+        directory.appendingPathComponent(slug).appendingPathComponent("supertonic.json")
+    }
+
+    /// Whether this voice has a baked/imported SuperTonic style.
+    public func hasSupertonicStyle(slug: String) -> Bool {
+        FileManager.default.fileExists(atPath: supertonicStyleURL(slug: slug).path)
+    }
+
+    /// Write a validated SuperTonic style into an existing voice, marking its source
+    /// ("bake" | "import"). Throws `SupertonicStyleError` for a malformed style.
+    public func writeSupertonicStyle(_ data: Data, slug: String, source: String) throws {
+        try SupertonicStyleFile.validate(data)
+        let voiceDir = directory.appendingPathComponent(slug)
+        guard FileManager.default.fileExists(atPath: voiceDir.path) else {
+            throw StudioError.voiceNotFound(slug: slug)
+        }
+        try data.write(to: voiceDir.appendingPathComponent("supertonic.json"), options: .atomic)
+        var (meta, _) = try get(slug)
+        meta.supertonicSource = source
+        meta.supertonicBakedAt = Self.timestamp()
+        try write(meta, to: voiceDir)
+    }
+
+    /// Remove a voice's SuperTonic style and clear its markers (no-op if absent).
+    public func deleteSupertonicStyle(slug: String) throws {
+        let url = supertonicStyleURL(slug: slug)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        if var meta = try? get(slug).meta,
+           meta.supertonicSource != nil || meta.supertonicBakedAt != nil {
+            meta.supertonicSource = nil
+            meta.supertonicBakedAt = nil
+            try write(meta, to: directory.appendingPathComponent(slug))
+        }
+    }
+
+    /// Create a new voice from a SuperTonic style JSON alone (e.g. a Voice Builder
+    /// export or a shared style) — no reference audio. The voice is SuperTonic-only
+    /// until a reference is added. Returns the new slug.
+    @discardableResult
+    public func importVoiceFromSupertonic(_ data: Data, name: String) throws -> String {
+        try SupertonicStyleFile.validate(data)
+        let slug = try Slug.slugify(name)
+        let voiceDir = directory.appendingPathComponent(slug)
+        guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
+            throw StudioError.voiceExists(slug: slug)
+        }
+        try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
+        try data.write(to: voiceDir.appendingPathComponent("supertonic.json"), options: .atomic)
+        let now = Self.timestamp()
+        let meta = VoiceMeta(name: name, slug: slug, refText: "", createdAt: now,
+                             supertonicBakedAt: now, supertonicSource: "import")
+        try write(meta, to: voiceDir)
+        return slug
     }
 
     /// Sets (or clears, with nil) the chat persona on a stored voice.
