@@ -20,13 +20,22 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     public var refText: String
     public var createdAt: String
     public var persona: Persona?
+    /// UTC ISO-8601 timestamp of when a SuperTonic style was baked/imported for
+    /// this voice (String for meta.json / Python parity — never a Date). nil = none.
+    public var supertonicBakedAt: String?
+    /// How this voice's `supertonic.json` was produced: "bake" | "import". nil = none.
+    public var supertonicSource: String?
 
-    public init(name: String, slug: String, refText: String, createdAt: String, persona: Persona? = nil) {
+    public init(name: String, slug: String, refText: String, createdAt: String,
+                persona: Persona? = nil,
+                supertonicBakedAt: String? = nil, supertonicSource: String? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
         self.createdAt = createdAt
         self.persona = persona
+        self.supertonicBakedAt = supertonicBakedAt
+        self.supertonicSource = supertonicSource
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -38,6 +47,9 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         // Optional + tolerant: a malformed persona must never break voice load.
         persona = (try? c.decodeIfPresent(Persona.self, forKey: .persona)) ?? nil
+        // Absent on legacy / non-SuperTonic voices — must stay nil, never throw.
+        supertonicBakedAt = try c.decodeIfPresent(String.self, forKey: .supertonicBakedAt)
+        supertonicSource = try c.decodeIfPresent(String.self, forKey: .supertonicSource)
     }
 }
 

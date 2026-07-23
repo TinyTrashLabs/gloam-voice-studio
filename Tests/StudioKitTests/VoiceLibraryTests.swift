@@ -178,6 +178,27 @@ final class VoiceLibraryTests: XCTestCase {
         _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
         XCTAssertNoThrow(try lib.removeAvatar("cruz"))
     }
+
+    // MARK: SuperTonic markers
+
+    func testDecodesLegacyMetaWithoutSupertonicFields() throws {
+        // Old / foreign meta.json that predates SuperTonic baking must still decode.
+        let json = #"{"name":"DJ","slug":"dj","refText":"hi","createdAt":"2026-01-01T00:00:00Z"}"#
+        let meta = try JSONDecoder().decode(VoiceMeta.self, from: Data(json.utf8))
+        XCTAssertNil(meta.supertonicBakedAt)
+        XCTAssertNil(meta.supertonicSource)
+    }
+
+    func testSupertonicMarkersRoundTrip() throws {
+        var meta = VoiceMeta(name: "DJ", slug: "dj", refText: "hi",
+                             createdAt: "2026-01-01T00:00:00Z")
+        meta.supertonicBakedAt = "2026-07-22T18:00:00Z"
+        meta.supertonicSource = "bake"
+        let back = try JSONDecoder().decode(VoiceMeta.self,
+                                            from: JSONEncoder().encode(meta))
+        XCTAssertEqual(back.supertonicBakedAt, "2026-07-22T18:00:00Z")
+        XCTAssertEqual(back.supertonicSource, "bake")
+    }
 }
 
 extension VoiceLibraryTests {
