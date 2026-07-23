@@ -24,6 +24,14 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(BackendID.chatterbox.isQwen)
     }
 
+    func testSupertonicSupportsOfflineBake() {
+        XCTAssertTrue(BackendID.supertonic.spec.supportsOfflineBake)
+        XCTAssertFalse(BackendID.chatterbox.spec.supportsOfflineBake)
+        XCTAssertFalse(BackendID.qwenCustom.spec.supportsOfflineBake)
+        // Offline bake is a distinct capability from clone-at-synth-time.
+        XCTAssertEqual(BackendID.supertonic.controls.voiceClone, .none)
+    }
+
     func testLegacyQwenMigration() {
         XCTAssertEqual(BackendID.migrating(rawValue: "qwen3"), .qwen06B)
         XCTAssertEqual(BackendID.migrating(rawValue: "fish-s2-pro"), .fishS2Pro)

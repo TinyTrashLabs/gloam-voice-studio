@@ -248,6 +248,22 @@ public struct BackendSpec: Sendable, Equatable {
     public let needsRefAudio: Bool
     /// Minimum physical RAM (decimal bytes) to safely load/run this backend.
     public let minRAMBytes: Int64
+    /// The engine can bake a custom voice offline from a reference clip (produces a
+    /// per-voice SuperTonic style). Distinct from `ControlSurface.voiceClone`, which
+    /// means clone *at synth time*; a bake is an offline job whose result is stored.
+    public let supportsOfflineBake: Bool
+
+    public init(modelRepo: String, defaultSampleRate: Int, honorsTags: Bool,
+                needsLicenseAck: Bool, needsRefAudio: Bool, minRAMBytes: Int64,
+                supportsOfflineBake: Bool = false) {
+        self.modelRepo = modelRepo
+        self.defaultSampleRate = defaultSampleRate
+        self.honorsTags = honorsTags
+        self.needsLicenseAck = needsLicenseAck
+        self.needsRefAudio = needsRefAudio
+        self.minRAMBytes = minRAMBytes
+        self.supportsOfflineBake = supportsOfflineBake
+    }
 }
 
 extension BackendID {
@@ -299,7 +315,8 @@ extension BackendID {
             BackendSpec(modelRepo: "tinytrashlabs/supertonic-3-mlx",
                         defaultSampleRate: 44100, honorsTags: false,
                         needsLicenseAck: true, needsRefAudio: false,
-                        minRAMBytes: 8_000_000_000)
+                        minRAMBytes: 8_000_000_000,
+                        supportsOfflineBake: true)
         }
     }
 }
