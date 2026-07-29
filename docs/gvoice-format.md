@@ -60,8 +60,10 @@ billie-frost.gvoice          (deflate zip)
 ```
 
 `chatterbox`, `chatterbox-turbo`, `fish-s2-pro` and the Qwen Base models need no
-`engines/` directory — they consume `source/` audio directly, and the manifest
-points them at it.
+`engines/` directory — they consume `source/` audio directly, so a reader serving
+them reads `source` and ignores `engines` entirely. A manifest *may* still list
+such an engine pointing back into `source/`; readers must tolerate that but
+writers need not emit it.
 
 ## `manifest.json`
 
