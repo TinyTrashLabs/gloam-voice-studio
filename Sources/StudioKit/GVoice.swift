@@ -2,7 +2,10 @@ import Foundation
 import ZIPFoundation
 
 /// The one-file voice pack: a deflate zip holding exactly meta.json + ref.wav.
-/// The format is canonical in the Python repo; both implementations conform.
+/// The format is canonical in `docs/gvoice-format.md` in this repo; the Python
+/// sibling conforms to it. That spec describes a manifest + per-engine
+/// renditions, which this implementation does not write yet — it still emits the
+/// audio-only shape.
 public enum GVoice {
     public static func export(_ slug: String, from library: VoiceLibrary) throws -> Data {
         let (meta, refURL) = try library.get(slug)
