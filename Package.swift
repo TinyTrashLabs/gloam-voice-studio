@@ -17,9 +17,11 @@ let package = Package(
         // T3 token cap on the reference-clip path so a high-exaggeration line can't
         // run away past EOS (PR #3). See TinyTrashLabs/mlx-audio-swift and
         // docs/chatterbox-quality-todo.md.
+        // Pinned to the merge commit of TinyTrashLabs/mlx-audio-swift#5 (merged into
+        // main), which adds the native-MLX SuperTonic 3 model (model_type "supertonic").
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "00d93dfba543f4bb26004e6acae597188ac8b947"),
+            revision: "d19af644801ed4c0791652d1bd67ac28e9076c4b"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

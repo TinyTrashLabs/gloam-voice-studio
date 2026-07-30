@@ -140,7 +140,7 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 audio = try await model.generate(
                     text: request.text,
                     voice: backend.isQwen ? request.instruct
-                        : backend == .kokoro ? request.speaker
+                        : backend == .kokoro || backend == .supertonic ? request.speaker
                         : nil,
                     refAudio: refAudio,
                     refText: request.refText,

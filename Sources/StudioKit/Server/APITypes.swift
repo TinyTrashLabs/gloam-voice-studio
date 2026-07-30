@@ -8,6 +8,25 @@ public let fishLicenseNotice =
     + "personal/non-commercial use only. Commercial use requires a license from "
     + "business@fish.audio. By enabling this backend you confirm your use is personal."
 
+/// In-app attribution + use-restriction notice for the SuperTonic backend.
+/// Shown by the license-ack surface and returned by the API server when the
+/// backend is used un-acked. Full text + EULA pass-down clause:
+/// docs/supertonic-licensing.md.
+public let supertonicLicenseNotice =
+    "SuperTonic voices are powered by SuperTonic 3 by Supertone Inc. "
+    + "(huggingface.co/Supertone/supertonic-3), used under the BigScience Open "
+    + "RAIL-M license; the weights are format-converted (modified) for MLX. The "
+    + "license carries use restrictions that pass down to you: no unlawful use, no "
+    + "impersonation or deepfakes of real people without their consent, no "
+    + "harassment or defamation, no generating harmful disinformation, and no "
+    + "undisclosed machine-generated content. By enabling this backend you agree "
+    + "to these restrictions."
+
+/// The license notice matching a backend that requires an ack.
+public func licenseNotice(for backend: BackendID) -> String {
+    backend == .supertonic ? supertonicLicenseNotice : fishLicenseNotice
+}
+
 /// FastAPI-compatible HTTP error: serializes as {"detail": "<message>"}.
 struct APIError: Error {
     let status: HTTPResponse.Status

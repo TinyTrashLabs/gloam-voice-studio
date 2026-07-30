@@ -441,6 +441,9 @@ struct StudioView: View {
         case .luxTTS:
             "Clones a voice from a reference clip — the prosody comes entirely from that clip. "
             + "No free-text Direction; tune the flow-matching steps/guidance in Advanced instead."
+        case .supertonic:
+            "Pick a preset voice — SuperTonic doesn't clone or take free-text direction. "
+            + "Fast, multilingual, 44.1 kHz."
         }
     }
 
@@ -547,6 +550,10 @@ struct StudioView: View {
                         }
                         Text("A fixed pretrained voicepack — grade is the model author's own "
                              + "quality rating (A best, F+ weakest). No cloning or Direction here.")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    } else if model.backend == .supertonic {
+                        Text("A fixed preset voice style (M1–M5 male, F1–F5 female) shipped "
+                             + "with the model. No cloning, emotion, or Direction here.")
                             .font(.caption2).foregroundStyle(Brand.fgFaint)
                     } else {
                         // Description of the currently-selected speaker (names alone are opaque).
