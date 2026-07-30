@@ -307,6 +307,8 @@ struct StudioView: View {
     private func hasAnyKnob(_ k: Knobs) -> Bool {
         k.temperature != nil || k.topP != nil || k.topK != nil
             || k.repetitionPenalty != nil || k.exaggeration != nil || k.cfgWeight != nil
+            || k.numSteps != nil || k.guidanceScale != nil || k.tShift != nil
+            || k.speed != nil || k.returnSmooth != nil
     }
 
     @ViewBuilder
@@ -348,6 +350,45 @@ struct StudioView: View {
                     knobRow("CFG weight", $model.cfgWeight, r,
                             desc: "Chatterbox guidance strength. Lower it (~0.3) as Exaggeration rises "
                                 + "so pacing doesn't rush.")
+                }
+                if let r = knobs.numSteps {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Steps")
+                            Slider(value: Binding(
+                                get: { Float(model.luxNumSteps) },
+                                set: { model.luxNumSteps = Int($0) }),
+                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                            Text("\(model.luxNumSteps)").font(.system(.caption, design: .monospaced))
+                        }
+                        Text("Flow-matching sampling steps. 3–4 is the efficient sweet spot; higher "
+                             + "trades latency for quality.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                if let r = knobs.guidanceScale {
+                    knobRow("Guidance", $model.luxGuidanceScale, r,
+                            desc: "Classifier-free guidance scale — how strongly generation follows "
+                                + "the reference identity.")
+                }
+                if let r = knobs.tShift {
+                    knobRow("Schedule shift", $model.luxTShift, r,
+                            desc: "Lower reduces pronunciation errors but softens quality, and vice versa.")
+                }
+                if let r = knobs.speed {
+                    knobRow("Pace", $model.speed, r,
+                            desc: "LuxTTS's native duration pacing (not a post-hoc resample — no pitch "
+                                + "shift). Lower it if a fast reference rushes or drops words.")
+                }
+                if knobs.returnSmooth != nil {
+                    Toggle(isOn: $model.luxReturnSmooth) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Sharp 48k output")
+                            Text("On = the sharper dual-path 48k vocoder output; off = the smoother "
+                                 + "24k-resampled path if you hear metallic artifacts.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 HStack {
                     Spacer()
@@ -397,6 +438,9 @@ struct StudioView: View {
         case .kokoro:
             "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
             + "varies a lot by voice; the grade shown is the model author's own rating."
+        case .luxTTS:
+            "Clones a voice from a reference clip — the prosody comes entirely from that clip. "
+            + "No free-text Direction; tune the flow-matching steps/guidance in Advanced instead."
         }
     }
 

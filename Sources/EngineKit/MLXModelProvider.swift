@@ -24,6 +24,24 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     }
 
     public func loadModel(backend: BackendID) async throws -> any SpeechModel {
+        if backend == .luxTTS {
+            // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
+            // through TTS.loadModel like every other case here. It needs a
+            // LOCAL directory holding the converted safetensors (see
+            // LuxSpeechModel.load's doc comment) — there is no HF-repo-string
+            // fallback yet because that requires running the equivalent of
+            // LuxTTS/convert_weights.py in-app first (not implemented in this
+            // pass; the raw YatharthS/LuxTTS repo ships torch/ONNX, not
+            // MLX-ready weights).
+            guard let localPath = modelPathResolver?(backend) else {
+                throw EngineError.generationFailed(
+                    backend: backend,
+                    message: "LuxTTS requires pre-converted local weights (no HF auto-download "
+                        + "path yet) — run convert_weights.py and populate the resolver's "
+                        + "Caches/Models directory for \(BackendID.luxTTS.rawValue).")
+            }
+            return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
+        }
         let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
         let model = try await TTS.loadModel(modelRepo: source)
         return MLXSpeechModel(model: model, backend: backend)

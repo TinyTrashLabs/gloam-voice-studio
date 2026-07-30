@@ -53,7 +53,9 @@ let package = Package(
             name: "EngineKit",
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 // MoE Gemma-4 (gemma-4-26b-a4b) is a `Gemma4ForConditionalGeneration`
@@ -71,8 +73,18 @@ let package = Package(
                 .product(name: "Jinja", package: "swift-jinja"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                // On-device ASR (AppleTranscriber, zero downloads/network) backs
+                // LuxTTS's generate-then-verify retry loop — see LuxOutputVerifier.swift.
+                "SpeechKit",
             ],
-            path: "Sources/EngineKit"
+            path: "Sources/EngineKit",
+            // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
+            // not compiled or shipped.
+            exclude: ["LuxTTS/convert_weights.py"],
+            resources: [
+                // LuxTTS phoneme vocab (360 entries) consumed by LuxTokenizer.
+                .copy("LuxTTS/Resources/tokens.txt")
+            ]
         ),
         .testTarget(
             name: "EngineKitTests",

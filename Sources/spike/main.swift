@@ -1,6 +1,104 @@
 import EngineKit
 import Foundation
+import MLX
+import MLXFFT
 import StudioKit
+
+// TEMPORARY debug harness — round-trips a synthetic signal through
+// LuxISTFT (forward MLXFFT.rfft, trusted, → LuxISTFT reconstruction, under
+// test) to isolate whether the ISTFT+overlap-add math itself is correct,
+// independent of the acoustic model. Remove once the LuxTTS vocoder output
+// is confirmed to actually sound like speech.
+if CommandLine.arguments.dropFirst().first == "test-istft" {
+    let nFft = 1024
+    let hopLength = 256
+    let sr = 24000
+    let duration: Float = 2.0
+    let n = Int(duration * Float(sr))
+
+    var x = [Float](repeating: 0, count: n)
+    for i in 0 ..< n {
+        let t = Float(i) / Float(sr)
+        x[i] = 0.3 * sin(2 * Float.pi * 220 * t) + 0.2 * sin(2 * Float.pi * 880 * t)
+            + 0.05 * Float.random(in: -1 ... 1)
+    }
+    let signal = MLXArray(x)
+
+    // torch.istft / vocos convention (which LuxISTFT's w/w² normalization
+    // assumes): the spectrum is the FFT of a WINDOWED frame, not a raw one —
+    // apply the same Hann-ish window LuxISTFT uses to each frame before FFT.
+    var winArr = [Float](repeating: 0, count: nFft)
+    for i in 0 ..< nFft {
+        winArr[i] = 0.5 * (1 - cos(2 * Float.pi * Float(i) / Float(nFft)))
+    }
+    let win = MLXArray(winArr)
+
+    let frameCount = (n - nFft) / hopLength + 1
+    var frames: [MLXArray] = []
+    for t in 0 ..< frameCount {
+        frames.append(signal[(t * hopLength) ..< (t * hopLength + nFft)] * win)
+    }
+    let framesArr = stacked(frames, axis: 0).expandedDimensions(axis: 0)  // (1, T, nFft)
+
+    let spec = MLXFFT.rfft(framesArr, axis: -1)
+    let specReal = spec.realPart()
+    let specImag = spec.imaginaryPart()
+    eval(specReal, specImag)
+
+    let istftHead = LuxISTFT(nFft: nFft, hopLength: hopLength)
+    let reconstructed = istftHead(specReal, specImag)
+    eval(reconstructed)
+
+    let recon = reconstructed.squeezed()
+    let reconArr = recon.asArray(Float.self)
+    print("reconstructed length: \(reconArr.count), original signal length: \(n)")
+
+    // Search over shifts to see if this is just an alignment-convention
+    // mismatch (my test's left-aligned framing vs LuxISTFT's assumed
+    // center-padded trim) — for each shift, fit the best least-squares SCALE
+    // and report the resulting SNR. A real bug (not just alignment) will show
+    // low SNR at EVERY shift; a pure alignment/convention issue will show one
+    // shift with high SNR and a scale factor close to some fixed constant.
+    let compareCore = 4000
+    let midStart = n / 2
+    var bestShift = 0
+    var bestSNR: Float = -1000
+    var bestScale: Float = 0
+    for shift in -nFft ... nFft {
+        var num: Float = 0
+        var den: Float = 0
+        var count = 0
+        for i in 0 ..< compareCore {
+            let xi = midStart + i
+            let ri = xi + shift
+            guard ri >= 0, ri < reconArr.count, xi < n else { continue }
+            num += x[xi] * reconArr[ri]
+            den += reconArr[ri] * reconArr[ri]
+            count += 1
+        }
+        guard count > compareCore / 2, den > 1e-9 else { continue }
+        let scale = num / den
+        var sumSqErr: Float = 0
+        var sumSqSig: Float = 0
+        for i in 0 ..< compareCore {
+            let xi = midStart + i
+            let ri = xi + shift
+            guard ri >= 0, ri < reconArr.count, xi < n else { continue }
+            let err = x[xi] - scale * reconArr[ri]
+            sumSqErr += err * err
+            sumSqSig += x[xi] * x[xi]
+        }
+        let snr = 10 * log10(sumSqSig / max(sumSqErr, 1e-12))
+        if snr > bestSNR {
+            bestSNR = snr
+            bestShift = shift
+            bestScale = scale
+        }
+    }
+    print("best shift: \(bestShift) samples, best-fit scale: \(bestScale), SNR at best shift: \(bestSNR) dB")
+    print("(SNR > 30dB at best shift = correct up to alignment/scale convention; low SNR everywhere = real bug)")
+    exit(0)
+}
 
 func usage() -> Never {
     FileHandle.standardError.write(Data(
@@ -194,6 +292,32 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
     }
 }
 
+// MARK: - lux-phonemes subcommand
+//
+// `spike lux-phonemes "some text"` — dev aid for the MisakiPhonemizer remap
+// table: prints the normalized text, the misaki→espeak-remapped token stream,
+// and (when a Homebrew espeak-ng is present) the reference espeak token stream
+// for a side-by-side diff.
+if CommandLine.arguments.dropFirst().first == "lux-phonemes" {
+    guard let text = CommandLine.arguments.dropFirst(2).first else {
+        die("usage: spike lux-phonemes \"text\"")
+    }
+    do {
+        let normalized = LuxEnglishTextNormalizer().normalize(text)
+        print("normalized: \(normalized)")
+        let misaki = try await MisakiPhonemizer.prepared()
+        let misakiTokens = try misaki.phonemize(normalized)
+        print("misaki : \(misakiTokens.joined())")
+        if let espeak = try? EspeakProcessPhonemizer(voice: "en-us") {
+            let espeakTokens = try espeak.phonemize(normalized)
+            print("espeak : \(espeakTokens.joined())")
+        }
+    } catch {
+        die("\(error)")
+    }
+    exit(0)
+}
+
 // MARK: - bakeoff subcommand
 //
 // `spike bakeoff [outPath] [--dry]` — scores the four catalog LLMs on the DJ
@@ -221,7 +345,12 @@ guard let backendRaw = args["backend"], let backend = BackendID(rawValue: backen
       let text = args["text"], let out = args["out"]
 else { usage() }
 
-let engine = GloamEngine(provider: MLXModelProvider())
+Bakeoff.ensureMetallib()
+let modelDirOverride = args["model-dir"]
+let engine = GloamEngine(provider: MLXModelProvider(modelPathResolver: { backend in
+    guard let modelDirOverride, backend == .luxTTS else { return nil }
+    return modelDirOverride
+}))
 
 do {
     if ackFish { await engine.acknowledgeLicense(for: .fishS2Pro) }
@@ -237,7 +366,11 @@ do {
         language: args["language"],
         topP: args["top-p"].flatMap(Float.init),
         topK: args["top-k"].flatMap(Int.init),
-        repetitionPenalty: args["rep"].flatMap(Float.init))
+        repetitionPenalty: args["rep"].flatMap(Float.init),
+        numStepsOverride: args["num-steps"].flatMap(Int.init),
+        guidanceScaleOverride: args["guidance-scale"].flatMap(Float.init),
+        tShiftOverride: args["t-shift"].flatMap(Float.init),
+        returnSmoothOverride: args["return-smooth"].flatMap { $0 == "false" ? false : true })
     let result = try await engine.synthesize(backend: backend, request: request)
     try WAVWriter.write(samples: result.samples, sampleRate: result.sampleRate,
                         to: URL(fileURLWithPath: out))

@@ -55,7 +55,7 @@ struct BackendsSettings: View {
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro]
+         .kokoro, .luxTTS]
 
     var body: some View {
         @Bindable var model = model
@@ -247,7 +247,8 @@ struct ServerSettings: View {
     /// deliberately even though the Studio picker redirects away from it — an
     /// API caller that always sends `instruct` may want the design model.
     private let serverModelChoices: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox]
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
+         .luxTTS]
 
     /// Voice library for the Default voice picker — re-reads on library
     /// mutations elsewhere in the app (bumps `voicesVersion`), same guard

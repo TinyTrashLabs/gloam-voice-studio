@@ -306,6 +306,13 @@ final class AppModel {
     var qwenTopK: Int = AppModel.knobDefaults.topK
     var qwenRepetitionPenalty: Float = AppModel.knobDefaults.repetitionPenalty
 
+    // LuxTTS delivery knobs (Advanced disclosure; `speed` above doubles as
+    // LuxTTS's native pacing control — see RequestPlanner/GloamEngine).
+    var luxNumSteps: Int = AppModel.knobDefaults.luxNumSteps
+    var luxGuidanceScale: Float = AppModel.knobDefaults.luxGuidanceScale
+    var luxTShift: Float = AppModel.knobDefaults.luxTShift
+    var luxReturnSmooth: Bool = AppModel.knobDefaults.luxReturnSmooth
+
     // MARK: Voice Foundry (Create Voice) — qwen3-design mints a new voice you then
     // save as a reusable clone reference. Its state is separate from the Studio bench.
     static let defaultAuditionLine =
@@ -643,7 +650,10 @@ final class AppModel {
     /// delivery used when no overrides are sent. exaggeration 0.5 is Chatterbox neutral.
     static let knobDefaults = (temperature: Float(0.9), exaggeration: Float(0.5),
                                cfgWeight: Float(0.5),
-                               topP: Float(1.0), topK: 0, repetitionPenalty: Float(1.05))
+                               topP: Float(1.0), topK: 0, repetitionPenalty: Float(1.05),
+                               // LuxTTS — same defaults as the upstream Python API.
+                               luxNumSteps: 4, luxGuidanceScale: Float(3.0),
+                               luxTShift: Float(0.5), luxReturnSmooth: true)
 
     /// Restore the Advanced fine-tune sliders to their defaults.
     func resetDeliveryKnobs() {
@@ -653,6 +663,10 @@ final class AppModel {
         qwenTopP = Self.knobDefaults.topP
         qwenTopK = Self.knobDefaults.topK
         qwenRepetitionPenalty = Self.knobDefaults.repetitionPenalty
+        luxNumSteps = Self.knobDefaults.luxNumSteps
+        luxGuidanceScale = Self.knobDefaults.luxGuidanceScale
+        luxTShift = Self.knobDefaults.luxTShift
+        luxReturnSmooth = Self.knobDefaults.luxReturnSmooth
     }
 
     // MARK: model residency
@@ -763,7 +777,11 @@ final class AppModel {
             language: controls.language ? language : nil,
             topP: controls.knobs.topP != nil ? qwenTopP : nil,
             topK: controls.knobs.topK != nil ? qwenTopK : nil,
-            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil)
+            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil,
+            numStepsOverride: controls.knobs.numSteps != nil ? luxNumSteps : nil,
+            guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
+            tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
+            returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil)
         let raw = interleaved
             ? try await engine.synthesizeInterleaved(backend: backend, request: request)
             : try await engine.synthesize(backend: backend, request: request)

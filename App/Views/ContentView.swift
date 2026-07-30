@@ -154,7 +154,7 @@ struct ContentView: View {
     private var pickerBackends: [BackendID] {
         // qwen3-design is intentionally absent — it's Creation-only, in the Voice
         // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro]
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro, .luxTTS]
     }
 
     private func modelDisplayName(_ b: BackendID) -> String {
@@ -163,6 +163,7 @@ struct ContentView: View {
         case .qwen17B: "qwen3-1.7b · clone a voice"
         case .qwenDesign: "qwen3-design · design from text"
         case .qwenCustom: "qwen3-custom · direct a preset voice"
+        case .luxTTS: "lux-tts · clone a voice"
         default: b.rawValue
         }
     }
@@ -381,7 +382,7 @@ struct ModelManagerView: View {
     @Environment(AppModel.self) private var model
 
     private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro]
+        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .luxTTS]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

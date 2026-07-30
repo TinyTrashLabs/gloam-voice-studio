@@ -9,6 +9,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
     case kokoro
+    case luxTTS = "lux-tts"
 
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
@@ -117,13 +118,34 @@ public struct Knobs: Sendable, Equatable {
     /// Chatterbox (regular) CFG guidance weight. Resemble default 0.5; lower it as
     /// exaggeration rises to keep pacing from rushing. Turbo has no CFG → no knob.
     public var cfgWeight: ClosedRange<Float>?
+    /// LuxTTS: flow-matching sampling steps. Doc default 4; "3-4 is best for
+    /// efficiency" per upstream, higher trades latency for quality.
+    public var numSteps: ClosedRange<Int>?
+    /// LuxTTS: classifier-free guidance scale for the flow-matching decoder.
+    public var guidanceScale: ClosedRange<Float>?
+    /// LuxTTS: sampling-schedule shift. Doc default 0.5; "lower for less possible
+    /// pronunciation errors but worse quality and vice versa."
+    public var tShift: ClosedRange<Float>?
+    /// LuxTTS: output pacing multiplier applied to the predicted duration. Doc
+    /// default 1.0; lower slows delivery (useful when fast references rush/drop
+    /// words at 1.0).
+    public var speed: ClosedRange<Float>?
+    /// LuxTTS: dual-path 48k output toggle. `true` (doc default) = the sharper,
+    /// slightly noisier 48k path; `false` = the smoother 24k-resampled path. Not
+    /// a range — nil hides the toggle, same as every other knob here.
+    public var returnSmooth: Bool?
 
     public init(temperature: ClosedRange<Float>? = nil, topP: ClosedRange<Float>? = nil,
                 topK: ClosedRange<Int>? = nil, repetitionPenalty: ClosedRange<Float>? = nil,
-                exaggeration: ClosedRange<Float>? = nil, cfgWeight: ClosedRange<Float>? = nil) {
+                exaggeration: ClosedRange<Float>? = nil, cfgWeight: ClosedRange<Float>? = nil,
+                numSteps: ClosedRange<Int>? = nil, guidanceScale: ClosedRange<Float>? = nil,
+                tShift: ClosedRange<Float>? = nil, speed: ClosedRange<Float>? = nil,
+                returnSmooth: Bool? = nil) {
         self.temperature = temperature; self.topP = topP; self.topK = topK
         self.repetitionPenalty = repetitionPenalty; self.exaggeration = exaggeration
         self.cfgWeight = cfgWeight
+        self.numSteps = numSteps; self.guidanceScale = guidanceScale
+        self.tShift = tShift; self.speed = speed; self.returnSmooth = returnSmooth
     }
 }
 
@@ -208,6 +230,14 @@ extension BackendID {
         case .kokoro:
             ControlSurface(voiceClone: .none, presetSpeakers: Self.kokoroVoices,
                            instruct: .none, language: false, knobs: Knobs())
+        case .luxTTS:
+            // Cloning-only — no stock voices, no instruct. English only for now
+            // (the ported tokenizer stubs Chinese pending a jieba/pypinyin port).
+            ControlSurface(voiceClone: .required, instruct: .none,
+                           language: false,
+                           knobs: Knobs(numSteps: 1...10, guidanceScale: 0...5,
+                                       tShift: 0...1, speed: 0.5...1.5,
+                                       returnSmooth: true))
         }
     }
 }
@@ -222,6 +252,7 @@ extension BackendID {
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
         case .kokoro: .none
+        case .luxTTS: .variantClipOnly               // prosody comes entirely from the ref clip
         }
     }
 }
@@ -282,6 +313,19 @@ extension BackendID {
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
+        case .luxTTS:
+            // NOTE: unlike every other backend here, "YatharthS/LuxTTS" does NOT
+            // ship MLX-native weights — it's the torch/ONNX source of truth.
+            // LuxSpeechModel's loadModel must run the LuxTTS/convert_weights.py
+            // key-remap (weight-norm fold, conv-layout transpose) once and cache
+            // the result locally rather than handing this repo id to
+            // mlx-audio-swift's generic HF downloader like the other cases do.
+            // Total weights ~560MB fp32 (477.5MB decoder + 17.6MB encoder +
+            // ~64MB vocoder) — far lighter than the other backends.
+            BackendSpec(modelRepo: "YatharthS/LuxTTS",
+                        defaultSampleRate: 48000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 2_000_000_000)
         }
     }
 }
