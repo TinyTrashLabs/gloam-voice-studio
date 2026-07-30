@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 8)
+        XCTAssertEqual(BackendID.allCases.count, 9)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 8)
+        XCTAssertEqual(BackendID.allCases.count, 9)
     }
 
     func testQwenFamilyFlag() {
@@ -136,7 +136,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 8)
+        XCTAssertEqual(BackendID.allCases.count, 9)
     }
 
     func testKokoroSpec() {
@@ -165,5 +165,35 @@ final class BackendTests: XCTestCase {
 
     func testKokoroIsNotQwen() {
         XCTAssertFalse(BackendID.kokoro.isQwen)
+    }
+
+    func testSupertonicRawValue() {
+        XCTAssertEqual(BackendID.supertonic.rawValue, "supertonic")
+        XCTAssertFalse(BackendID.supertonic.isQwen)
+    }
+
+    func testSupertonicSpec() {
+        let spec = BackendID.supertonic.spec
+        XCTAssertEqual(spec.modelRepo, "tinytrashlabs/supertonic-3-mlx")
+        XCTAssertEqual(spec.defaultSampleRate, 44100)
+        XCTAssertFalse(spec.honorsTags)
+        // Open RAIL-M use-based restrictions — explicit ack like Fish.
+        XCTAssertTrue(spec.needsLicenseAck)
+        XCTAssertFalse(spec.needsRefAudio)
+        XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
+        XCTAssertEqual(BackendID.supertonic.emotionMechanism, .none)
+    }
+
+    func testSupertonicControls() {
+        let controls = BackendID.supertonic.controls
+        XCTAssertEqual(controls.voiceClone, .none)
+        XCTAssertEqual(controls.instruct, .none)
+        XCTAssertFalse(controls.language)
+        XCTAssertNil(controls.knobs.temperature)
+        XCTAssertNil(controls.knobs.exaggeration)
+        XCTAssertNil(controls.knobs.cfgWeight)
+        XCTAssertEqual(controls.presetSpeakers,
+                       ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"])
+        XCTAssertEqual(Set(controls.presetSpeakers).count, 10, "no duplicate voice names")
     }
 }

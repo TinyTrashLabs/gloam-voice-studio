@@ -224,8 +224,12 @@ public actor GloamEngine {
         let raw = try await model.synthesize(plan)
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
+        // If the plan carries a native `speed` (LuxTTS: applied inside the
+        // flow-matching duration conditioning), the provider already handled it —
+        // skip the generic post-hoc resample so speed isn't applied twice.
+        let postHocSpeed = plan.speed != nil ? 1.0 : request.speed
         return SynthesisResult(
-            samples: SpeedAdjust.apply(raw, speed: request.speed),
+            samples: SpeedAdjust.apply(raw, speed: postHocSpeed),
             sampleRate: model.sampleRate,
             wallSeconds: wall)
     }

@@ -274,8 +274,8 @@ public enum APIRouter {
                 return Response(status: .ok,
                                 headers: [.contentType: "audio/wav"],
                                 body: .init(byteBuffer: ByteBuffer(data: wav)))
-            } catch EngineError.licenseAckRequired {
-                throw APIError(status: .forbidden, detail: fishLicenseNotice)
+            } catch EngineError.licenseAckRequired(let b) {
+                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
             } catch EngineError.refAudioRequired(let b) {
                 throw APIError(status: .badRequest,
                                detail: "backend '\(b.rawValue)' requires reference audio")

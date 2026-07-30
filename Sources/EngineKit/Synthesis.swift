@@ -33,13 +33,23 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var topP: Float?
     public var topK: Int?
     public var repetitionPenalty: Float?
+    /// LuxTTS flow-matching sampling steps override (nil = model default 4).
+    public var numStepsOverride: Int?
+    /// LuxTTS classifier-free guidance scale override (nil = model default 3.0).
+    public var guidanceScaleOverride: Float?
+    /// LuxTTS sampling-schedule shift override (nil = model default 0.5).
+    public var tShiftOverride: Float?
+    /// LuxTTS dual-path 48k output toggle override (nil = model default true).
+    public var returnSmoothOverride: Bool?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
                 temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
                 cfgWeight: Float? = nil, exaggerationCeiling: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
-                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
+                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
+                numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
+                tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil) {
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText
@@ -56,6 +66,10 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.topP = topP
         self.topK = topK
         self.repetitionPenalty = repetitionPenalty
+        self.numStepsOverride = numStepsOverride
+        self.guidanceScaleOverride = guidanceScaleOverride
+        self.tShiftOverride = tShiftOverride
+        self.returnSmoothOverride = returnSmoothOverride
     }
 }
 
@@ -80,15 +94,32 @@ public struct ProviderRequest: Sendable, Equatable {
     public var topP: Float?
     public var topK: Int?
     public var repetitionPenalty: Float?
+    /// LuxTTS only. Non-nil means the provider must apply speed natively (the
+    /// flow-matching duration conditioning, not a post-hoc resample) — when set,
+    /// GloamEngine skips its generic `SpeedAdjust.apply` for this call so speed
+    /// isn't applied twice.
+    public var speed: Float?
+    /// LuxTTS only: flow-matching sampling steps (nil = model default 4).
+    public var numSteps: Int?
+    /// LuxTTS only: classifier-free guidance scale (nil = model default 3.0).
+    public var guidanceScale: Float?
+    /// LuxTTS only: sampling-schedule shift (nil = model default 0.5).
+    public var tShift: Float?
+    /// LuxTTS only: dual-path 48k output toggle (nil = model default true).
+    public var returnSmooth: Bool?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
                 instruct: String? = nil, speaker: String? = nil, language: String? = nil,
-                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil) {
+                topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
+                speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
+                tShift: Float? = nil, returnSmooth: Bool? = nil) {
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.language = language
         self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
+        self.speed = speed; self.numSteps = numSteps; self.guidanceScale = guidanceScale
+        self.tShift = tShift; self.returnSmooth = returnSmooth
     }
 }
 
@@ -199,7 +230,17 @@ enum RequestPlanner {
             language: language,
             topP: knobs.topP != nil ? request.topP : nil,
             topK: knobs.topK != nil ? request.topK : nil,
-            repetitionPenalty: knobs.repetitionPenalty != nil ? request.repetitionPenalty : nil
+            repetitionPenalty: knobs.repetitionPenalty != nil ? request.repetitionPenalty : nil,
+            // LuxTTS's native speed reuses the generic `request.speed` slider value
+            // (same user-facing knob, backend-native implementation instead of a
+            // post-hoc resample) — see GloamEngine.performSynthesis for the other
+            // half of this (skipping SpeedAdjust when this is non-nil).
+            speed: knobs.speed != nil ? request.speed : nil,
+            numSteps: knobs.numSteps != nil ? request.numStepsOverride : nil,
+            guidanceScale: knobs.guidanceScale != nil ? request.guidanceScaleOverride : nil,
+            tShift: knobs.tShift != nil ? request.tShiftOverride : nil,
+            returnSmooth: knobs.returnSmooth != nil
+                ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil
         )
     }
 }

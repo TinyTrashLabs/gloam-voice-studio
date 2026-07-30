@@ -17,9 +17,11 @@ let package = Package(
         // T3 token cap on the reference-clip path so a high-exaggeration line can't
         // run away past EOS (PR #3). See TinyTrashLabs/mlx-audio-swift and
         // docs/chatterbox-quality-todo.md.
+        // Pinned to the merge commit of TinyTrashLabs/mlx-audio-swift#5 (merged into
+        // main), which adds the native-MLX SuperTonic 3 model (model_type "supertonic").
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "00d93dfba543f4bb26004e6acae597188ac8b947"),
+            revision: "d19af644801ed4c0791652d1bd67ac28e9076c4b"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -53,7 +55,9 @@ let package = Package(
             name: "EngineKit",
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 // MoE Gemma-4 (gemma-4-26b-a4b) is a `Gemma4ForConditionalGeneration`
@@ -71,8 +75,18 @@ let package = Package(
                 .product(name: "Jinja", package: "swift-jinja"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                // On-device ASR (AppleTranscriber, zero downloads/network) backs
+                // LuxTTS's generate-then-verify retry loop — see LuxOutputVerifier.swift.
+                "SpeechKit",
             ],
-            path: "Sources/EngineKit"
+            path: "Sources/EngineKit",
+            // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
+            // not compiled or shipped.
+            exclude: ["LuxTTS/convert_weights.py"],
+            resources: [
+                // LuxTTS phoneme vocab (360 entries) consumed by LuxTokenizer.
+                .copy("LuxTTS/Resources/tokens.txt")
+            ]
         ),
         .testTarget(
             name: "EngineKitTests",
