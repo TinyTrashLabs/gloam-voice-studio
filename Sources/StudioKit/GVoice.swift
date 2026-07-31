@@ -27,6 +27,9 @@ public enum GVoice {
         public var source: [String: Source]?
         /// engine id -> variant key -> pack-relative member path
         public var engines: [String: [String: String]]?
+        /// Free-form, producer-defined record of how the renditions were made.
+        /// Opaque to this reader — carried through import/export unchanged.
+        public var provenance: JSONValue?
     }
 
     // MARK: export
@@ -48,7 +51,7 @@ public enum GVoice {
             slug: base.meta.slug.isEmpty ? slug : base.meta.slug,
             createdAt: base.meta.createdAt.isEmpty ? nil : base.meta.createdAt,
             variants: orderedKeys(variants.keys),
-            source: [:], engines: [:])
+            source: [:], engines: [:], provenance: base.meta.provenance)
         var entries: [(name: String, data: Data)] = []
 
         for key in manifest.variants ?? [] {
@@ -92,16 +95,36 @@ public enum GVoice {
 
     // MARK: import
 
+    /// Hard ceilings on an untrusted pack, checked before any bytes are
+    /// extracted. Member paths and sizes in a `.gvoice` are attacker-controlled
+    /// (a zip someone sent us); without limits a crafted archive could exhaust
+    /// memory extracting a single oversized or zip-bomb-style member.
+    static let maxEntries = 1000
+    static let maxEntryBytes: UInt64 = 200_000_000  // 200 MB — comfortably above any real voice asset
+
     /// Install a pack, returning the BASE voice's meta.
     ///
     /// Assets whose engine id this build does not recognise are stored anyway —
     /// ignoring an unknown engine must never fail an import, or one pack cannot
-    /// serve clients that shipped at different times.
+    /// serve clients that shipped at different times. Per Rule 1/2, a manifest
+    /// entry pointing at a member that isn't actually in the pack degrades to
+    /// "skip that one asset," not a hard failure — a single corrupt or missing
+    /// entry must not sink an otherwise-importable pack.
+    ///
+    /// The base variant is fully resolved and written FIRST, before any other
+    /// variant touches disk: if the pack has nothing installable as a base,
+    /// the whole import throws before creating any partial/orphaned variant
+    /// directories, regardless of what order `manifest.variants` lists keys in
+    /// (that ordering is attacker-controlled and must not be trusted to put
+    /// "base" first).
     public static func `import`(_ data: Data, into library: VoiceLibrary) throws -> VoiceMeta {
         let archive: Archive
         let manifest: Manifest
         do {
             archive = try Archive(data: data, accessMode: .read)
+            guard archive.reduce(0, { count, _ in count + 1 }) <= maxEntries else {
+                throw StudioError.invalidArchive("pack has too many entries")
+            }
             guard let entry = archive["manifest.json"] else {
                 throw StudioError.invalidArchive("not a .gvoice pack (no manifest.json)")
             }
@@ -112,19 +135,23 @@ public enum GVoice {
             throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
         }
 
-        guard manifest.gvoice == version else {
+        // Readers reject only versions newer than they understand (Rule: additive
+        // changes never bump `gvoice`); `< 1` is simply malformed.
+        guard (1...version).contains(manifest.gvoice) else {
             throw StudioError.invalidArchive(
-                "unsupported .gvoice version \(manifest.gvoice) (this build reads \(version))")
+                "unsupported .gvoice version \(manifest.gvoice) (this build reads up to \(version))")
         }
         guard !manifest.name.isEmpty else {
             throw StudioError.invalidArchive("archive manifest.json has no voice name")
         }
 
-        func read(_ member: String) throws -> Data {
-            guard let entry = archive[member] else {
-                throw StudioError.invalidArchive("manifest points at \(member), which is not in the pack")
-            }
-            return try extract(entry, from: archive)
+        /// nil (not throw) for a member that is missing, unsafe to normalize,
+        /// or oversized — callers treat that as "skip this one asset."
+        func readOptional(_ member: String) -> Data? {
+            let normalized = normalizeMember(member)
+            guard let entry = archive[normalized] else { return nil }
+            guard entry.uncompressedSize <= maxEntryBytes else { return nil }
+            return try? extract(entry, from: archive)
         }
 
         let sources = manifest.source ?? [:]
@@ -132,35 +159,52 @@ public enum GVoice {
         let keys = manifest.variants
             ?? orderedKeys(Set(["base"] + Array(sources.keys) + engines.values.flatMap { Array($0.keys) }))
 
-        var baseMeta: VoiceMeta?
-        for key in keys {
-            let source = sources[key]
-            let ref = try source?.audio.map(read)
+        /// Resolve one variant's assets. Engine ids and filenames are validated
+        /// hard (an unsafe one aborts the whole import, matching
+        /// `testImportRejectsPathTraversal`); a dangling *member reference* for
+        /// an otherwise-safe path just drops that one asset.
+        func resolveVariant(_ key: String) throws -> (ref: Data?, assets: [String: [String: Data]]) {
+            let ref = sources[key]?.audio.flatMap(readOptional)
             var assets: [String: [String: Data]] = [:]
             for (engine, perVariant) in engines {
                 // Audio-driven engines point back into source/, already read above.
-                guard let member = perVariant[key], !member.hasPrefix("source/") else { continue }
+                guard let member = perVariant[key],
+                      !normalizeMember(member).lowercased().hasPrefix("source/") else { continue }
                 let engineID = try safeComponent(engine)
                 let filename = try safeComponent((member as NSString).lastPathComponent)
+                guard let blob = readOptional(member) else { continue }
                 var bucket = assets[engineID] ?? [:]
-                bucket[filename] = try read(member)
+                bucket[filename] = blob
                 assets[engineID] = bucket
             }
-            guard ref != nil || !assets.isEmpty else { continue }
-            if key == "base" {
-                baseMeta = try library.save(name: manifest.name, refWav: ref,
-                                            refText: source?.text ?? "", engines: assets)
-            } else {
-                let baseSlug = try baseMeta?.slug ?? Slug.slugify(manifest.name)
-                try library.saveAt(slug: "\(baseSlug)-\(key)", name: "\(manifest.name) \(key)",
-                                   refWav: ref, refText: source?.text ?? "", engines: assets)
-            }
+            return (ref, assets)
         }
 
-        guard let baseMeta else {
+        let (baseRef, baseAssets) = try resolveVariant("base")
+        guard baseRef != nil || !baseAssets.isEmpty else {
             throw StudioError.invalidArchive("archive has no base variant to install")
         }
+        let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
+                                        refText: sources["base"]?.text ?? "",
+                                        provenance: manifest.provenance, engines: baseAssets)
+
+        for key in keys where key != "base" {
+            let safeKey = try safeComponent(key)
+            let (ref, assets) = try resolveVariant(key)
+            guard ref != nil || !assets.isEmpty else { continue }
+            try library.saveAt(slug: "\(baseMeta.slug)-\(safeKey)", name: "\(manifest.name) \(key)",
+                               refWav: ref, refText: sources[key]?.text ?? "",
+                               provenance: manifest.provenance, variantOf: baseMeta.slug, engines: assets)
+        }
         return baseMeta
+    }
+
+    /// Strips a leading "./" (some writers emit pack-relative paths this way);
+    /// zip member lookup is otherwise exact-match.
+    private static func normalizeMember(_ path: String) -> String {
+        var p = path
+        while p.hasPrefix("./") { p.removeFirst(2) }
+        return p
     }
 
     // MARK: helpers

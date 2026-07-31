@@ -100,7 +100,8 @@ final class GVoiceTests: XCTestCase {
 
     func testExportGathersEmotionVariants() throws {
         _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "calm")
-        try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: Data([2]), refText: "loud")
+        try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: Data([2]), refText: "loud",
+                       variantOf: "cruz")
         let pack = try GVoice.export("cruz", from: lib)
         XCTAssertEqual(try manifest(pack).variants, ["base", "hype"])
         XCTAssertTrue(try members(pack).contains("source/ref-hype.wav"))
@@ -108,7 +109,8 @@ final class GVoiceTests: XCTestCase {
 
     func testImportRoundTripsVariants() throws {
         _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "calm")
-        try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: Data([2]), refText: "loud")
+        try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: Data([2]), refText: "loud",
+                       variantOf: "cruz")
         let pack = try GVoice.export("cruz", from: lib)
         try lib.delete("cruz")
         try lib.delete("cruz-hype")
@@ -121,7 +123,7 @@ final class GVoiceTests: XCTestCase {
         _ = try lib.save(name: "Cruz", refWav: nil, refText: "",
                          engines: ["supertonic-3": ["style.json": Self.style]])
         try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: nil, refText: "",
-                       engines: ["supertonic-3": ["style.json": Self.style]])
+                       variantOf: "cruz", engines: ["supertonic-3": ["style.json": Self.style]])
         let m = try members(try GVoice.export("cruz", from: lib))
         XCTAssertTrue(m.contains("engines/supertonic-3/style.json"))
         XCTAssertTrue(m.contains("engines/supertonic-3/style-hype.json"))
@@ -165,7 +167,27 @@ final class GVoiceTests: XCTestCase {
         }
     }
 
-    func testImportRejectsDanglingMember() throws {
+    /// A dangling member reference degrades to "skip that one asset" (Rule
+    /// 1/2's graceful-degradation philosophy), not a hard failure — as long as
+    /// something else in the base variant is actually installable.
+    func testImportSkipsDanglingSourceMemberWhenOtherAssetsExist() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":1,"name":"X","variants":["base"],
+             "source":{"base":{"audio":"source/ref.wav"}},
+             "engines":{"supertonic":{"base":"engines/supertonic/style.json"}}}
+            """#.utf8)),
+            ("engines/supertonic/style.json", Self.style),
+        ])
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertNil(try lib.entry(meta.slug).refURL)
+        XCTAssertNotNil(try lib.entry(meta.slug).engines["supertonic"]?["style.json"])
+    }
+
+    /// If EVERY asset in the base variant is dangling, there is nothing left
+    /// to install — that still throws, just for "no base variant" rather than
+    /// the specific dangling reference (which was silently skipped).
+    func testImportThrowsWhenAllBaseAssetsAreDangling() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
             {"gvoice":1,"name":"X","variants":["base"],"source":{"base":{"audio":"source/ref.wav"}}}
@@ -175,7 +197,7 @@ final class GVoiceTests: XCTestCase {
             guard case .invalidArchive(let m) = $0 as? StudioError else {
                 return XCTFail("expected invalidArchive, got \($0)")
             }
-            XCTAssertTrue(m.contains("not in the pack"), m)
+            XCTAssertTrue(m.contains("no base variant"), m)
         }
     }
 
@@ -193,6 +215,74 @@ final class GVoiceTests: XCTestCase {
             }
             XCTAssertTrue(m.contains("unsafe"), m)
         }
+    }
+
+    /// The variant KEY (not just the engine id) is attacker-controlled too —
+    /// it used to flow unsanitized into a filesystem path via `saveAt`.
+    func testImportRejectsPathTraversalViaVariantKey() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":1,"name":"X","variants":["base","../../escape"],
+             "source":{"base":{"audio":"source/ref.wav"},
+                       "../../escape":{"audio":"source/ref-escape.wav"}}}
+            """#.utf8)),
+            ("source/ref.wav", Data([1])),
+            ("source/ref-escape.wav", Data([2])),
+        ])
+        XCTAssertThrowsError(try GVoice.import(pack, into: lib)) {
+            guard case .invalidArchive(let m) = $0 as? StudioError else {
+                return XCTFail("expected invalidArchive, got \($0)")
+            }
+            XCTAssertTrue(m.contains("unsafe"), m)
+        }
+    }
+
+    /// A malicious/malformed manifest can order `variants` however it likes —
+    /// import must still resolve "base" first and refuse to write ANY variant
+    /// if base turns out to be uninstallable, regardless of list order.
+    func testImportIsAtomicWhenBaseFailsEvenIfListedLast() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":1,"name":"X","variants":["hype","base"],
+             "source":{"hype":{"audio":"source/ref-hype.wav"}}}
+            """#.utf8)),
+            ("source/ref-hype.wav", Data([1])),
+        ])
+        XCTAssertThrowsError(try GVoice.import(pack, into: lib))
+        // No orphaned "x-hype" directory left behind despite "hype" being listed
+        // (and thus resolvable) before the failing "base".
+        XCTAssertThrowsError(try lib.get("x-hype"))
+    }
+
+    /// `provenance` is opaque to this build but must not be dropped on
+    /// import -> re-export — it's how a re-bake stays reproducible.
+    func testProvenanceRoundTrips() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":1,"name":"Cruz","variants":["base"],
+             "source":{"base":{"audio":"source/ref.wav"}},
+             "provenance":{"source":"latent-inversion","config":{"seed":7}}}
+            """#.utf8)),
+            ("source/ref.wav", Data([1])),
+        ])
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertEqual(meta.provenance, .object([
+            "source": .string("latent-inversion"),
+            "config": .object(["seed": .number(7)]),
+        ]))
+        let reexported = try manifest(try GVoice.export(meta.slug, from: lib))
+        XCTAssertEqual(reexported.provenance, meta.provenance)
+    }
+
+    /// An independently-named voice that merely LOOKS like a variant by slug
+    /// (e.g. "dj-nova" next to "dj") must never be swept into "dj"'s export —
+    /// only real variants (created via `saveAt`, carrying `variantOf`) count.
+    func testExportDoesNotAdoptSlugCoincidentalSiblings() throws {
+        _ = try lib.save(name: "Dj", refWav: Data([1]), refText: "")
+        _ = try lib.save(name: "Dj Nova", refWav: Data([2]), refText: "")
+        let pack = try GVoice.export("dj", from: lib)
+        XCTAssertEqual(try manifest(pack).variants, ["base"])
+        XCTAssertFalse(try members(pack).contains { $0.contains("nova") })
     }
 
     func testExportUnknownSlugThrows() {
