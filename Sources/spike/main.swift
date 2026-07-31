@@ -110,7 +110,10 @@ func usage() -> Never {
          + "   or: spike serve-llm <llm-backend-id> [port]   "
          + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n"
          + "   or: spike bakeoff [outPath] [--dry]   "
-         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n").utf8))
+         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n"
+         + "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> "
+         + "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] "
+         + "[--engine <id>:<file>=<value>]... [--no-source]\n").utf8))
     exit(2)
 }
 
@@ -331,6 +334,132 @@ if CommandLine.arguments.dropFirst().first == "bakeoff" {
     let models: [LLMBackendID] = [.qwen3_1_7b, .gemma4_e2b, .gemma4_e4b, .qwen3_8b]
     await Bakeoff.run(models: models, outPath: outPath, dryRun: dryRun)
     exit(0)
+}
+
+// MARK: - gvoice-build subcommand
+//
+// `spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
+//     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+//     [--engine <engineId>:<filename>=<value>]...  [--no-source]`
+//
+// Builds one reproducible `.gvoice` pack from loose files/values on the
+// command line — no interactive prompts, no hardcoded voice data. `--engine`
+// may repeat (once per `engines/<id>/<filename>` member); `<value>` is either
+// `@<path>` (read that file's raw bytes) or a literal string written as-is
+// (UTF-8) — e.g. `--engine kokoro:voice.json=@voice.json` vs.
+// `--engine kokoro:voice.json={"speaker":"bf_emma"}`. `--strip-comment-lines`
+// drops trailing lines starting with `#` from ref text (some transcript
+// exports append `# window:`/`# dur_target:`-style metadata comments).
+//
+// Follows docs/gvoice-format.md via the same library->export path proven in
+// GVoiceTests: build a throwaway VoiceLibrary in a temp dir, `saveAt` the
+// voice into it, GVoice.export it, write the Data, remove the temp dir.
+if CommandLine.arguments.dropFirst().first == "gvoice-build" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+
+    func gvoiceBuildUsage() -> Never {
+        die("""
+            usage: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
+                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+                     [--engine <engineId>:<filename>=<value>]...  [--no-source]
+                   <value> is @<path> to read a file's raw bytes, or a literal string written as UTF-8.
+            """)
+    }
+
+    var name: String?
+    var slug: String?
+    var out: String?
+    var refWavPath: String?
+    var refText: String?
+    var refTextFile: String?
+    var stripCommentLines = false
+    var includeSource = true
+    var engineSpecs: [String] = []
+
+    var it = sub.makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--name": name = it.next()
+        case "--slug": slug = it.next()
+        case "--out": out = it.next()
+        case "--ref-wav": refWavPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--ref-text-file": refTextFile = it.next()
+        case "--strip-comment-lines": stripCommentLines = true
+        case "--no-source": includeSource = false
+        case "--engine":
+            guard let spec = it.next() else { gvoiceBuildUsage() }
+            engineSpecs.append(spec)
+        default: gvoiceBuildUsage()
+        }
+    }
+
+    guard let name, let slug, let out else { gvoiceBuildUsage() }
+    guard refText == nil || refTextFile == nil else {
+        die("gvoice-build: pass at most one of --ref-text / --ref-text-file")
+    }
+
+    func resolveValue(_ raw: String) throws -> Data {
+        if raw.hasPrefix("@") {
+            return try Data(contentsOf: URL(fileURLWithPath: String(raw.dropFirst())))
+        }
+        return Data(raw.utf8)
+    }
+
+    do {
+        var resolvedRefText = ""
+        if let refText {
+            resolvedRefText = refText
+        } else if let refTextFile {
+            resolvedRefText = try String(contentsOf: URL(fileURLWithPath: refTextFile), encoding: .utf8)
+        }
+        if stripCommentLines {
+            var lines = resolvedRefText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            // Trailing blank lines (e.g. a file's final newline) must not stop the
+            // strip before it reaches the actual comment lines above them.
+            while let last = lines.last {
+                let trimmed = last.trimmingCharacters(in: .whitespaces)
+                guard trimmed.isEmpty || trimmed.hasPrefix("#") else { break }
+                lines.removeLast()
+            }
+            resolvedRefText = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let refWav: Data? = try refWavPath.map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+
+        // "engineId:filename=value", repeatable.
+        var engines: [String: [String: Data]] = [:]
+        for spec in engineSpecs {
+            guard let colonIdx = spec.firstIndex(of: ":"),
+                  let eqIdx = spec[colonIdx...].firstIndex(of: "=")
+            else { die("gvoice-build: bad --engine spec '\(spec)', want engineId:filename=value") }
+            let engineID = String(spec[spec.startIndex..<colonIdx])
+            let filename = String(spec[spec.index(after: colonIdx)..<eqIdx])
+            let value = String(spec[spec.index(after: eqIdx)...])
+            guard !engineID.isEmpty, !filename.isEmpty else {
+                die("gvoice-build: bad --engine spec '\(spec)', want engineId:filename=value")
+            }
+            engines[engineID, default: [:]][filename] = try resolveValue(value)
+        }
+
+        guard refWav != nil || !engines.isEmpty else {
+            die("gvoice-build: nothing to pack — pass --ref-wav and/or --engine")
+        }
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gvoice-build-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let lib = VoiceLibrary(directory: tempDir)
+        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText, engines: engines)
+        let packData = try GVoice.export(slug, from: lib, includeSource: includeSource)
+        try packData.write(to: URL(fileURLWithPath: out))
+        print("wrote \(out) (\(packData.count) bytes)")
+        exit(0)
+    } catch {
+        die("gvoice-build failed: \(error)")
+    }
 }
 
 var args: [String: String] = [:]
