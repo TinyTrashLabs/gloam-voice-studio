@@ -151,7 +151,7 @@ public enum GVoice {
                 baseMeta = try library.save(name: manifest.name, refWav: ref,
                                             refText: source?.text ?? "", engines: assets)
             } else {
-                let baseSlug = baseMeta?.slug ?? (try Slug.slugify(manifest.name))
+                let baseSlug = try baseMeta?.slug ?? Slug.slugify(manifest.name)
                 try library.saveAt(slug: "\(baseSlug)-\(key)", name: "\(manifest.name) \(key)",
                                    refWav: ref, refText: source?.text ?? "", engines: assets)
             }
