@@ -232,42 +232,26 @@ public enum LuxReferenceWindow {
         }
         let floor = max(loudest * 0.08, 0.008)
 
-        // Pick the DENSEST window, not the first one.
+        // Skip lead-in silence, but only lead-in: search a bounded prefix. An
+        // unbounded scan slides the whole window down the clip whenever a quiet
+        // opening sits under a floor set by a loud passage later — on a 58s
+        // reference that silently selected the LAST 30 seconds, a different
+        // part of the recording than the stored transcript describes.
         //
-        // LuxTTS sizes its output from the prompt's frames-per-token ratio, and
-        // fills any surplus with SILENCE rather than slower phonemes — so a
-        // pausey reference produces pauses at arbitrary places mid-phrase. The
-        // ratio is a property of the slice we choose: on a real 28.5s clip the
-        // first 14.6s measured 8.34 frames/token against 7.59 for the whole
-        // recording, i.e. cutting from the front made the clone 10% pausier
-        // than the speaker actually is.
-        //
-        // Pace can compensate, but only by pushing the graph's speed toward the
-        // ~1.25 where the flow matcher starts to whisper and slur. Choosing a
-        // denser slice fixes it at the source and leaves pace as headroom.
-        //
-        // Scored over candidate starts a beat apart: speech fraction is what we
-        // want, and a small bonus for starting just after a pause keeps the
-        // window from opening mid-word.
-        let stepFrames = max(1, Int(0.25 / 0.02))
-        let windowFrames = maxSamples / frame
-        var start = 0
-        var bestScore = -Double.infinity
-        var f0 = 0
-        while f0 * frame + maxSamples <= samples.count {
-            let hi = min(frameCount, f0 + windowFrames)
-            guard hi > f0 else { break }
-            var loud = 0
-            for f in f0 ..< hi where energy[f] > floor { loud += 1 }
-            var score = Double(loud) / Double(hi - f0)
-            // Opening just after a pause is worth a little; opening mid-word is
-            // worth avoiding. Cheap proxy: the frame before the window is quiet
-            // and the first frame is not.
-            if f0 == 0 || (energy[f0 - 1] <= floor && energy[f0] > floor) { score += 0.02 }
-            if score > bestScore { bestScore = score; start = f0 * frame }
-            f0 += stepFrames
-        }
-        start = min(max(0, start), max(0, samples.count - maxSamples))
+        // Scoring candidate windows by speech DENSITY was tried and reverted
+        // (2026-08-01). It measured no benefit — on a real 28.5s clone the
+        // opening was already the densest 15s (60.9% speech vs 53-58% later) —
+        // and it reproduced the sliding bug, because a quiet opening scores as
+        // silence against a floor set by a louder passage. The pausiness it was
+        // meant to fix was DRAWL, which density cannot see: that speaker had
+        // high density and still read slow. Per-voice pace is the control for
+        // that.
+        let onsetLimit = min(frameCount, Int(5.0 / 0.02))
+        var startFrame = 0
+        while startFrame < onsetLimit, energy[startFrame] <= floor { startFrame += 1 }
+        if startFrame >= onsetLimit { startFrame = 0 }
+        var start = max(0, startFrame * frame - Int(Double(sampleRate) * 0.1))
+        start = min(start, samples.count - maxSamples)
         var end = start + maxSamples
 
         let searchFloorFrame = (end - Int(Double(maxSamples) * 0.25)) / frame
