@@ -412,6 +412,169 @@ if CommandLine.arguments.dropFirst().first == "lux-compare" {
     exit(0)
 }
 
+// MARK: - lux-bench subcommand
+//
+// `spike lux-bench --ref <ref.wav> --ref-text <transcript> (--text <line>|--text-file <path>)
+//      --onnx-dir <dir> [--max-chunk <n>] [--out <file.wav>] [--stages]`
+//
+// The chunking bench behind picking `maxChunkChars` for LuxTTS. lux-compare
+// renders ONE chunk; the device renders a line as SEVERAL chunks through one
+// live engine, re-paying the prompt-region ODE cost per chunk. This replicates
+// that loop in-process — same chunker as gloam-dj's SupertonicEngine.chunkText,
+// same engine instance across chunks, so peak footprint and total wall time
+// mean what they mean on device. `--stages` turns on LuxEngine.stageLog to
+// show where each chunk's time goes (text_encoder / fm steps / vocos).
+if CommandLine.arguments.dropFirst().first == "lux-bench" {
+    var refPath: String?, refText: String?, text: String?
+    var onnxDir: String?, outPath: String?
+    var maxChunk = 200
+    var stages = false
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--text-file":
+            if let p = it.next() {
+                text = (try? String(contentsOfFile: p, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        case "--onnx-dir": onnxDir = it.next()
+        case "--out": outPath = it.next()
+        case "--max-chunk": maxChunk = Int(it.next() ?? "200") ?? 200
+        case "--stages": stages = true
+        default: die("lux-bench: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let refText, let text, let onnxDir else {
+        die("usage: spike lux-bench --ref <ref.wav> --ref-text <transcript> "
+            + "(--text <line>|--text-file <path>) --onnx-dir <dir> "
+            + "[--max-chunk <n>] [--out <file.wav>] [--stages]")
+    }
+
+    // Port of gloam-dj SupertonicEngine.chunkText — sentence split with an
+    // abbreviation guard, then greedy packing up to maxLen. Kept verbatim so
+    // the bench splits exactly where the device splits.
+    func chunkText(_ text: String, maxLen: Int) -> [String] {
+        let paras = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let abbrev = ["Mr.", "Mrs.", "Ms.", "Dr.", "Prof.", "Sr.", "Jr.", "Ph.D.",
+                      "etc.", "e.g.", "i.e.", "vs.", "Inc.", "Ltd.", "Co.", "Corp.",
+                      "St.", "Ave.", "Blvd."]
+        var chunks: [String] = []
+        for para in paras {
+            var sentences: [String] = []
+            var current = ""
+            let scalars = Array(para)
+            var i = 0
+            while i < scalars.count {
+                current.append(scalars[i])
+                let c = scalars[i]
+                let atBoundary = (c == "." || c == "!" || c == "?")
+                    && i + 1 < scalars.count && scalars[i + 1] == " "
+                if atBoundary {
+                    let tail = current.split(separator: " ").last.map(String.init) ?? ""
+                    let isInitial = tail.count == 2 && tail.hasSuffix(".")
+                        && (tail.first?.isUppercase ?? false)
+                    if !abbrev.contains(tail) && !isInitial {
+                        sentences.append(current.trimmingCharacters(in: .whitespaces))
+                        current = ""
+                        i += 1
+                    }
+                }
+                i += 1
+            }
+            let last = current.trimmingCharacters(in: .whitespaces)
+            if !last.isEmpty { sentences.append(last) }
+            var packed = ""
+            for s in sentences {
+                if packed.isEmpty {
+                    packed = s
+                } else if packed.count + s.count + 1 <= maxLen {
+                    packed += " " + s
+                } else {
+                    chunks.append(packed)
+                    packed = s
+                }
+            }
+            if !packed.isEmpty { chunks.append(packed) }
+        }
+        return chunks.isEmpty ? [text] : chunks
+    }
+
+    /// Current phys_footprint in GB — the number jetsam actually kills on.
+    func footprintGB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        return Double(info.phys_footprint) / Double(1 << 30)
+    }
+
+    do {
+        let phonemizer = try await MisakiPhonemizer.prepared()
+        let tokenizer = try LuxTokenizer(phonemizer: phonemizer)
+        let promptIDs = try tokenizer.textToTokenIDs(refText).map(Int64.init)
+        let pieces = chunkText(text, maxLen: maxChunk)
+        var chunkIDs: [[Int64]] = []
+        for p in pieces {
+            let ids = try tokenizer.textToTokenIDs(p).map(Int64.init)
+            if !ids.isEmpty { chunkIDs.append(ids) }
+        }
+        let engine = try LuxEngine(modelDir: URL(fileURLWithPath: onnxDir))
+        if stages {
+            engine.stageLog = { name, secs in
+                print(String(format: "    stage %-14@ %7.3fs", name as NSString, secs))
+            }
+        }
+        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let prompt = try LuxOnnx.encodePrompt(samples24k: samples24k, tokens: promptIDs)
+        print("prompt: \(prompt.frames) frames, \(prompt.tokens.count) tokens; "
+              + "text \(text.count) chars -> \(chunkIDs.count) chunks @ maxChunk \(maxChunk) "
+              + "(\(pieces.map { "\($0.count)" }.joined(separator: "/")) chars)")
+
+        var all: [Float] = []
+        var rate = 48_000
+        var totalRender = 0.0
+        var totalAudio = 0.0
+        for (i, ids) in chunkIDs.enumerated() {
+            let t0 = Date()
+            let (audio, r) = try engine.synthesize(
+                textIDs: ids, prompt: prompt, numSteps: 4, speed: 1.0,
+                tShift: 0.5, guidance: 3.0, dualPath48k: true)
+            let wall = Date().timeIntervalSince(t0)
+            rate = r
+            let secs = Double(audio.count) / Double(r)
+            totalRender += wall
+            totalAudio += secs
+            if i > 0 { all.append(contentsOf: [Float](repeating: 0, count: Int(0.3 * Double(r)))) }
+            all.append(contentsOf: audio)
+            print(String(format: "  chunk %d/%d: %3d tokens, %6.2fs audio in %6.2fs  footprint %.2f GB",
+                         i + 1, chunkIDs.count, ids.count, secs, wall, footprintGB()))
+        }
+        var ru = rusage()
+        getrusage(RUSAGE_SELF, &ru)
+        print(String(format: "TOTAL: %.2fs audio in %.2fs render (RTF %.2f)  peakRSS %.2f GB",
+                     totalAudio, totalRender, totalRender / max(0.01, totalAudio),
+                     Double(ru.ru_maxrss) / Double(1 << 30)))
+        if let outPath {
+            try WAVWriter.write(samples: all, sampleRate: rate, to: URL(fileURLWithPath: outPath))
+            print("wrote \(outPath)")
+        }
+    } catch {
+        die("lux-bench: \(error)")
+    }
+    exit(0)
+}
+
 // MARK: - pocket subcommand
 //
 // `spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav>

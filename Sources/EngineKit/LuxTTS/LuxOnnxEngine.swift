@@ -98,6 +98,40 @@ public enum LuxOnnx {
         return nil
     }
 
+    /// Converts a user-facing pace into the `speed` the graph wants.
+    ///
+    /// The text encoder sizes the WHOLE sequence:
+    ///     F = promptFrames/promptTokens × (promptTokens + textTokens) / speed
+    /// and the audio you hear is what is left after the prompt region:
+    ///     generated = F − promptFrames
+    ///
+    /// So `speed` divides the prompt region too, and the entire reduction lands
+    /// on the generated part. With a 28.5s reference that is a 3.3× lever:
+    /// asking for 1.08 produced audio 24% shorter, and 1.25 produced 65%
+    /// shorter — a Pace slider built on this would mean something different for
+    /// every voice, because the leverage grows with reference length.
+    ///
+    /// Note generated(1.0) = ratio × textTokens exactly (the ratio × promptTokens
+    /// term IS promptFrames and cancels). So for a target of `pace`× faster:
+    ///     want   = ratio × textTokens / pace
+    ///     speed  = (promptFrames + ratio × textTokens) / (promptFrames + want)
+    /// which is what this returns. pace 1.10 then means 10% shorter output for
+    /// any voice, any reference length.
+    static func graphSpeed(pace: Float, promptFrames: Int, promptTokens: Int, textTokens: Int) -> Float {
+        guard pace > 0, promptFrames > 0, promptTokens > 0, textTokens > 0 else { return pace }
+        let ratio = Float(promptFrames) / Float(promptTokens)
+        let generated = ratio * Float(textTokens)
+        let want = generated / pace
+        guard want > 0 else { return pace }
+        let raw = (Float(promptFrames) + generated) / (Float(promptFrames) + want)
+        // Clamp what the GRAPH sees, not what the user asks for. The flow
+        // matcher slurs past roughly 1.25 here, and that limit is a property of
+        // the model — whereas the pace a given limit corresponds to depends on
+        // reference length. Clamping the graph keeps every voice clean while
+        // letting the pace control stay linear and generous.
+        return min(1.25, max(0.75, raw))
+    }
+
     /// Longest reference clip we will encode. NOT a truncation point: truncating
     /// audio while keeping the whole transcript makes the text encoder think the
     /// reference held more speech than it could hear, and every line comes out
@@ -248,6 +282,21 @@ public final class LuxEngine {
     /// Run options carrying the arena-shrinkage config; reused for every Run.
     private var runOpts: OpaquePointer?
 
+    /// Bench-only stage timing hook: (stage name, seconds). Pure observation —
+    /// when nil (the default, and always in the apps) nothing is measured and
+    /// the render path is unchanged. spike's lux-bench sets it to find where a
+    /// render's wall time actually goes.
+    public var stageLog: ((String, Double) -> Void)?
+
+    @inline(__always)
+    private func timed<R>(_ stage: String, _ body: () throws -> R) rethrows -> R {
+        guard let stageLog else { return try body() }
+        let t0 = DispatchTime.now()
+        let r = try body()
+        stageLog(stage, Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e9)
+        return r
+    }
+
     /// One env-level CPU **arena with kSameAsRequested growth**, shared by all
     /// three sessions via `session.use_env_allocators`.
     ///
@@ -362,10 +411,17 @@ public final class LuxEngine {
         // the more it eats, which is why this got worse once references stopped
         // being truncated. Without it, output holds at ~0.085 s/token across
         // every reference length.
-        let speedT = try makeFloatTensor([speed], shape: [])
-        let te = try run(textEncoder, inputs: [(teIn[0], tokensT), (teIn[1], promptT),
-                                               (teIn[2], featLenT), (teIn[3], speedT)],
-                         outputs: [teOut[0]])
+        // `speed` from callers is a PACE: 1.10 means "10% faster to listen to".
+        // The graph wants something else — see LuxOnnx.graphSpeed.
+        let graphSpeed = LuxOnnx.graphSpeed(
+            pace: speed, promptFrames: prompt.frames,
+            promptTokens: prompt.tokens.count, textTokens: textIDs.count)
+        let speedT = try makeFloatTensor([graphSpeed], shape: [])
+        let te = try timed("text_encoder") {
+            try run(textEncoder, inputs: [(teIn[0], tokensT), (teIn[1], promptT),
+                                          (teIn[2], featLenT), (teIn[3], speedT)],
+                    outputs: [teOut[0]])
+        }
         releaseValue(tokensT); releaseValue(promptT); releaseValue(featLenT); releaseValue(speedT)
         let tcShape = tensorShape(te[0])
         var cond = tensorFloats(te[0]); releaseValue(te[0])
@@ -408,9 +464,11 @@ public final class LuxEngine {
             let tCur = ts[step], tNext = ts[step + 1]
             let tT = try makeFloatTensor([tCur], shape: [])
             let xT = try makeFloatTensor(x, shape: [1, Int64(F), Int64(featDim)])
-            let o = try run(fmDecoder, inputs: [(fmIn[0], tT), (fmIn[1], xT), (fmIn[2], condT),
-                                                (fmIn[3], speechT), (fmIn[4], guidT)],
-                            outputs: [fmOut[0]])
+            let o = try timed("fm_step\(step)") {
+                try run(fmDecoder, inputs: [(fmIn[0], tT), (fmIn[1], xT), (fmIn[2], condT),
+                                            (fmIn[3], speechT), (fmIn[4], guidT)],
+                        outputs: [fmOut[0]])
+            }
             releaseValue(tT); releaseValue(xT)
             let v = tensorFloats(o[0]); releaseValue(o[0])
             guard v.count == x.count else {
@@ -442,14 +500,18 @@ public final class LuxEngine {
         // render, and keeps its ~80 MB out of the fm_decoder peak window
         // (measured 2.60 GB → 2.55 GB peak on the 12.6 s bench).
         if vocos == nil {
-            vocos = try makeSession(modelDir, "vocos.onnx")
-            (voIn, voOut) = try ioNames(vocos!)
-            guard voIn.count >= 1, voOut.count >= 2 else {
-                throw LuxOnnx.SynthError.engineInitFailed("unexpected vocos I/O arity (\(voOut.count) out)")
+            try timed("vocos_load") {
+                vocos = try makeSession(modelDir, "vocos.onnx")
+                (voIn, voOut) = try ioNames(vocos!)
+                guard voIn.count >= 1, voOut.count >= 2 else {
+                    throw LuxOnnx.SynthError.engineInitFailed("unexpected vocos I/O arity (\(voOut.count) out)")
+                }
             }
         }
         let vinT = try makeFloatTensor(vin, shape: [1, Int64(featDim), Int64(Tgen)])
-        let vo = try run(vocos, inputs: [(voIn[0], vinT)], outputs: [voOut[0], voOut[1]])
+        let vo = try timed("vocos_run") {
+            try run(vocos, inputs: [(voIn[0], vinT)], outputs: [voOut[0], voOut[1]])
+        }
         releaseValue(vinT)
         if let s = vocos {
             api.ReleaseSession(s)
