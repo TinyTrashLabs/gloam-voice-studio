@@ -1,5 +1,5 @@
 {
-  "originHash" : "288969c51bad43f5cdf4ab569895b492d3ad113e7821fad4808181d0930ca66b",
+  "originHash" : "229faeae8cc19452fd9cb93d262e0cae95f387f99313a0d01b7db73a10b06d66",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -51,6 +51,15 @@
       "location" : "https://github.com/ml-explore/mlx-swift-lm.git",
       "state" : {
         "revision" : "09deb8c4e9056fcd76b60718bb50325d1730572b"
+      }
+    },
+    {
+      "identity" : "onnxruntime-swift-package-manager",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/microsoft/onnxruntime-swift-package-manager.git",
+      "state" : {
+        "revision" : "12ce7374c86944e1f68f3a866d10105d8357f074",
+        "version" : "1.20.0"
       }
     },
     {

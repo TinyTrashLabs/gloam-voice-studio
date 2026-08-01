@@ -113,7 +113,9 @@ func usage() -> Never {
          + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n"
          + "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> "
          + "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] "
-         + "[--engine <id>:<file>=<value>]... [--no-source]\n").utf8))
+         + "[--engine <id>:<file>=<value>]... [--no-source]\n"
+         + "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
+         + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n").utf8))
     exit(2)
 }
 
@@ -317,6 +319,87 @@ if CommandLine.arguments.dropFirst().first == "lux-phonemes" {
         }
     } catch {
         die("\(error)")
+    }
+    exit(0)
+}
+
+// MARK: - lux-compare subcommand
+//
+// `spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line>
+//      --onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]`
+//
+// Renders ONE line, from ONE reference, through BOTH LuxTTS engines and writes
+// a wav per engine. This exists because the two live in different worlds: MLX
+// fp32 here, int8 ONNX on iOS (iOS forbids GPU submission while backgrounded,
+// so the phone cannot run the MLX path at all). Every quality argument between
+// them was previously made from measurements; this makes it a listening test.
+//
+// Both paths share LuxTokenizer, so phonemes are identical and the engine is
+// the only variable.
+if CommandLine.arguments.dropFirst().first == "lux-compare" {
+    var refPath: String?, refText: String?, text: String?
+    var onnxDir: String?, mlxDir: String?, outDir = "."
+    var speed: Float = 1.0
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--onnx-dir": onnxDir = it.next()
+        case "--mlx-dir": mlxDir = it.next()
+        case "--out-dir": outDir = it.next() ?? "."
+        case "--speed": speed = Float(it.next() ?? "1") ?? 1
+        default: die("lux-compare: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let refText, let text else {
+        die("usage: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
+            + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]")
+    }
+
+    do {
+        // One tokenizer for both engines — the comparison is of inference, not G2P.
+        let phonemizer = try await MisakiPhonemizer.prepared()
+        let tokenizer = try LuxTokenizer(phonemizer: phonemizer)
+        let textIDs = try tokenizer.textToTokenIDs(text).map(Int64.init)
+        let promptIDs = try tokenizer.textToTokenIDs(refText).map(Int64.init)
+        print("tokens: \(promptIDs.count) prompt, \(textIDs.count) text")
+
+        if let onnxDir {
+            let started = Date()
+            let engine = try LuxEngine(modelDir: URL(fileURLWithPath: onnxDir))
+            let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+            let prompt = try LuxOnnx.encodePrompt(samples24k: samples24k, tokens: promptIDs)
+            print("onnx prompt: \(prompt.frames) frames, \(prompt.tokens.count) tokens, "
+                  + String(format: "%.2f frames/token", Double(prompt.frames) / Double(max(1, prompt.tokens.count))))
+            let (audio, rate) = try engine.synthesize(
+                textIDs: textIDs, prompt: prompt, numSteps: 4, speed: speed,
+                tShift: 0.5, guidance: 3.0, dualPath48k: true)
+            let out = URL(fileURLWithPath: outDir).appendingPathComponent("lux_onnx.wav")
+            try WAVWriter.write(samples: audio, sampleRate: rate, to: out)
+            print(String(format: "onnx : %.2fs audio @ %d Hz in %.2fs -> %@",
+                         Double(audio.count) / Double(rate), rate,
+                         Date().timeIntervalSince(started), out.path))
+        }
+
+        if let mlxDir {
+            let started = Date()
+            let model = try await LuxSpeechModel.load(from: URL(fileURLWithPath: mlxDir))
+            var req = ProviderRequest(text: text)
+            req.refAudioPath = refPath
+            req.refText = refText
+            req.speed = speed
+            let audio = try await model.synthesize(req)
+            let out = URL(fileURLWithPath: outDir).appendingPathComponent("lux_mlx.wav")
+            try WAVWriter.write(samples: audio, sampleRate: 24000, to: out)
+            print(String(format: "mlx  : %.2fs audio @ 24000 Hz in %.2fs -> %@",
+                         Double(audio.count) / 24000.0,
+                         Date().timeIntervalSince(started), out.path))
+        }
+        if onnxDir == nil && mlxDir == nil { die("lux-compare: pass --onnx-dir and/or --mlx-dir") }
+    } catch {
+        die("lux-compare: \(error)")
     }
     exit(0)
 }

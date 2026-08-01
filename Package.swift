@@ -49,6 +49,13 @@ let package = Package(
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", .upToNextMajor(from: "2.5.0")),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMajor(from: "1.0.0")),
+        // ONNX Runtime, so LuxTTS can run the SAME int8 graphs the iOS apps ship
+        // (gloam-voice-studio-ios, gloam-dj) alongside this repo's native MLX
+        // implementation. Without it there is no way to A/B the two on one
+        // machine, and every quality question about the iOS port has to be
+        // argued from measurements instead of listened to.
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git",
+                 .upToNextMinor(from: "1.20.0")),
     ],
     targets: [
         .target(
@@ -78,6 +85,9 @@ let package = Package(
                 // On-device ASR (AppleTranscriber, zero downloads/network) backs
                 // LuxTTS's generate-then-verify retry loop — see LuxOutputVerifier.swift.
                 "SpeechKit",
+                // The ORT C API, for LuxOnnxEngine — the int8 ONNX LuxTTS path
+                // that mirrors what iOS ships, so both can be compared here.
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
