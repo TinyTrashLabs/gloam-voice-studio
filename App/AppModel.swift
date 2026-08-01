@@ -972,6 +972,11 @@ final class AppModel {
             return "Pick a preset speaker for this model."
         case .languageProviderUnavailable:
             return "This model's language provider isn't loaded yet."
+        case .referenceTooLong(_, let seconds, let maxSeconds):
+            return String(
+                format: "This voice's reference clip is %.0fs and could not be trimmed "
+                    + "automatically. LuxTTS needs %.0fs or less — re-record or re-import "
+                    + "it shorter.", seconds, maxSeconds)
         }
     }
 

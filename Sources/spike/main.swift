@@ -1,5 +1,6 @@
 import EngineKit
 import Foundation
+import Speech
 import MLX
 import MLXFFT
 import StudioKit
@@ -306,6 +307,62 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
 // table: prints the normalized text, the misaki→espeak-remapped token stream,
 // and (when a Homebrew espeak-ng is present) the reference espeak token stream
 // for a side-by-side diff.
+// MARK: - lux-window subcommand
+//
+// `spike lux-window --ref <in.wav> --max <seconds> --out <base>`
+// Re-cuts a reference clip to a shorter window and writes `<base>.wav` +
+// `<base>.txt` with a transcript re-derived from the CUT audio.
+//
+// Why re-derive rather than truncate the old transcript: LuxTTS sizes its
+// output from the prompt's frames-per-token ratio, so a transcript describing
+// more speech than the audio contains inflates that ratio and the duration
+// prediction runs away with it. Audio and text must describe the same span.
+if CommandLine.arguments.dropFirst().first == "lux-window" {
+    var refPath: String?, outBase: String?
+    var maxSeconds = 15.0
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--out": outBase = it.next()
+        case "--max": maxSeconds = Double(it.next() ?? "15") ?? 15
+        default: die("lux-window: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let outBase else {
+        die("usage: spike lux-window --ref <in.wav> --out <base> [--max <seconds>]")
+    }
+    do {
+        let samples = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let before = Double(samples.count) / Double(LuxOnnx.sampleRate)
+        // Speech Recognition auth: the window's transcript comes from an
+        // on-device ASR pass, which needs authorization the first time.
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            _ = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
+            }
+        }
+        guard let w = await LuxReferenceWindow.fit(
+            samples: samples, sampleRate: LuxOnnx.sampleRate,
+            refText: "", maxSeconds: maxSeconds)
+        else {
+            die("lux-window: could not establish a window (no on-device recognizer, "
+                + "or the transcript density gate rejected it)")
+        }
+        try WAVWriter.write(samples: w.samples, sampleRate: LuxOnnx.sampleRate,
+                            to: URL(fileURLWithPath: outBase + ".wav"))
+        try w.text.write(to: URL(fileURLWithPath: outBase + ".txt"),
+                         atomically: true, encoding: .utf8)
+        let words = w.text.split(whereSeparator: { $0.isWhitespace }).count
+        print(String(format: "%.2fs -> %.2fs  (%d words, %.2f w/s)  %@.wav/.txt",
+                     before, w.seconds, words, Double(words) / w.seconds, outBase))
+        print("text: \(w.text)")
+    } catch {
+        die("lux-window: \(error)")
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.dropFirst().first == "lux-phonemes" {
     guard let text = CommandLine.arguments.dropFirst(2).first else {
         die("usage: spike lux-phonemes \"text\"")
@@ -428,6 +485,7 @@ if CommandLine.arguments.dropFirst().first == "lux-bench" {
     var refPath: String?, refText: String?, text: String?
     var onnxDir: String?, outPath: String?
     var maxChunk = 200
+    var speed: Float = 1.0
     var stages = false
     var it = CommandLine.arguments.dropFirst(2).makeIterator()
     while let flag = it.next() {
@@ -443,6 +501,7 @@ if CommandLine.arguments.dropFirst().first == "lux-bench" {
         case "--onnx-dir": onnxDir = it.next()
         case "--out": outPath = it.next()
         case "--max-chunk": maxChunk = Int(it.next() ?? "200") ?? 200
+        case "--speed": speed = Float(it.next() ?? "1") ?? 1
         case "--stages": stages = true
         default: die("lux-bench: unknown flag \(flag)")
         }
@@ -548,7 +607,7 @@ if CommandLine.arguments.dropFirst().first == "lux-bench" {
         for (i, ids) in chunkIDs.enumerated() {
             let t0 = Date()
             let (audio, r) = try engine.synthesize(
-                textIDs: ids, prompt: prompt, numSteps: 4, speed: 1.0,
+                textIDs: ids, prompt: prompt, numSteps: 4, speed: speed,
                 tShift: 0.5, guidance: 3.0, dualPath48k: true)
             let wall = Date().timeIntervalSince(t0)
             rate = r

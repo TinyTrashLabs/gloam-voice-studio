@@ -30,6 +30,13 @@ public enum GVoice {
         public var slug: String?
         public var createdAt: String?
         public var variants: [String]?
+        /// Delivery pace for this voice, 1.0 = the reference's own pace.
+        ///
+        /// Belongs to the VOICE, not to the listener or the app: a slow,
+        /// deliberate reference needs ~1.7 to sound like radio while a brisk
+        /// one is already right at 1.0, so no single global setting serves
+        /// both. Absent means 1.0.
+        public var pace: Double?
         /// variant key -> source audio + its transcript
         public var source: [String: Source]?
         /// engine id -> variant key -> pack-relative member paths. A list

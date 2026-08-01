@@ -151,6 +151,7 @@ doc showed one; it was never implemented and this is the correction.)
   "slug": "billie-frost",
   "createdAt": "2026-07-24T04:11:00Z",
   "variants": ["base", "hype"],
+  "pace": 1.0,
   "source": {
     "base": { "audio": "source/ref.wav",      "text": "…" },
     "hype": { "audio": "source/ref-hype.wav", "text": "…" }
@@ -177,6 +178,7 @@ doc showed one; it was never implemented and this is the correction.)
 | `slug` | no | The producing library's own slug for the voice. Informational only — see "What import does NOT preserve" below; a reader MUST NOT rely on it as a stable cross-library identifier. |
 | `createdAt` | no | RFC 3339 UTC, from the producing library. Informational only, same caveat as `slug`. |
 | `variants` | no | Ordered variant keys. `base` is semantically first regardless of list position — see Rule 4. |
+| `pace` | no | Delivery pace, `1.0` = the reference's own pace. Absent means `1.0`. A property of the VOICE: a slow, deliberate reference needs ~1.7 to sound like radio while a brisk one is right at 1.0, so no single app-wide setting serves both. A reader that ignores it renders at the reference's own pace, which is always a valid reading. |
 | `source` | no | Variant key → `{ audio, text }`. Paths are pack-relative. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
