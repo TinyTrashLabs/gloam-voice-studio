@@ -24,7 +24,7 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
 
     public func transcribe(audioURL: URL, languageHint: String?) async throws -> Transcript {
         let locale = languageHint.map(Locale.init(identifier:)) ?? self.locale
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, iOS 26.0, *) {
             do { return try await analyzerTranscribe(audioURL: audioURL, locale: locale) }
             catch SpeechError.transcriptionFailed(let why) {
                 // The analyzer ran and found no speech — SFSpeech can't do
@@ -133,7 +133,7 @@ public final class AppleTranscriber: Transcriber, @unchecked Sendable {
         }
     }
 
-    @available(macOS 26.0, *)
+    @available(macOS 26.0, iOS 26.0, *)
     private func analyzerTranscribe(audioURL: URL, locale: Locale) async throws -> Transcript {
         let transcriber = SpeechTranscriber(
             locale: locale,

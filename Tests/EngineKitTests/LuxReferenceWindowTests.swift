@@ -37,13 +37,13 @@ final class LuxReferenceWindowTests: XCTestCase {
 
     func testLeavesAClipInsideTheWindowAlone() {
         let clip = build([(12, 0.5)])
-        let out = LuxReferenceWindow.window(samples: clip, sampleRate: sampleRate, maxSeconds: 30)
+        let out = LuxReferenceWindow.window(samples: clip, sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertEqual(out.count, clip.count)
     }
 
     func testCapsALongClipAtTheWindow() {
         let out = LuxReferenceWindow.window(
-            samples: build([(120, 0.5)]), sampleRate: sampleRate, maxSeconds: 30)
+            samples: build([(120, 0.5)]), sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertLessThanOrEqual(seconds(out), 30.0)
         XCTAssertGreaterThan(seconds(out), 18.0)
     }
@@ -51,7 +51,7 @@ final class LuxReferenceWindowTests: XCTestCase {
     func testSkipsLeadInSilence() {
         // 8s of silence then speech: a blind head-slice would be a quarter dead.
         let out = LuxReferenceWindow.window(
-            samples: build([(8, 0), (100, 0.5)]), sampleRate: sampleRate, maxSeconds: 30)
+            samples: build([(8, 0), (100, 0.5)]), sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertGreaterThan(peak(out, from: 0.5, to: 25), 0.1)
     }
 
@@ -62,7 +62,7 @@ final class LuxReferenceWindowTests: XCTestCase {
     func testDoesNotSlideThroughTheClipWhenTheOpeningIsQuiet() {
         // Quiet-but-real speech for 40s, then a much louder passage.
         let clip = build([(40, 0.05), (40, 1.0)])
-        let out = LuxReferenceWindow.window(samples: clip, sampleRate: sampleRate, maxSeconds: 30)
+        let out = LuxReferenceWindow.window(samples: clip, sampleRate: sampleRate, maxSeconds: 30).samples
         // The window must still come from the opening, not the loud tail.
         XCTAssertLessThan(out.map(abs).max() ?? 0, 0.5)
     }
@@ -71,7 +71,7 @@ final class LuxReferenceWindowTests: XCTestCase {
         // Speech to 27s, a 1s gap, then speech running past the window.
         let out = LuxReferenceWindow.window(
             samples: build([(27, 0.5), (1, 0), (90, 0.5)]),
-            sampleRate: sampleRate, maxSeconds: 30)
+            sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertGreaterThan(seconds(out), 27.0)
         XCTAssertLessThan(seconds(out), 28.5)
     }
@@ -79,13 +79,13 @@ final class LuxReferenceWindowTests: XCTestCase {
     func testKeepsTheFullWindowWhenTheOnlyPauseWouldCostTooMuchOfIt() {
         let out = LuxReferenceWindow.window(
             samples: build([(5, 0.5), (1, 0), (120, 0.5)]),
-            sampleRate: sampleRate, maxSeconds: 30)
+            sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertEqual(seconds(out), 30.0, accuracy: 0.2)
     }
 
     func testFadesTheEdgesSoAMidSignalCutDoesNotClick() {
         let out = LuxReferenceWindow.window(
-            samples: build([(120, 0.5)]), sampleRate: sampleRate, maxSeconds: 30)
+            samples: build([(120, 0.5)]), sampleRate: sampleRate, maxSeconds: 30).samples
         XCTAssertLessThan(abs(out.first ?? 1), 0.01)
         XCTAssertLessThan(abs(out.last ?? 1), 0.01)
     }

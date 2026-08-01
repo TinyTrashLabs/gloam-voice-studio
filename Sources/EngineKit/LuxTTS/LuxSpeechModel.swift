@@ -198,7 +198,19 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
         // says is the precondition for truncating at all.
         var effectiveRefText = refText
         let refSeconds = Double(rawAudio.size) / Double(LuxMelFeatures.sampleRate)
-        if refSeconds > LuxReferenceWindow.maxSeconds {
+        let refURL = URL(fileURLWithPath: path)
+
+        // A pack that carries its own window is authoritative: the window is
+        // part of the voice, and re-deriving it here would give every machine
+        // a slightly different reference for the same voice.
+        if let stored = LuxReferenceWindow.storedRendition(forReference: refURL),
+            let storedAudio = try? LuxReferenceWindow.loadRenditionAudio(
+                stored, forReference: refURL)
+        {
+            luxLog.debug("luxtts: using the voice's stored reference window")
+            rawAudio = MLXArray(storedAudio)
+            effectiveRefText = stored.text
+        } else if refSeconds > LuxReferenceWindow.maxSeconds {
             guard let window = await LuxReferenceWindow.fit(
                 samples: rawAudio.asArray(Float.self),
                 sampleRate: LuxMelFeatures.sampleRate,
@@ -213,6 +225,11 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             luxLog.notice(
                 "luxtts: reference \(refSeconds, format: .fixed(precision: 1))s over the \(LuxReferenceWindow.maxSeconds, format: .fixed(precision: 0))s cap — windowed to \(window.seconds, format: .fixed(precision: 1))s, transcript re-derived on-device"
             )
+            // Persist it beside the voice so it survives into any export, and
+            // so the ASR pass happens once per voice rather than per cold
+            // prompt cache.
+            LuxReferenceWindow.store(
+                window, forReference: refURL, sampleRate: LuxMelFeatures.sampleRate)
             rawAudio = MLXArray(window.samples)
             effectiveRefText = window.text
         }

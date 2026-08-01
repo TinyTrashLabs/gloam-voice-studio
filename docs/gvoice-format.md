@@ -1,9 +1,14 @@
 # The `.gvoice` pack format
 
-**This document is the source of truth for `.gvoice`.** The Swift implementation
-(`Sources/StudioKit/GVoice.swift`) and the Python implementation
-(`gloam-voice-engine/src/gloam_voice_engine/voices.py`) both conform to it. When
-they disagree, this document wins; when this document is wrong, fix it here first.
+**This document is the source of truth for `.gvoice`.** The Swift
+implementation (`Sources/StudioKit/GVoice.swift`) conforms to it. When they
+disagree, this document wins; when this document is wrong, fix it here first.
+
+`gloam-voice-engine`'s `voices.py` does NOT implement this format — it reads
+and writes a flat zip of `meta.json` + `ref.wav` with no manifest, no
+`source/`, and no `engines/`, and cannot open a real pack. Treat it as a
+separate legacy container that happens to share the extension until it is
+either brought into conformance or renamed.
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, and **MAY** in
 this document are to be interpreted as in RFC 2119: MUST/MUST NOT are hard
@@ -15,9 +20,13 @@ A `.gvoice` file is a zip holding **one voice identity**, its **source
 material**, and **per-engine renditions** derived from that material. The zip
 MAY use deflate or store compression; readers MUST accept either.
 
-There is currently exactly one version of this format (`gvoice: 1`) and no
-packs in the wild predating it — nothing below describes a migration, only how
-the format is meant to evolve once that stops being true.
+The current version is `gvoice: 2` and there are no packs in the wild —
+nothing below describes a migration, only how the format is meant to evolve
+once that stops being true. Version 2 changed one thing: an engine's variant
+now maps to a LIST of member paths rather than a single one. Under version 1 a
+rendition needing more than one file (audio plus its transcript, say) wrote
+every file into the zip but could name only the last of them in the manifest,
+so import silently dropped the rest.
 
 ---
 
@@ -36,7 +45,7 @@ backends vary in what they need:
 | `chatterbox-turbo` | **required** | none | — | `source/` audio |
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
-| `lux-tts` | **required** | none | — | `source/` audio |
+| `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
 | `supertonic` | **none** | none | F1–F5 / M1–M5 (`supertonicVoices`) | `style.json` — `style_ttl` + `style_dp` |
 
 `supertonic` is one backend, not two — there is no separate `supertonic-2`/
@@ -59,6 +68,9 @@ billie-frost.gvoice          (zip)
 │   ├── ref.wav
 │   └── ref-hype.wav
 └── engines/                 optional — one directory per engine
+    ├── lux-tts/
+    │   ├── ref.wav          the reference window LuxTTS conditions on
+    │   └── voice.json       { "audio": …, "text": …, "derivedFrom": { … } }
     ├── supertonic/
     │   ├── style.json
     │   └── style-hype.json
@@ -72,11 +84,59 @@ billie-frost.gvoice          (zip)
         └── voice.json       { "voiceId": "…" }
 ```
 
-`chatterbox`, `chatterbox-turbo`, `lux-tts`, `fish-s2-pro` and the Qwen Base
-models need no `engines/` directory — they consume `source/` audio directly,
-so a reader serving them reads `source` and ignores `engines` entirely. A
-manifest MAY still list such an engine pointing back into `source/`; readers
-MUST tolerate that but writers need not emit it.
+`chatterbox`, `chatterbox-turbo`, `fish-s2-pro` and the Qwen Base models need
+no `engines/` directory — they consume `source/` audio directly, so a reader
+serving them reads `source` and ignores `engines` entirely. A manifest MAY
+still list such an engine pointing back into `source/`; readers MUST tolerate
+that but writers need not emit it.
+
+### The `lux-tts` reference window
+
+`lux-tts` also consumes `source/` audio directly, with one exception. LuxTTS
+conditions on the reference as part of one attention sequence, and past roughly
+50 seconds of reference its saturating relative positional encoding stops
+separating positions: the sampler degrades into bursts of speech around dead
+air. Nothing errors — the audio simply comes back wrong. So a master longer
+than the engine's cap (30s) has to be cut down to a window before use.
+
+A window is part of the voice, not a detail of one reader's run. Deriving one
+costs a transcription pass, and a reader that derives its own gives every
+machine a slightly different reference for the same voice. So a pack SHOULD
+carry the window it wants used:
+
+```json
+{
+  "audio": "engines/lux-tts/ref.wav",
+  "text": "the transcript of the WINDOW, not of the master",
+  "derivedFrom": {
+    "audio": "source/ref.wav",
+    "startSeconds": 0.0,
+    "endSeconds": 28.54,
+    "sourceSeconds": 58.6,
+    "by": "on-device-asr"
+  }
+}
+```
+
+The window is stored as **real audio**, not as offsets into the master. Offsets
+would be smaller, but then every implementation would have to reproduce the cut
+— including its edge fade — sample-for-sample to condition the model on the
+same signal, and a spec that requires re-deriving a signal is a spec that
+drifts. `derivedFrom` keeps the provenance instead, so the window stays
+traceable to the master without being re-computable from it.
+
+`source/` MUST still hold the untouched master. The window is derived material;
+the master is what a future engine, a different cap, or a better cutter would
+start from again.
+
+`text` is REQUIRED and describes the window. A transcript that under-counts its
+audio is worse than none: LuxTTS derives output length from the prompt's
+frames-per-token ratio, so a short transcript against long audio inflates that
+ratio and the predicted duration runs away with it.
+
+A reader that finds no `lux-tts` entry and a master inside the cap MUST just
+use `source/`. One that finds a master over the cap and no window MAY derive
+its own, and SHOULD refuse rather than condition on the over-long master.
 
 Transcript text lives inline in the manifest (`source.<key>.text`), not as a
 sibling file — there is no `transcript.txt` member. (An earlier draft of this
@@ -86,7 +146,7 @@ doc showed one; it was never implemented and this is the correction.)
 
 ```json
 {
-  "gvoice": 1,
+  "gvoice": 2,
   "name": "Billie Frost",
   "slug": "billie-frost",
   "createdAt": "2026-07-24T04:11:00Z",
@@ -96,10 +156,12 @@ doc showed one; it was never implemented and this is the correction.)
     "hype": { "audio": "source/ref-hype.wav", "text": "…" }
   },
   "engines": {
-    "supertonic":   { "base": "engines/supertonic/style.json",
-                      "hype": "engines/supertonic/style-hype.json" },
-    "chatterbox":   { "base": "source/ref.wav" },
-    "qwen3-design": { "base": "engines/qwen3-design/voice.json" }
+    "supertonic":   { "base": ["engines/supertonic/style.json"],
+                      "hype": ["engines/supertonic/style-hype.json"] },
+    "lux-tts":      { "base": ["engines/lux-tts/ref.wav",
+                               "engines/lux-tts/voice.json"] },
+    "chatterbox":   { "base": ["source/ref.wav"] },
+    "qwen3-design": { "base": ["engines/qwen3-design/voice.json"] }
   },
   "provenance": {
     "source": "latent-inversion",
@@ -116,7 +178,7 @@ doc showed one; it was never implemented and this is the correction.)
 | `createdAt` | no | RFC 3339 UTC, from the producing library. Informational only, same caveat as `slug`. |
 | `variants` | no | Ordered variant keys. `base` is semantically first regardless of list position — see Rule 4. |
 | `source` | no | Variant key → `{ audio, text }`. Paths are pack-relative. |
-| `engines` | no | Engine id → variant key → pack-relative path. |
+| `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
 
 Engine ids SHOULD match `BackendID.rawValue` where a backend exists in

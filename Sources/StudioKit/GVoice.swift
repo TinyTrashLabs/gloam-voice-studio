@@ -8,7 +8,14 @@ import ZIPFoundation
 /// the Python engine (`voices.py`) conforms to the same document.
 public enum GVoice {
     /// Only version this build reads or writes.
-    public static let version = 1
+    ///
+    /// 2 restructured `engines`: a variant now maps to a LIST of member paths
+    /// instead of a single one. Under v1 an engine whose rendition needed more
+    /// than one file (audio + its transcript, say) wrote every file into the
+    /// zip but could name only the last in the manifest, so import silently
+    /// dropped the rest. That is a reinterpretation of an existing field, not
+    /// an additive change, so it takes a version bump.
+    public static let version = 2
 
     // MARK: manifest
 
@@ -25,8 +32,10 @@ public enum GVoice {
         public var variants: [String]?
         /// variant key -> source audio + its transcript
         public var source: [String: Source]?
-        /// engine id -> variant key -> pack-relative member path
-        public var engines: [String: [String: String]]?
+        /// engine id -> variant key -> pack-relative member paths. A list
+        /// because one rendition can be several files; single-file engines
+        /// carry a one-element list.
+        public var engines: [String: [String: [String]]]?
         /// Free-form, producer-defined record of how the renditions were made.
         /// Opaque to this reader — carried through import/export unchanged.
         public var provenance: JSONValue?
@@ -67,7 +76,7 @@ public enum GVoice {
                 for (filename, url) in files {
                     let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
                     entries.append((member, try Data(contentsOf: url)))
-                    manifest.engines?[engine, default: [:]][key] = member
+                    manifest.engines?[engine, default: [:]][key, default: []].append(member)
                 }
             }
         }
@@ -135,9 +144,18 @@ public enum GVoice {
             throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
         }
 
-        // Readers reject only versions newer than they understand (Rule: additive
-        // changes never bump `gvoice`); `< 1` is simply malformed.
-        guard (1...version).contains(manifest.gvoice) else {
+        // Readers reject only versions newer than they understand (Rule:
+        // additive changes never bump `gvoice`), with one floor: version 1
+        // predates the `engines` restructure, so its manifests do not decode
+        // here at all. No v1 pack was ever distributed — say so plainly rather
+        // than surfacing a decode error, and carry no compatibility path for a
+        // version that never shipped.
+        guard manifest.gvoice >= 2 else {
+            throw StudioError.invalidArchive(
+                "this pack is .gvoice version \(manifest.gvoice); version 1 predates the engines "
+                + "restructure and cannot be read — rebuild it")
+        }
+        guard manifest.gvoice <= version else {
             throw StudioError.invalidArchive(
                 "unsupported .gvoice version \(manifest.gvoice) (this build reads up to \(version))")
         }
@@ -167,15 +185,16 @@ public enum GVoice {
             let ref = sources[key]?.audio.flatMap(readOptional)
             var assets: [String: [String: Data]] = [:]
             for (engine, perVariant) in engines {
-                // Audio-driven engines point back into source/, already read above.
-                guard let member = perVariant[key],
-                      !normalizeMember(member).lowercased().hasPrefix("source/") else { continue }
+                guard let members = perVariant[key] else { continue }
                 let engineID = try safeComponent(engine)
-                let filename = try safeComponent((member as NSString).lastPathComponent)
-                guard let blob = readOptional(member) else { continue }
-                var bucket = assets[engineID] ?? [:]
-                bucket[filename] = blob
-                assets[engineID] = bucket
+                for member in members {
+                    // Audio-driven engines may point back into source/, which
+                    // is already read above as the reference.
+                    guard !normalizeMember(member).lowercased().hasPrefix("source/") else { continue }
+                    let filename = try safeComponent((member as NSString).lastPathComponent)
+                    guard let blob = readOptional(member) else { continue }
+                    assets[engineID, default: [:]][filename] = blob
+                }
             }
             return (ref, assets)
         }

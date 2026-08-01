@@ -395,9 +395,14 @@ if CommandLine.arguments.dropFirst().first == "lux-compare" {
             req.speed = speed
             let audio = try await model.synthesize(req)
             let out = URL(fileURLWithPath: outDir).appendingPathComponent("lux_mlx.wav")
-            try WAVWriter.write(samples: audio, sampleRate: 24000, to: out)
-            print(String(format: "mlx  : %.2fs audio @ 24000 Hz in %.2fs -> %@",
-                         Double(audio.count) / 24000.0,
+            // Ask the model its rate. Hardcoding 24 kHz here wrote the MLX take
+            // at half its true 48 kHz, which made it play back twice as long and
+            // an octave low — and looked exactly like the two engines disagreeing
+            // about pace. They do not; both use the same frames-per-token rule.
+            let mlxRate = model.sampleRate
+            try WAVWriter.write(samples: audio, sampleRate: mlxRate, to: out)
+            print(String(format: "mlx  : %.2fs audio @ %d Hz in %.2fs -> %@",
+                         Double(audio.count) / Double(mlxRate), mlxRate,
                          Date().timeIntervalSince(started), out.path))
         }
         if onnxDir == nil && mlxDir == nil { die("lux-compare: pass --onnx-dir and/or --mlx-dir") }

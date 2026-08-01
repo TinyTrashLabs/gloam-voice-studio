@@ -53,6 +53,99 @@ public enum LuxReferenceWindow {
         public let samples: [Float]
         public let text: String
         public let seconds: Double
+        /// Where the window sits in the master clip.
+        public let startSeconds: Double
+        public let sourceSeconds: Double
+    }
+
+    /// `engines/lux-tts/voice.json` — the metadata beside the materialized
+    /// window audio (see docs/gvoice-format.md).
+    ///
+    /// The window is stored as REAL AUDIO, not as offsets into the master.
+    /// Offsets would be smaller, but every implementation would then have to
+    /// reproduce the cut — including its edge fade — bit-for-bit to condition
+    /// the model on the same thing, and a spec that requires re-deriving a
+    /// signal is a spec that drifts. Shipping the audio makes the reference
+    /// the pack's, not the reader's. `derivedFrom` keeps the provenance so the
+    /// window is still traceable to the master it came out of.
+    public struct Rendition: Codable, Equatable, Sendable {
+        public struct DerivedFrom: Codable, Equatable, Sendable {
+            /// Pack-relative path of the master this was cut from.
+            public var audio: String?
+            public var startSeconds: Double
+            public var endSeconds: Double
+            /// Length of the master at derivation time. A master that no
+            /// longer matches has been replaced, and this window with it.
+            public var sourceSeconds: Double
+            /// How the transcript was produced.
+            public var by: String?
+        }
+        /// Pack-relative path of the window audio.
+        public var audio: String
+        /// Transcript of the WINDOW, not of the master.
+        public var text: String
+        public var derivedFrom: DerivedFrom?
+    }
+
+    /// Where a voice's LuxTTS rendition lives on disk, mirroring its layout
+    /// inside a pack (`engines/lux-tts/…` beside `source/`). VoiceLibrary
+    /// scans `engines/*`, so a window written here travels into every export
+    /// without further plumbing.
+    private static func renditionDir(forReference refURL: URL) -> URL {
+        refURL.deletingLastPathComponent().appendingPathComponent("engines/lux-tts")
+    }
+
+    public static let renditionAudioName = "ref.wav"
+    public static let renditionMetaName = "voice.json"
+
+    /// The voice's own window, or nil when it has none or the master it was
+    /// cut from is no longer the file on disk.
+    public static func storedRendition(forReference refURL: URL) -> Rendition? {
+        let metaURL = renditionDir(forReference: refURL).appendingPathComponent(renditionMetaName)
+        guard let data = try? Data(contentsOf: metaURL),
+            let rendition = try? JSONDecoder().decode(Rendition.self, from: data),
+            !rendition.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return rendition
+    }
+
+    /// Loads the window's audio at LuxTTS's mel rate. Throws if the file named
+    /// by the rendition isn't there or won't decode, so a broken window falls
+    /// back to deriving a fresh one rather than conditioning on nothing.
+    ///
+    /// Only the filename is taken from the rendition: `audio` is a
+    /// PACK-relative path, and on disk the file sits in the voice's own
+    /// engines directory.
+    public static func loadRenditionAudio(
+        _ rendition: Rendition, forReference refURL: URL
+    ) throws -> [Float] {
+        let url = renditionDir(forReference: refURL)
+            .appendingPathComponent((rendition.audio as NSString).lastPathComponent)
+        return try LuxOnnx.loadMono24k(url)
+    }
+
+    /// Writes a derived window as the voice's `lux-tts` rendition: the audio
+    /// itself plus the transcript that matches it.
+    public static func store(_ window: Window, forReference refURL: URL, sampleRate: Int) {
+        let dir = renditionDir(forReference: refURL)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let audioURL = dir.appendingPathComponent(renditionAudioName)
+        guard (try? WAVWriter.write(samples: window.samples, sampleRate: sampleRate, to: audioURL))
+            != nil
+        else { return }
+        let rendition = Rendition(
+            audio: "engines/lux-tts/\(renditionAudioName)",
+            text: window.text,
+            derivedFrom: Rendition.DerivedFrom(
+                audio: "source/\(refURL.lastPathComponent)",
+                startSeconds: window.startSeconds,
+                endSeconds: window.startSeconds + window.seconds,
+                sourceSeconds: window.sourceSeconds,
+                by: "on-device-asr"))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(rendition) else { return }
+        try? data.write(to: dir.appendingPathComponent(renditionMetaName))
     }
 
     /// Plausible speech rates, in words per second, for the windowed clip.
@@ -85,7 +178,9 @@ public enum LuxReferenceWindow {
         // a word boundary sounds tidier, but on-device recognition of a 58s
         // file came back with ten words for the first 30s — long-file results
         // are not dependable enough to cut on.
-        let trimmed = window(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
+        let cut = window(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
+        let trimmed = cut.samples
+        let startSeconds = Double(cut.start) / Double(sampleRate)
         guard Double(trimmed.count) / Double(sampleRate) >= maxSeconds * 0.5 else { return nil }
 
         guard SFSpeechRecognizer.authorizationStatus() == .authorized,
@@ -108,7 +203,9 @@ public enum LuxReferenceWindow {
         let rate = Double(words) / windowSeconds
         guard rate >= minWordsPerSecond, rate <= maxWordsPerSecond else { return nil }
 
-        return Window(samples: trimmed, text: text, seconds: windowSeconds)
+        return Window(
+            samples: trimmed, text: text, seconds: windowSeconds,
+            startSeconds: startSeconds, sourceSeconds: seconds)
     }
 
     /// The energy-based cut: start at the first speech (lead-in silence would
@@ -117,9 +214,9 @@ public enum LuxReferenceWindow {
     /// clone wizard's trimToWindow.
     static func window(
         samples: [Float], sampleRate: Int, maxSeconds: Double
-    ) -> [Float] {
+    ) -> (samples: [Float], start: Int) {
         let maxSamples = Int(maxSeconds * Double(sampleRate))
-        guard samples.count > maxSamples, maxSamples > 0 else { return samples }
+        guard samples.count > maxSamples, maxSamples > 0 else { return (samples, 0) }
 
         let frame = max(1, Int(Double(sampleRate) * 0.02))
         let frameCount = (samples.count + frame - 1) / frame
@@ -173,7 +270,7 @@ public enum LuxReferenceWindow {
             out[i] *= ramp
             out[out.count - 1 - i] *= ramp
         }
-        return out
+        return (out, start)
     }
 
     /// Transcribes a whole file, every utterance in it.

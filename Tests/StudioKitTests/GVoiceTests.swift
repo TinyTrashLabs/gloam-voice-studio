@@ -43,9 +43,9 @@ final class GVoiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: try lib.get("cruz").refURL), Data([1, 2, 3, 4]))
     }
 
-    func testManifestIsVersionOne() throws {
+    func testManifestCarriesTheCurrentVersion() throws {
         _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
-        XCTAssertEqual(try manifest(try GVoice.export("cruz", from: lib)).gvoice, 1)
+        XCTAssertEqual(try manifest(try GVoice.export("cruz", from: lib)).gvoice, 2)
     }
 
     // MARK: voices that are not recordings
@@ -84,7 +84,25 @@ final class GVoiceTests: XCTestCase {
                        ["manifest.json", "source/ref.wav", "engines/supertonic-3/style.json"])
         let m = try manifest(pack)
         XCTAssertEqual(m.source?["base"]?.audio, "source/ref.wav")
-        XCTAssertEqual(m.engines?["supertonic-3"]?["base"], "engines/supertonic-3/style.json")
+        XCTAssertEqual(m.engines?["supertonic-3"]?["base"], ["engines/supertonic-3/style.json"])
+    }
+
+    /// The defect that took gvoice to 2: a rendition of more than one file
+    /// (lux-tts is window audio + its transcript) wrote every file into the zip
+    /// but could name only one in the manifest, so import dropped the rest.
+    func testMultiFileEngineRenditionSurvivesRoundTrip() throws {
+        _ = try lib.save(
+            name: "Cruz", refWav: Data([1]), refText: "hi",
+            engines: ["lux-tts": ["ref.wav": Data([2]), "voice.json": Self.style]])
+        let pack = try GVoice.export("cruz", from: lib)
+        let listed = try manifest(pack).engines?["lux-tts"]?["base"] ?? []
+        XCTAssertEqual(listed.sorted(),
+                       ["engines/lux-tts/ref.wav", "engines/lux-tts/voice.json"])
+
+        let other = VoiceLibrary(directory: dir.appendingPathComponent("other"))
+        let meta = try GVoice.import(pack, into: other)
+        let installed = try other.entry(meta.slug).engines["lux-tts"] ?? [:]
+        XCTAssertEqual(Set(installed.keys), ["ref.wav", "voice.json"])
     }
 
     func testExportWithoutSourceOmitsAudio() throws {
@@ -173,9 +191,9 @@ final class GVoiceTests: XCTestCase {
     func testImportSkipsDanglingSourceMemberWhenOtherAssetsExist() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"X","variants":["base"],
+            {"gvoice":2,"name":"X","variants":["base"],
              "source":{"base":{"audio":"source/ref.wav"}},
-             "engines":{"supertonic":{"base":"engines/supertonic/style.json"}}}
+             "engines":{"supertonic":{"base":["engines/supertonic/style.json"]}}}
             """#.utf8)),
             ("engines/supertonic/style.json", Self.style),
         ])
@@ -190,7 +208,7 @@ final class GVoiceTests: XCTestCase {
     func testImportThrowsWhenAllBaseAssetsAreDangling() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"X","variants":["base"],"source":{"base":{"audio":"source/ref.wav"}}}
+            {"gvoice":2,"name":"X","variants":["base"],"source":{"base":{"audio":"source/ref.wav"}}}
             """#.utf8)),
         ])
         XCTAssertThrowsError(try GVoice.import(pack, into: lib)) {
@@ -205,7 +223,7 @@ final class GVoiceTests: XCTestCase {
     func testImportRejectsPathTraversal() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"X","variants":["base"],"engines":{"../../escape":{"base":"engines/x/y.json"}}}
+            {"gvoice":2,"name":"X","variants":["base"],"engines":{"../../escape":{"base":["engines/x/y.json"]}}}
             """#.utf8)),
             ("engines/x/y.json", Data("{}".utf8)),
         ])
@@ -222,7 +240,7 @@ final class GVoiceTests: XCTestCase {
     func testImportRejectsPathTraversalViaVariantKey() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"X","variants":["base","../../escape"],
+            {"gvoice":2,"name":"X","variants":["base","../../escape"],
              "source":{"base":{"audio":"source/ref.wav"},
                        "../../escape":{"audio":"source/ref-escape.wav"}}}
             """#.utf8)),
@@ -243,7 +261,7 @@ final class GVoiceTests: XCTestCase {
     func testImportIsAtomicWhenBaseFailsEvenIfListedLast() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"X","variants":["hype","base"],
+            {"gvoice":2,"name":"X","variants":["hype","base"],
              "source":{"hype":{"audio":"source/ref-hype.wav"}}}
             """#.utf8)),
             ("source/ref-hype.wav", Data([1])),
@@ -259,7 +277,7 @@ final class GVoiceTests: XCTestCase {
     func testProvenanceRoundTrips() throws {
         let pack = try GVoice.makeArchive(entries: [
             ("manifest.json", Data(#"""
-            {"gvoice":1,"name":"Cruz","variants":["base"],
+            {"gvoice":2,"name":"Cruz","variants":["base"],
              "source":{"base":{"audio":"source/ref.wav"}},
              "provenance":{"source":"latent-inversion","config":{"seed":7}}}
             """#.utf8)),
