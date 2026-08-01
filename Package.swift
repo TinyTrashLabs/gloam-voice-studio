@@ -94,7 +94,15 @@ let package = Package(
                 "SpeechKit",
                 // The ORT C API, for LuxOnnxEngine — the int8 ONNX LuxTTS path
                 // that mirrors what iOS ships, so both can be compared here.
-                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                // macOS ONLY. gloam-dj consumes EngineKit as a local package and
+                // vendors its own ONNX Runtime 1.27 xcframework (sherpa-onnx needs
+                // that version); pulling this one in unconditionally made Xcode
+                // fail with "Multiple commands produce onnxruntime.framework" and
+                // broke every iOS build in the sibling repo. The ONNX LuxTTS path
+                // exists here to A/B against MLX on a desktop — iOS already has
+                // its own ONNX engines and needs nothing from this.
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager",
+                         condition: .when(platforms: [.macOS])),
                 // sherpa-onnx C struct layouts for the Pocket TTS backend
                 // (PocketSpeechModel dlopens the actual library at runtime).
                 "CSherpaOnnx",

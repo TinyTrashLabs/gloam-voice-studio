@@ -23,7 +23,11 @@
 import Accelerate
 import AVFoundation
 import Foundation
+// ORT is a macOS-only dependency here — see Package.swift. iOS consumers of
+// EngineKit vendor their own ONNX Runtime and must not pull in a second.
+#if os(macOS)
 import OnnxRuntimeBindings
+#endif
 
 /// Namespace for the ONNX LuxTTS path's shared types.
 public enum LuxOnnx {
@@ -152,6 +156,7 @@ public enum LuxOnnx {
 /// its framework ships no module map, so the C headers are not importable here.
 /// Same runtime, same graphs, same CPU execution provider; only the glue
 /// differs, and the arithmetic below is byte-for-byte the iOS port's.
+#if os(macOS)
 public final class LuxEngine {
     private let env: ORTEnv
     private let textEncoder: ORTSession
@@ -374,6 +379,8 @@ public final class LuxEngine {
 /// LuxTTS audio math: VocosFbank-matched log-mel extraction (n_fft=1024,
 /// hop=256, 100 HTK mels, norm=None, magnitude) and the Linkwitz-Riley
 /// crossover that merges the vocoder's 48 kHz + 24 kHz paths.
+#endif  // os(macOS) — LuxEngine needs ONNX Runtime
+
 public enum LuxMel {
     public static let sampleRate = 24000
     static let nFFT = 1024, hop = 256, nMels = 100, freqBins = 513
