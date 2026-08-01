@@ -11,6 +11,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case kokoro
     case luxTTS = "lux-tts"
     case supertonic
+    case pocketTTS = "pocket-tts"
 
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
@@ -248,6 +249,12 @@ extension BackendID {
         case .supertonic:
             ControlSurface(voiceClone: .none, presetSpeakers: Self.supertonicVoices,
                            instruct: .none, language: false, knobs: Knobs())
+        case .pocketTTS:
+            // Cloning-only, like LuxTTS. No sampling knobs surfaced: sherpa's
+            // Pocket path exposes only a seed (varied per take) — flow steps /
+            // guidance are fixed inside the runtime.
+            ControlSurface(voiceClone: .required, instruct: .none,
+                           language: false, knobs: Knobs())
         }
     }
 }
@@ -264,6 +271,7 @@ extension BackendID {
         case .kokoro: .none
         case .luxTTS: .variantClipOnly               // prosody comes entirely from the ref clip
         case .supertonic: .none                      // no emotion knob, no clone (Slice 1)
+        case .pocketTTS: .variantClipOnly            // prosody comes entirely from the ref clip
         }
     }
 }
@@ -344,6 +352,17 @@ extension BackendID {
                         defaultSampleRate: 44100, honorsTags: false,
                         needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
+        case .pocketTTS:
+            // "kyutai/pocket-tts" is the upstream source of truth (PyTorch,
+            // CC-BY-4.0) but NOT what runs here: the runnable artifacts are the
+            // sherpa-onnx export tarball + the sherpa-onnx dylib, both GitHub
+            // releases, fetched by scripts/fetch-pocket-tts.sh into a local
+            // model dir (~250MB int8). No HF-snapshot download path — like
+            // LuxTTS, the provider requires a resolver-supplied local dir.
+            BackendSpec(modelRepo: "kyutai/pocket-tts",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 2_000_000_000)
         }
     }
 }

@@ -26,3 +26,6 @@ ExportOptions.plist
 *.jks
 *.keystore
 **/key.properties
+
+# Fetched TTS model weights — hundreds of MB, re-fetchable via scripts/fetch-*.sh
+Models/pocket-tts/

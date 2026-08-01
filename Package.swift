@@ -49,8 +49,31 @@ let package = Package(
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMinor(from: "0.9.19")),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", .upToNextMajor(from: "2.5.0")),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMajor(from: "1.0.0")),
+        // ONNX Runtime, so LuxTTS can run the SAME int8 graphs the iOS apps ship
+        // (gloam-voice-studio-ios, gloam-dj) alongside this repo's native MLX
+        // implementation. Without it there is no way to A/B the two on one
+        // machine, and every quality question about the iOS port has to be
+        // argued from measurements instead of listened to.
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git",
+                 .upToNextMinor(from: "1.20.0")),
     ],
     targets: [
+        // Header-only: vendors sherpa-onnx's c-api.h for the C struct layouts.
+        // The dylib is fetched by scripts/fetch-pocket-tts.sh and dlopen'd at
+        // runtime — see Sources/CSherpaOnnx/shim.c for why it isn't linked.
+        .target(
+            name: "CSherpaOnnx",
+            path: "Sources/CSherpaOnnx"
+        ),
+        // Header-only: vendors ONNX Runtime's onnxruntime_c_api.h so
+        // LuxOnnxEngine can reach the C API's memory-lifecycle knobs
+        // (DisableCpuMemArena etc.) that the ObjC surface hides. The symbols
+        // come from the same onnxruntime.xcframework linked below — see
+        // Sources/COnnxRuntime/shim.c.
+        .target(
+            name: "COnnxRuntime",
+            path: "Sources/COnnxRuntime"
+        ),
         .target(
             name: "EngineKit",
             dependencies: [
@@ -78,6 +101,22 @@ let package = Package(
                 // On-device ASR (AppleTranscriber, zero downloads/network) backs
                 // LuxTTS's generate-then-verify retry loop — see LuxOutputVerifier.swift.
                 "SpeechKit",
+                // The ORT C API, for LuxOnnxEngine — the int8 ONNX LuxTTS path
+                // that mirrors what iOS ships, so both can be compared here.
+                // macOS ONLY. gloam-dj consumes EngineKit as a local package and
+                // vendors its own ONNX Runtime 1.27 xcframework (sherpa-onnx needs
+                // that version); pulling this one in unconditionally made Xcode
+                // fail with "Multiple commands produce onnxruntime.framework" and
+                // broke every iOS build in the sibling repo. The ONNX LuxTTS path
+                // exists here to A/B against MLX on a desktop — iOS already has
+                // its own ONNX engines and needs nothing from this.
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager",
+                         condition: .when(platforms: [.macOS])),
+                // ORT C API struct layouts for LuxOnnxEngine (header-only).
+                "COnnxRuntime",
+                // sherpa-onnx C struct layouts for the Pocket TTS backend
+                // (PocketSpeechModel dlopens the actual library at runtime).
+                "CSherpaOnnx",
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),

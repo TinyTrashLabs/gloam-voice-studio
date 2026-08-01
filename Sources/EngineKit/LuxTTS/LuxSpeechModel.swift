@@ -5,6 +5,7 @@
 
 import Foundation
 import MLX
+import os
 import MLXAudioCore
 import MLXFFT
 import MLXNN
@@ -121,6 +122,8 @@ enum LuxMelFeatures {
     }
 }
 
+private let luxLog = Logger(subsystem: "fm.gloam.studio", category: "luxtts")
+
 // MARK: - LuxSpeechModel
 
 public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
@@ -134,7 +137,11 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
     private struct CachedPrompt {
         let path: String
         let mtime: Date
+        /// The caller's transcript — the cache key, alongside path + mtime.
         let refText: String
+        /// What the cached features actually describe: equal to refText unless
+        /// the reference was over-long and got windowed (LuxReferenceWindow).
+        let effectiveRefText: String
         let tokens: [Int]
         let features: MLXArray
         let rms: Float
@@ -150,20 +157,13 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
 
     public var sampleRate: Int { LuxVocoder.outputSampleRate }
 
-    private func encodePrompt(path: String, refText: String?) throws -> CachedPrompt {
+    private func encodePrompt(path: String, refText: String?) async throws -> CachedPrompt {
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
             as? Date) ?? .distantPast
 
-        promptCacheLock.lock()
-        if let index = promptCache.firstIndex(where: {
-            $0.path == path && $0.mtime == mtime && $0.refText == (refText ?? "")
-        }) {
-            let hit = promptCache.remove(at: index)
-            promptCache.insert(hit, at: 0)
-            promptCacheLock.unlock()
+        if let hit = cachedPrompt(path: path, mtime: mtime, refText: refText ?? "") {
             return hit
         }
-        promptCacheLock.unlock()
 
         guard let refText, !refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             // LuxTTS's own tokenizer has no ASR fallback in this port (see
@@ -188,6 +188,51 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
         // text to match, the correct move is to NOT truncate — audio and
         // refText must describe the same span. This does mean longer clips
         // cost more compute per synthesis; that's a real tradeoff, not a bug.
+        //
+        // ...up to a point. Past roughly 50s of reference the model's saturating
+        // relative positional encoding stops separating positions and the
+        // sampler collapses into bursts around dead air — measured, with the
+        // numbers, in LuxReferenceWindow. So over-long references DO get cut,
+        // but audio and transcript are cut together at the same ASR word
+        // boundary, which is the "word-level alignment" the paragraph above
+        // says is the precondition for truncating at all.
+        var effectiveRefText = refText
+        let refSeconds = Double(rawAudio.size) / Double(LuxMelFeatures.sampleRate)
+        let refURL = URL(fileURLWithPath: path)
+
+        // A pack that carries its own window is authoritative: the window is
+        // part of the voice, and re-deriving it here would give every machine
+        // a slightly different reference for the same voice.
+        if let stored = LuxReferenceWindow.storedRendition(forReference: refURL),
+            let storedAudio = try? LuxReferenceWindow.loadRenditionAudio(
+                stored, forReference: refURL)
+        {
+            luxLog.debug("luxtts: using the voice's stored reference window")
+            rawAudio = MLXArray(storedAudio)
+            effectiveRefText = stored.text
+        } else if refSeconds > LuxReferenceWindow.maxSeconds {
+            guard let window = await LuxReferenceWindow.fit(
+                samples: rawAudio.asArray(Float.self),
+                sampleRate: LuxMelFeatures.sampleRate,
+                refText: refText)
+            else {
+                // Better a clear refusal than the garbled two-burst take this
+                // reference is guaranteed to produce.
+                throw EngineError.referenceTooLong(
+                    backend: .luxTTS, seconds: refSeconds,
+                    maxSeconds: LuxReferenceWindow.maxSeconds)
+            }
+            luxLog.notice(
+                "luxtts: reference \(refSeconds, format: .fixed(precision: 1))s over the \(LuxReferenceWindow.maxSeconds, format: .fixed(precision: 0))s cap — windowed to \(window.seconds, format: .fixed(precision: 1))s, transcript re-derived on-device"
+            )
+            // Persist it beside the voice so it survives into any export, and
+            // so the ASR pass happens once per voice rather than per cold
+            // prompt cache.
+            LuxReferenceWindow.store(
+                window, forReference: refURL, sampleRate: LuxMelFeatures.sampleRate)
+            rawAudio = MLXArray(window.samples)
+            effectiveRefText = window.text
+        }
         rawAudio = LuxMelFeatures.trimAndFade(rawAudio, sampleRate: LuxMelFeatures.sampleRate)
         rawAudio = rawAudio - MLX.mean(rawAudio)  // remove DC bias, matching LuxTTS-mlx
         let (normalizedAudio, measuredRMS) = LuxMelFeatures.normalized(rawAudio, targetRMS: 0.05)
@@ -195,16 +240,37 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
         let features = LuxMelFeatures.extract(normalizedAudio) * LuxMelFeatures.featScale
         eval(features)
 
-        let tokens = try tokenizer.textToTokenIDs(refText)
+        let tokens = try tokenizer.textToTokenIDs(effectiveRefText)
+        // Cache under the ORIGINAL refText — that's what callers look up with —
+        // but carry the windowed text, since that's what the features describe.
         let entry = CachedPrompt(
             path: path, mtime: mtime, refText: refText,
+            effectiveRefText: effectiveRefText,
             tokens: tokens, features: features, rms: measuredRMS)
 
+        storePrompt(entry)
+        return entry
+    }
+
+    // NSLock can't be taken across a suspension point, and encodePrompt is now
+    // async (the reference window needs an ASR pass). Keep every lock/unlock
+    // pair inside these synchronous helpers instead.
+    private func cachedPrompt(path: String, mtime: Date, refText: String) -> CachedPrompt? {
         promptCacheLock.lock()
+        defer { promptCacheLock.unlock() }
+        guard let index = promptCache.firstIndex(where: {
+            $0.path == path && $0.mtime == mtime && $0.refText == refText
+        }) else { return nil }
+        let hit = promptCache.remove(at: index)
+        promptCache.insert(hit, at: 0)
+        return hit
+    }
+
+    private func storePrompt(_ entry: CachedPrompt) {
+        promptCacheLock.lock()
+        defer { promptCacheLock.unlock() }
         promptCache.insert(entry, at: 0)
         if promptCache.count > 4 { promptCache.removeLast() }
-        promptCacheLock.unlock()
-        return entry
     }
 
     public func synthesize(_ request: ProviderRequest) async throws -> [Float] {
@@ -212,9 +278,9 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             guard let refPath = request.refAudioPath else {
                 throw EngineError.refAudioRequired(.luxTTS)
             }
-            let prompt = try encodePrompt(path: refPath, refText: request.refText)
+            let prompt = try await encodePrompt(path: refPath, refText: request.refText)
             let textTokens = try tokenizer.textToTokenIDs(request.text)
-            let promptTokens = try tokenizer.textToTokenIDs(prompt.refText)
+            let promptTokens = try tokenizer.textToTokenIDs(prompt.effectiveRefText)
 
             let promptFeatures = prompt.features.expandedDimensions(axis: 0)  // (1, T, 100)
 

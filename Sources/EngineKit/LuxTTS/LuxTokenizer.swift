@@ -156,6 +156,16 @@ enum PiperClauseAssembler {
 
 // MARK: - Out-of-process espeak-ng phonemizer
 
+// macOS only. `Process` does not exist on iOS (you cannot spawn a child process
+// from a sandboxed iOS app), so building this for iOS fails with
+// "cannot find 'Process' in scope" — which broke the aidj iOS app, since its
+// App target has a local SwiftPM dependency on EngineKit and this package
+// declares .iOS(.v17) support. Guarding rather than deleting: the only caller is
+// the macOS-only `spike` dev CLI, and LuxTTS's real phonemizer on both platforms
+// is `MisakiPhonemizer` (espeak-ng is GPL-3.0 and undistributable via the App
+// Store anyway — see MisakiPhonemizer.swift's header).
+#if os(macOS)
+
 /// Runs an `espeak-ng` executable per clause (`espeak-ng -q --ipa -v en-us`).
 /// Default lookup order: an explicit URL passed in, then Homebrew paths.
 /// For a bundled binary, pass `dataDirectory` pointing at espeak-ng-data and
@@ -235,6 +245,8 @@ public struct EspeakProcessPhonemizer: PhonemizerProviding {
             .joined(separator: " ")
     }
 }
+
+#endif  // os(macOS) — EspeakProcessPhonemizer
 
 // MARK: - English text normalizer (port of EnglishTextNormalizer)
 

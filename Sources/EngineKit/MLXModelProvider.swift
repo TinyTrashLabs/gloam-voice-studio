@@ -42,6 +42,21 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
+        if backend == .pocketTTS {
+            // Pocket runs on sherpa-onnx, not MLX — no HF-repo fallback exists
+            // (the runnable artifacts are GitHub release tarballs). Like LuxTTS,
+            // it needs a LOCAL directory: the sherpa model files plus the
+            // dlopen'd libsherpa-onnx-c-api.dylib, laid down together by
+            // scripts/fetch-pocket-tts.sh.
+            guard let localPath = modelPathResolver?(backend) else {
+                throw EngineError.generationFailed(
+                    backend: backend,
+                    message: "Pocket TTS requires a local sherpa-onnx model directory — run "
+                        + "scripts/fetch-pocket-tts.sh and populate the resolver's "
+                        + "Caches/Models directory for \(BackendID.pocketTTS.rawValue).")
+            }
+            return try PocketSpeechModel.load(from: URL(fileURLWithPath: localPath))
+        }
         let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
         let model = try await TTS.loadModel(modelRepo: source)
         return MLXSpeechModel(model: model, backend: backend)

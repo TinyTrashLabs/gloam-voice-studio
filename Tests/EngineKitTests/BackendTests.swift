@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 9)
+        XCTAssertEqual(BackendID.allCases.count, 11)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 9)
+        XCTAssertEqual(BackendID.allCases.count, 11)
     }
 
     func testQwenFamilyFlag() {
@@ -136,7 +136,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 9)
+        XCTAssertEqual(BackendID.allCases.count, 11)
     }
 
     func testKokoroSpec() {
@@ -182,6 +182,29 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.needsRefAudio)
         XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
         XCTAssertEqual(BackendID.supertonic.emotionMechanism, .none)
+    }
+
+    func testPocketSpec() {
+        XCTAssertEqual(BackendID.pocketTTS.rawValue, "pocket-tts")
+        XCTAssertFalse(BackendID.pocketTTS.isQwen)
+        let spec = BackendID.pocketTTS.spec
+        XCTAssertEqual(spec.defaultSampleRate, 24000)
+        XCTAssertFalse(spec.honorsTags)
+        // Weights are CC-BY-4.0 — attribution, no use-based restrictions, no ack.
+        XCTAssertFalse(spec.needsLicenseAck)
+        XCTAssertTrue(spec.needsRefAudio)
+        XCTAssertEqual(spec.minRAMBytes, 2_000_000_000)
+        XCTAssertEqual(BackendID.pocketTTS.emotionMechanism, .variantClipOnly)
+    }
+
+    func testPocketControls() {
+        let controls = BackendID.pocketTTS.controls
+        XCTAssertEqual(controls.voiceClone, .required)
+        XCTAssertEqual(controls.instruct, .none)
+        XCTAssertFalse(controls.language)
+        // sherpa's Pocket path exposes no sampling knobs — only a per-take seed.
+        XCTAssertEqual(controls.knobs, Knobs())
+        XCTAssertTrue(controls.presetSpeakers.isEmpty)
     }
 
     func testSupertonicControls() {

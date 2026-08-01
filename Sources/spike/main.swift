@@ -1,5 +1,6 @@
 import EngineKit
 import Foundation
+import Speech
 import MLX
 import MLXFFT
 import StudioKit
@@ -110,7 +111,15 @@ func usage() -> Never {
          + "   or: spike serve-llm <llm-backend-id> [port]   "
          + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n"
          + "   or: spike bakeoff [outPath] [--dry]   "
-         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n").utf8))
+         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n"
+         + "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> "
+         + "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] "
+         + "[--engine <id>:<file>=<value>]... [--no-source]\n"
+         + "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
+         + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n"
+         + "   or: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav> "
+         + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] "
+         + "[--precision <fp32|int8>] [--temp <t>]\n").utf8))
     exit(2)
 }
 
@@ -298,6 +307,62 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
 // table: prints the normalized text, the misaki→espeak-remapped token stream,
 // and (when a Homebrew espeak-ng is present) the reference espeak token stream
 // for a side-by-side diff.
+// MARK: - lux-window subcommand
+//
+// `spike lux-window --ref <in.wav> --max <seconds> --out <base>`
+// Re-cuts a reference clip to a shorter window and writes `<base>.wav` +
+// `<base>.txt` with a transcript re-derived from the CUT audio.
+//
+// Why re-derive rather than truncate the old transcript: LuxTTS sizes its
+// output from the prompt's frames-per-token ratio, so a transcript describing
+// more speech than the audio contains inflates that ratio and the duration
+// prediction runs away with it. Audio and text must describe the same span.
+if CommandLine.arguments.dropFirst().first == "lux-window" {
+    var refPath: String?, outBase: String?
+    var maxSeconds = 15.0
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--out": outBase = it.next()
+        case "--max": maxSeconds = Double(it.next() ?? "15") ?? 15
+        default: die("lux-window: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let outBase else {
+        die("usage: spike lux-window --ref <in.wav> --out <base> [--max <seconds>]")
+    }
+    do {
+        let samples = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let before = Double(samples.count) / Double(LuxOnnx.sampleRate)
+        // Speech Recognition auth: the window's transcript comes from an
+        // on-device ASR pass, which needs authorization the first time.
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            _ = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+                SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
+            }
+        }
+        guard let w = await LuxReferenceWindow.fit(
+            samples: samples, sampleRate: LuxOnnx.sampleRate,
+            refText: "", maxSeconds: maxSeconds)
+        else {
+            die("lux-window: could not establish a window (no on-device recognizer, "
+                + "or the transcript density gate rejected it)")
+        }
+        try WAVWriter.write(samples: w.samples, sampleRate: LuxOnnx.sampleRate,
+                            to: URL(fileURLWithPath: outBase + ".wav"))
+        try w.text.write(to: URL(fileURLWithPath: outBase + ".txt"),
+                         atomically: true, encoding: .utf8)
+        let words = w.text.split(whereSeparator: { $0.isWhitespace }).count
+        print(String(format: "%.2fs -> %.2fs  (%d words, %.2f w/s)  %@.wav/.txt",
+                     before, w.seconds, words, Double(words) / w.seconds, outBase))
+        print("text: \(w.text)")
+    } catch {
+        die("lux-window: \(error)")
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.dropFirst().first == "lux-phonemes" {
     guard let text = CommandLine.arguments.dropFirst(2).first else {
         die("usage: spike lux-phonemes \"text\"")
@@ -318,6 +383,354 @@ if CommandLine.arguments.dropFirst().first == "lux-phonemes" {
     exit(0)
 }
 
+// MARK: - lux-compare subcommand
+//
+// `spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line>
+//      --onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]`
+//
+// Renders ONE line, from ONE reference, through BOTH LuxTTS engines and writes
+// a wav per engine. This exists because the two live in different worlds: MLX
+// fp32 here, int8 ONNX on iOS (iOS forbids GPU submission while backgrounded,
+// so the phone cannot run the MLX path at all). Every quality argument between
+// them was previously made from measurements; this makes it a listening test.
+//
+// Both paths share LuxTokenizer, so phonemes are identical and the engine is
+// the only variable.
+if CommandLine.arguments.dropFirst().first == "lux-compare" {
+    var refPath: String?, refText: String?, text: String?
+    var onnxDir: String?, mlxDir: String?, outDir = "."
+    var speed: Float = 1.0
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--onnx-dir": onnxDir = it.next()
+        case "--mlx-dir": mlxDir = it.next()
+        case "--out-dir": outDir = it.next() ?? "."
+        case "--speed": speed = Float(it.next() ?? "1") ?? 1
+        default: die("lux-compare: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let refText, let text else {
+        die("usage: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
+            + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]")
+    }
+
+    do {
+        // One tokenizer for both engines — the comparison is of inference, not G2P.
+        let phonemizer = try await MisakiPhonemizer.prepared()
+        let tokenizer = try LuxTokenizer(phonemizer: phonemizer)
+        let textIDs = try tokenizer.textToTokenIDs(text).map(Int64.init)
+        let promptIDs = try tokenizer.textToTokenIDs(refText).map(Int64.init)
+        print("tokens: \(promptIDs.count) prompt, \(textIDs.count) text")
+
+        if let onnxDir {
+            let started = Date()
+            let engine = try LuxEngine(modelDir: URL(fileURLWithPath: onnxDir))
+            let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+            let prompt = try LuxOnnx.encodePrompt(samples24k: samples24k, tokens: promptIDs)
+            print("onnx prompt: \(prompt.frames) frames, \(prompt.tokens.count) tokens, "
+                  + String(format: "%.2f frames/token", Double(prompt.frames) / Double(max(1, prompt.tokens.count))))
+            let (audio, rate) = try engine.synthesize(
+                textIDs: textIDs, prompt: prompt, numSteps: 4, speed: speed,
+                tShift: 0.5, guidance: 3.0, dualPath48k: true)
+            let out = URL(fileURLWithPath: outDir).appendingPathComponent("lux_onnx.wav")
+            try WAVWriter.write(samples: audio, sampleRate: rate, to: out)
+            print(String(format: "onnx : %.2fs audio @ %d Hz in %.2fs -> %@",
+                         Double(audio.count) / Double(rate), rate,
+                         Date().timeIntervalSince(started), out.path))
+        }
+
+        if let mlxDir {
+            let started = Date()
+            let model = try await LuxSpeechModel.load(from: URL(fileURLWithPath: mlxDir))
+            var req = ProviderRequest(text: text)
+            req.refAudioPath = refPath
+            req.refText = refText
+            req.speed = speed
+            let audio = try await model.synthesize(req)
+            let out = URL(fileURLWithPath: outDir).appendingPathComponent("lux_mlx.wav")
+            // Ask the model its rate. Hardcoding 24 kHz here wrote the MLX take
+            // at half its true 48 kHz, which made it play back twice as long and
+            // an octave low — and looked exactly like the two engines disagreeing
+            // about pace. They do not; both use the same frames-per-token rule.
+            let mlxRate = model.sampleRate
+            try WAVWriter.write(samples: audio, sampleRate: mlxRate, to: out)
+            print(String(format: "mlx  : %.2fs audio @ %d Hz in %.2fs -> %@",
+                         Double(audio.count) / Double(mlxRate), mlxRate,
+                         Date().timeIntervalSince(started), out.path))
+        }
+        if onnxDir == nil && mlxDir == nil { die("lux-compare: pass --onnx-dir and/or --mlx-dir") }
+    } catch {
+        die("lux-compare: \(error)")
+    }
+    exit(0)
+}
+
+// MARK: - lux-bench subcommand
+//
+// `spike lux-bench --ref <ref.wav> --ref-text <transcript> (--text <line>|--text-file <path>)
+//      --onnx-dir <dir> [--max-chunk <n>] [--out <file.wav>] [--stages]`
+//
+// The chunking bench behind picking `maxChunkChars` for LuxTTS. lux-compare
+// renders ONE chunk; the device renders a line as SEVERAL chunks through one
+// live engine, re-paying the prompt-region ODE cost per chunk. This replicates
+// that loop in-process — same chunker as gloam-dj's SupertonicEngine.chunkText,
+// same engine instance across chunks, so peak footprint and total wall time
+// mean what they mean on device. `--stages` turns on LuxEngine.stageLog to
+// show where each chunk's time goes (text_encoder / fm steps / vocos).
+if CommandLine.arguments.dropFirst().first == "lux-bench" {
+    var refPath: String?, refText: String?, text: String?
+    var onnxDir: String?, outPath: String?
+    var maxChunk = 200
+    var speed: Float = 1.0
+    var stages = false
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--text-file":
+            if let p = it.next() {
+                text = (try? String(contentsOfFile: p, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        case "--onnx-dir": onnxDir = it.next()
+        case "--out": outPath = it.next()
+        case "--max-chunk": maxChunk = Int(it.next() ?? "200") ?? 200
+        case "--speed": speed = Float(it.next() ?? "1") ?? 1
+        case "--stages": stages = true
+        default: die("lux-bench: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let refText, let text, let onnxDir else {
+        die("usage: spike lux-bench --ref <ref.wav> --ref-text <transcript> "
+            + "(--text <line>|--text-file <path>) --onnx-dir <dir> "
+            + "[--max-chunk <n>] [--out <file.wav>] [--stages]")
+    }
+
+    // Port of gloam-dj SupertonicEngine.chunkText — sentence split with an
+    // abbreviation guard, then greedy packing up to maxLen. Kept verbatim so
+    // the bench splits exactly where the device splits.
+    func chunkText(_ text: String, maxLen: Int) -> [String] {
+        let paras = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let abbrev = ["Mr.", "Mrs.", "Ms.", "Dr.", "Prof.", "Sr.", "Jr.", "Ph.D.",
+                      "etc.", "e.g.", "i.e.", "vs.", "Inc.", "Ltd.", "Co.", "Corp.",
+                      "St.", "Ave.", "Blvd."]
+        var chunks: [String] = []
+        for para in paras {
+            var sentences: [String] = []
+            var current = ""
+            let scalars = Array(para)
+            var i = 0
+            while i < scalars.count {
+                current.append(scalars[i])
+                let c = scalars[i]
+                let atBoundary = (c == "." || c == "!" || c == "?")
+                    && i + 1 < scalars.count && scalars[i + 1] == " "
+                if atBoundary {
+                    let tail = current.split(separator: " ").last.map(String.init) ?? ""
+                    let isInitial = tail.count == 2 && tail.hasSuffix(".")
+                        && (tail.first?.isUppercase ?? false)
+                    if !abbrev.contains(tail) && !isInitial {
+                        sentences.append(current.trimmingCharacters(in: .whitespaces))
+                        current = ""
+                        i += 1
+                    }
+                }
+                i += 1
+            }
+            let last = current.trimmingCharacters(in: .whitespaces)
+            if !last.isEmpty { sentences.append(last) }
+            var packed = ""
+            for s in sentences {
+                if packed.isEmpty {
+                    packed = s
+                } else if packed.count + s.count + 1 <= maxLen {
+                    packed += " " + s
+                } else {
+                    chunks.append(packed)
+                    packed = s
+                }
+            }
+            if !packed.isEmpty { chunks.append(packed) }
+        }
+        return chunks.isEmpty ? [text] : chunks
+    }
+
+    /// Current phys_footprint in GB — the number jetsam actually kills on.
+    func footprintGB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        return Double(info.phys_footprint) / Double(1 << 30)
+    }
+
+    do {
+        let phonemizer = try await MisakiPhonemizer.prepared()
+        let tokenizer = try LuxTokenizer(phonemizer: phonemizer)
+        let promptIDs = try tokenizer.textToTokenIDs(refText).map(Int64.init)
+        let pieces = chunkText(text, maxLen: maxChunk)
+        var chunkIDs: [[Int64]] = []
+        for p in pieces {
+            let ids = try tokenizer.textToTokenIDs(p).map(Int64.init)
+            if !ids.isEmpty { chunkIDs.append(ids) }
+        }
+        let engine = try LuxEngine(modelDir: URL(fileURLWithPath: onnxDir))
+        if stages {
+            engine.stageLog = { name, secs in
+                print(String(format: "    stage %-14@ %7.3fs", name as NSString, secs))
+            }
+        }
+        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let prompt = try LuxOnnx.encodePrompt(samples24k: samples24k, tokens: promptIDs)
+        print("prompt: \(prompt.frames) frames, \(prompt.tokens.count) tokens; "
+              + "text \(text.count) chars -> \(chunkIDs.count) chunks @ maxChunk \(maxChunk) "
+              + "(\(pieces.map { "\($0.count)" }.joined(separator: "/")) chars)")
+
+        var all: [Float] = []
+        var rate = 48_000
+        var totalRender = 0.0
+        var totalAudio = 0.0
+        for (i, ids) in chunkIDs.enumerated() {
+            let t0 = Date()
+            let (audio, r) = try engine.synthesize(
+                textIDs: ids, prompt: prompt, numSteps: 4, speed: speed,
+                tShift: 0.5, guidance: 3.0, dualPath48k: true)
+            let wall = Date().timeIntervalSince(t0)
+            rate = r
+            let secs = Double(audio.count) / Double(r)
+            totalRender += wall
+            totalAudio += secs
+            if i > 0 { all.append(contentsOf: [Float](repeating: 0, count: Int(0.3 * Double(r)))) }
+            all.append(contentsOf: audio)
+            print(String(format: "  chunk %d/%d: %3d tokens, %6.2fs audio in %6.2fs  footprint %.2f GB",
+                         i + 1, chunkIDs.count, ids.count, secs, wall, footprintGB()))
+        }
+        var ru = rusage()
+        getrusage(RUSAGE_SELF, &ru)
+        print(String(format: "TOTAL: %.2fs audio in %.2fs render (RTF %.2f)  peakRSS %.2f GB",
+                     totalAudio, totalRender, totalRender / max(0.01, totalAudio),
+                     Double(ru.ru_maxrss) / Double(1 << 30)))
+        if let outPath {
+            try WAVWriter.write(samples: all, sampleRate: rate, to: URL(fileURLWithPath: outPath))
+            print("wrote \(outPath)")
+        }
+    } catch {
+        die("lux-bench: \(error)")
+    }
+    exit(0)
+}
+
+// MARK: - pocket subcommand
+//
+// `spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav>
+//      [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]
+//      [--precision <fp32|int8>] [--temp <t>]`
+//
+// Renders ONE line from ONE reference through a Pocket TTS backend and writes
+// a wav — the headless audition path, sibling to lux-compare. Two backends
+// exist ON PURPOSE: `onnx` (PocketOnnxEngine, this repo driving the community
+// ONNX graphs directly) and `sherpa` (sherpa-onnx's Pocket driver, which was
+// measured chopping ~700 ms of speech off every utterance's start). Both stay
+// so the defect remains demonstrable. The seed pins the flow noise for
+// reproducible takes; RMS/peak catch silent-wav failures, and LEADING SILENCE
+// is printed because the onset chop is exactly what these numbers exist to
+// show: sherpa reads ~0 ms, a faithful engine ~100+ ms of natural ramp-in.
+if CommandLine.arguments.dropFirst().first == "pocket" {
+    var refPath: String?, refText: String?, text: String?, outPath: String?
+    var modelDir: String?
+    var backend = "onnx"
+    var precision = "fp32"
+    var seed: UInt64 = 42
+    var temp: Float?
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--backend": backend = it.next() ?? backend
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--out": outPath = it.next()
+        case "--model-dir": modelDir = it.next()
+        case "--seed": seed = UInt64(it.next() ?? "42") ?? 42
+        case "--precision": precision = it.next() ?? precision
+        case "--temp": temp = Float(it.next() ?? "")
+        default: die("pocket: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let text, let outPath, ["onnx", "sherpa"].contains(backend) else {
+        die("usage: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> "
+            + "--out <file.wav> [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] "
+            + "[--precision <fp32|int8>] [--temp <t>]")
+    }
+
+    /// Milliseconds before the first sample above 2% of peak (floor 0.002) —
+    /// the onset metric that makes sherpa's chop visible: real speech ramps
+    /// in, a chopped take starts hot at sample 0.
+    func leadingSilenceMs(_ audio: [Float], rate: Int) -> Double {
+        let peak = audio.reduce(Float(0)) { max($0, abs($1)) }
+        let threshold = max(0.002, 0.02 * peak)
+        let idx = audio.firstIndex { abs($0) > threshold } ?? audio.count
+        return Double(idx) * 1000 / Double(rate)
+    }
+
+    func report(_ label: String, _ audio: [Float], rate: Int, started: Date, out: URL) {
+        let rms = (audio.reduce(Double(0)) { $0 + Double($1) * Double($1) }
+            / Double(max(1, audio.count))).squareRoot()
+        let peak = audio.reduce(Float(0)) { max($0, abs($1)) }
+        print(String(
+            format: "pocket[%@]: %.2fs audio @ %d Hz in %.2fs  lead-in %.0fms  "
+                + "rms %.4f  peak %.4f -> %@",
+            label, Double(audio.count) / Double(rate), rate,
+            Date().timeIntervalSince(started), leadingSilenceMs(audio, rate: rate),
+            rms, peak, out.path))
+    }
+
+    do {
+        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let out = URL(fileURLWithPath: outPath)
+        let started = Date()
+        if backend == "onnx" {
+            guard let prec = PocketOnnx.Precision(rawValue: precision) else {
+                die("pocket: --precision must be fp32 or int8")
+            }
+            let dir = URL(fileURLWithPath: modelDir ?? "Models/pocket-tts/english_2026-04")
+            let engine = try PocketOnnxEngine(bundleDir: dir, precision: prec)
+            let voice = try engine.makeVoiceState(refSamples24k: samples24k)
+            let audio = try engine.synthesize(text: text, voice: voice, seed: seed,
+                                              temperature: temp)
+            try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+            report("onnx-\(prec.rawValue)", audio, rate: engine.sampleRate,
+                   started: started, out: out)
+        } else {
+            let dir = URL(fileURLWithPath:
+                modelDir ?? "Models/pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26")
+            let engine = try PocketEngine(modelDir: dir)
+            let audio = try engine.synthesize(
+                text: text, refSamples: samples24k, refSampleRate: LuxOnnx.sampleRate,
+                refText: refText, seed: seed)
+            try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+            report("sherpa", audio, rate: engine.sampleRate, started: started, out: out)
+        }
+    } catch {
+        die("pocket: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
 // MARK: - bakeoff subcommand
 //
 // `spike bakeoff [outPath] [--dry]` — scores the four catalog LLMs on the DJ
@@ -331,6 +744,132 @@ if CommandLine.arguments.dropFirst().first == "bakeoff" {
     let models: [LLMBackendID] = [.qwen3_1_7b, .gemma4_e2b, .gemma4_e4b, .qwen3_8b]
     await Bakeoff.run(models: models, outPath: outPath, dryRun: dryRun)
     exit(0)
+}
+
+// MARK: - gvoice-build subcommand
+//
+// `spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
+//     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+//     [--engine <engineId>:<filename>=<value>]...  [--no-source]`
+//
+// Builds one reproducible `.gvoice` pack from loose files/values on the
+// command line — no interactive prompts, no hardcoded voice data. `--engine`
+// may repeat (once per `engines/<id>/<filename>` member); `<value>` is either
+// `@<path>` (read that file's raw bytes) or a literal string written as-is
+// (UTF-8) — e.g. `--engine kokoro:voice.json=@voice.json` vs.
+// `--engine kokoro:voice.json={"speaker":"bf_emma"}`. `--strip-comment-lines`
+// drops trailing lines starting with `#` from ref text (some transcript
+// exports append `# window:`/`# dur_target:`-style metadata comments).
+//
+// Follows docs/gvoice-format.md via the same library->export path proven in
+// GVoiceTests: build a throwaway VoiceLibrary in a temp dir, `saveAt` the
+// voice into it, GVoice.export it, write the Data, remove the temp dir.
+if CommandLine.arguments.dropFirst().first == "gvoice-build" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+
+    func gvoiceBuildUsage() -> Never {
+        die("""
+            usage: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
+                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+                     [--engine <engineId>:<filename>=<value>]...  [--no-source]
+                   <value> is @<path> to read a file's raw bytes, or a literal string written as UTF-8.
+            """)
+    }
+
+    var name: String?
+    var slug: String?
+    var out: String?
+    var refWavPath: String?
+    var refText: String?
+    var refTextFile: String?
+    var stripCommentLines = false
+    var includeSource = true
+    var engineSpecs: [String] = []
+
+    var it = sub.makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--name": name = it.next()
+        case "--slug": slug = it.next()
+        case "--out": out = it.next()
+        case "--ref-wav": refWavPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--ref-text-file": refTextFile = it.next()
+        case "--strip-comment-lines": stripCommentLines = true
+        case "--no-source": includeSource = false
+        case "--engine":
+            guard let spec = it.next() else { gvoiceBuildUsage() }
+            engineSpecs.append(spec)
+        default: gvoiceBuildUsage()
+        }
+    }
+
+    guard let name, let slug, let out else { gvoiceBuildUsage() }
+    guard refText == nil || refTextFile == nil else {
+        die("gvoice-build: pass at most one of --ref-text / --ref-text-file")
+    }
+
+    func resolveValue(_ raw: String) throws -> Data {
+        if raw.hasPrefix("@") {
+            return try Data(contentsOf: URL(fileURLWithPath: String(raw.dropFirst())))
+        }
+        return Data(raw.utf8)
+    }
+
+    do {
+        var resolvedRefText = ""
+        if let refText {
+            resolvedRefText = refText
+        } else if let refTextFile {
+            resolvedRefText = try String(contentsOf: URL(fileURLWithPath: refTextFile), encoding: .utf8)
+        }
+        if stripCommentLines {
+            var lines = resolvedRefText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            // Trailing blank lines (e.g. a file's final newline) must not stop the
+            // strip before it reaches the actual comment lines above them.
+            while let last = lines.last {
+                let trimmed = last.trimmingCharacters(in: .whitespaces)
+                guard trimmed.isEmpty || trimmed.hasPrefix("#") else { break }
+                lines.removeLast()
+            }
+            resolvedRefText = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let refWav: Data? = try refWavPath.map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+
+        // "engineId:filename=value", repeatable.
+        var engines: [String: [String: Data]] = [:]
+        for spec in engineSpecs {
+            guard let colonIdx = spec.firstIndex(of: ":"),
+                  let eqIdx = spec[colonIdx...].firstIndex(of: "=")
+            else { die("gvoice-build: bad --engine spec '\(spec)', want engineId:filename=value") }
+            let engineID = String(spec[spec.startIndex..<colonIdx])
+            let filename = String(spec[spec.index(after: colonIdx)..<eqIdx])
+            let value = String(spec[spec.index(after: eqIdx)...])
+            guard !engineID.isEmpty, !filename.isEmpty else {
+                die("gvoice-build: bad --engine spec '\(spec)', want engineId:filename=value")
+            }
+            engines[engineID, default: [:]][filename] = try resolveValue(value)
+        }
+
+        guard refWav != nil || !engines.isEmpty else {
+            die("gvoice-build: nothing to pack — pass --ref-wav and/or --engine")
+        }
+
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gvoice-build-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let lib = VoiceLibrary(directory: tempDir)
+        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText, engines: engines)
+        let packData = try GVoice.export(slug, from: lib, includeSource: includeSource)
+        try packData.write(to: URL(fileURLWithPath: out))
+        print("wrote \(out) (\(packData.count) bytes)")
+        exit(0)
+    } catch {
+        die("gvoice-build failed: \(error)")
+    }
 }
 
 var args: [String: String] = [:]

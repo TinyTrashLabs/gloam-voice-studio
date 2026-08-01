@@ -20,13 +20,26 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     public var refText: String
     public var createdAt: String
     public var persona: Persona?
+    /// Free-form record of how a `.gvoice` import's renditions were produced.
+    /// Opaque to this build — carried so re-export doesn't drop it. Nil for
+    /// voices created locally rather than imported.
+    public var provenance: JSONValue?
+    /// Local slug of the voice this one is an emotion/style variant of, e.g.
+    /// "cruz-hype" carries `variantOf: "cruz"`. Nil for a base (non-variant)
+    /// voice. Explicit membership, not inferred from the slug prefix — an
+    /// independently-named voice like "dj-nova" must never be mistaken for a
+    /// variant of "dj" just because its slug starts with "dj-".
+    public var variantOf: String?
 
-    public init(name: String, slug: String, refText: String, createdAt: String, persona: Persona? = nil) {
+    public init(name: String, slug: String, refText: String, createdAt: String,
+                persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
         self.createdAt = createdAt
         self.persona = persona
+        self.provenance = provenance
+        self.variantOf = variantOf
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -38,6 +51,8 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         // Optional + tolerant: a malformed persona must never break voice load.
         persona = (try? c.decodeIfPresent(Persona.self, forKey: .persona)) ?? nil
+        provenance = (try? c.decodeIfPresent(JSONValue.self, forKey: .provenance)) ?? nil
+        variantOf = try c.decodeIfPresent(String.self, forKey: .variantOf)
     }
 }
 
@@ -50,16 +65,29 @@ public struct VoiceLibrary: Sendable {
         self.directory = directory
     }
 
-    public func save(name: String, refWav: Data, refText: String) throws -> VoiceMeta {
+    /// Save a new voice from reference audio, engine assets, or both.
+    ///
+    /// `refWav` is optional because a voice is not always a recording: a
+    /// Supertonic voice is a pair of baked style tensors, and qwen3-design's
+    /// voice is a text description. `engines` maps an engine id to
+    /// [filename: bytes] — ids are not validated, since a library that stores an
+    /// asset it cannot render is still useful when the pack is bound elsewhere.
+    public func save(name: String, refWav: Data?, refText: String,
+                     provenance: JSONValue? = nil,
+                     engines: [String: [String: Data]] = [:]) throws -> VoiceMeta {
         let slug = try Slug.slugify(name)
         let voiceDir = directory.appendingPathComponent(slug)
         guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
             throw StudioError.voiceExists(slug: slug)
         }
+        guard refWav != nil || !engines.isEmpty else {
+            throw StudioError.invalidArchive("voice \(slug) has neither reference audio nor engine assets")
+        }
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
+        if let refWav { try refWav.write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
-                             createdAt: Self.timestamp())
+                             createdAt: Self.timestamp(), provenance: provenance)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -67,15 +95,91 @@ public struct VoiceLibrary: Sendable {
     /// Save a voice at a caller-chosen slug, overwriting any existing entry.
     /// Used for variant dirs like `<baseSlug>-excited` where slugify cannot
     /// guarantee the exact suffix format.
+    ///
+    /// `slug` must be a single path component — validated here (not just at
+    /// the call site) because this is the actual filesystem write boundary,
+    /// and `slug` has in the past been built by interpolating an attacker-
+    /// controlled `.gvoice` variant key (see `GVoice.import`). Trusting the
+    /// caller there once let a crafted pack escape the library directory.
     @discardableResult
-    public func saveAt(slug: String, name: String, refWav: Data, refText: String) throws -> VoiceMeta {
-        let voiceDir = directory.appendingPathComponent(slug)
+    public func saveAt(slug: String, name: String, refWav: Data?, refText: String,
+                       provenance: JSONValue? = nil, variantOf: String? = nil,
+                       engines: [String: [String: Data]] = [:]) throws -> VoiceMeta {
+        let safeSlug = try GVoice.safeComponent(slug)
+        let voiceDir = directory.appendingPathComponent(safeSlug)
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
-        let meta = VoiceMeta(name: name, slug: slug, refText: refText,
-                             createdAt: Self.timestamp())
+        if let refWav { try refWav.write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        try writeEngines(engines, to: voiceDir)
+        let meta = VoiceMeta(name: name, slug: safeSlug, refText: refText,
+                             createdAt: Self.timestamp(), provenance: provenance, variantOf: variantOf)
         try write(meta, to: voiceDir)
         return meta
+    }
+
+    /// Full accessor: reference audio and engine assets are both optional.
+    ///
+    /// `get()` still requires ref.wav and is the right call for the synthesis
+    /// paths that cannot work without it. Use this one when absence is a valid
+    /// answer — packing, listing what a voice can render.
+    public func entry(_ slug: String) throws
+        -> (meta: VoiceMeta, refURL: URL?, engines: [String: [String: URL]])
+    {
+        let voiceDir = directory.appendingPathComponent(slug)
+        let metaURL = voiceDir.appendingPathComponent("meta.json")
+        guard FileManager.default.fileExists(atPath: metaURL.path),
+              let data = try? Data(contentsOf: metaURL),
+              let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data)
+        else { throw StudioError.voiceNotFound(slug: slug) }
+        let refURL = voiceDir.appendingPathComponent("ref.wav")
+        let ref = FileManager.default.fileExists(atPath: refURL.path) ? refURL : nil
+        var engines: [String: [String: URL]] = [:]
+        let root = voiceDir.appendingPathComponent("engines")
+        let dirs = (try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil)) ?? []
+        for engineDir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: engineDir, includingPropertiesForKeys: nil)) ?? []
+            guard !files.isEmpty else { continue }
+            engines[engineDir.lastPathComponent] = Dictionary(
+                files.map { ($0.lastPathComponent, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+        return (meta, ref, engines)
+    }
+
+    /// Variant key -> library slug for `slug` and its "<slug>-<x>" siblings.
+    ///
+    /// Emotion variants live as sibling voices but belong to ONE identity, so a
+    /// pack must carry them together — export the base alone and the receiving
+    /// end silently loses the voice's emotional range.
+    ///
+    /// Membership is `meta.variantOf == slug`, not a slug-prefix guess: an
+    /// independently-named voice like "dj-nova" must never be swept into an
+    /// export of "dj" just because its slug happens to start with "dj-".
+    public func variantSlugs(of slug: String) -> [String: String] {
+        var found = ["base": slug]
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)) ?? []
+        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let name = child.lastPathComponent
+            guard name.hasPrefix("\(slug)-"),
+                  let data = try? Data(contentsOf: child.appendingPathComponent("meta.json")),
+                  let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data),
+                  meta.variantOf == slug
+            else { continue }
+            found[String(name.dropFirst(slug.count + 1))] = name
+        }
+        return found
+    }
+
+    private func writeEngines(_ engines: [String: [String: Data]], to voiceDir: URL) throws {
+        for (engine, files) in engines {
+            let engineDir = voiceDir.appendingPathComponent("engines")
+                .appendingPathComponent(try GVoice.safeComponent(engine))
+            try FileManager.default.createDirectory(at: engineDir, withIntermediateDirectories: true)
+            for (filename, blob) in files {
+                try blob.write(to: engineDir.appendingPathComponent(try GVoice.safeComponent(filename)))
+            }
+        }
     }
 
     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
@@ -164,6 +268,7 @@ public struct VoiceLibrary: Sendable {
                     else { continue }
                     try FileManager.default.moveItem(at: oldDir, to: newDir)
                     variantMeta.slug = "\(newSlug)-\(suffix)"
+                    variantMeta.variantOf = newSlug
                     try write(variantMeta, to: newDir)
                 }
             }
