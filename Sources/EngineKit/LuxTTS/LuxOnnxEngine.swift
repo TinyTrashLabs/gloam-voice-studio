@@ -129,7 +129,7 @@ public enum LuxOnnx {
         // the model — whereas the pace a given limit corresponds to depends on
         // reference length. Clamping the graph keeps every voice clean while
         // letting the pace control stay linear and generous.
-        return min(1.25, max(0.75, raw))
+        return min(1.18, max(0.75, raw))
     }
 
     /// Longest reference clip we will encode. NOT a truncation point: truncating
