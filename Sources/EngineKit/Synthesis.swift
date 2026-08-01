@@ -144,6 +144,23 @@ public enum EngineError: Error, Equatable, Sendable {
     case instructRequired(BackendID)
     case speakerRequired(BackendID)
     case languageProviderUnavailable
+    /// The voice's reference clip is longer than the backend can condition on
+    /// and could not be windowed down (see LuxReferenceWindow).
+    case referenceTooLong(backend: BackendID, seconds: Double, maxSeconds: Double)
+}
+
+extension EngineError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .referenceTooLong(let backend, let seconds, let maxSeconds):
+            return String(
+                format: "This voice's reference clip is %.0fs. %@ needs %.0fs or less — "
+                    + "re-record or re-import it shorter.",
+                seconds, backend.rawValue, maxSeconds)
+        default:
+            return nil
+        }
+    }
 }
 
 /// Pure translation from user request to provider request, with validation.
