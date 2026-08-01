@@ -65,6 +65,15 @@ let package = Package(
             name: "CSherpaOnnx",
             path: "Sources/CSherpaOnnx"
         ),
+        // Header-only: vendors ONNX Runtime's onnxruntime_c_api.h so
+        // LuxOnnxEngine can reach the C API's memory-lifecycle knobs
+        // (DisableCpuMemArena etc.) that the ObjC surface hides. The symbols
+        // come from the same onnxruntime.xcframework linked below — see
+        // Sources/COnnxRuntime/shim.c.
+        .target(
+            name: "COnnxRuntime",
+            path: "Sources/COnnxRuntime"
+        ),
         .target(
             name: "EngineKit",
             dependencies: [
@@ -103,6 +112,8 @@ let package = Package(
                 // its own ONNX engines and needs nothing from this.
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager",
                          condition: .when(platforms: [.macOS])),
+                // ORT C API struct layouts for LuxOnnxEngine (header-only).
+                "COnnxRuntime",
                 // sherpa-onnx C struct layouts for the Pocket TTS backend
                 // (PocketSpeechModel dlopens the actual library at runtime).
                 "CSherpaOnnx",

@@ -25,8 +25,10 @@ import AVFoundation
 import Foundation
 // ORT is a macOS-only dependency here — see Package.swift. iOS consumers of
 // EngineKit vendor their own ONNX Runtime and must not pull in a second.
+// COnnxRuntime is the header-only C API surface; the binary framework is
+// still linked through the "onnxruntime" SwiftPM product.
 #if os(macOS)
-import OnnxRuntimeBindings
+import COnnxRuntime
 #endif
 
 /// Namespace for the ONNX LuxTTS path's shared types.
@@ -67,13 +69,31 @@ public enum LuxOnnx {
     }
 
     /// Files the ONNX path needs in its model directory.
-    public static let requiredFiles = ["text_encoder_int8.onnx", "fm_decoder_int8.onnx", "vocos.onnx"]
+    /// Files that must be present whatever precision the graphs were exported
+    /// at. The two model stems are resolved separately — see `modelFile`.
+    public static let requiredFiles = ["vocos.onnx"]
+    public static let modelStems = ["text_encoder", "fm_decoder"]
+
+    /// fp32 first, then int8. The iOS app ships fp32 (`text_encoder.onnx`) and
+    /// this repo previously demanded the int8 names, so pointing the bench at
+    /// the app's own weights failed with "models missing" — the one comparison
+    /// the bench exists to make.
+    public static func modelFile(_ stem: String, in dir: URL) -> String? {
+        for name in ["\(stem).onnx", "\(stem)_int8.onnx"]
+        where FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path) {
+            return name
+        }
+        return nil
+    }
 
     /// First required file missing from `dir`; nil when complete.
     public static func missingModelFile(in dir: URL) -> String? {
         for f in requiredFiles
         where !FileManager.default.fileExists(atPath: dir.appendingPathComponent(f).path) {
             return f
+        }
+        for stem in modelStems where modelFile(stem, in: dir) == nil {
+            return "\(stem).onnx"
         }
         return nil
     }
@@ -149,22 +169,29 @@ public enum LuxOnnx {
 
 
 
-/// Drives the three LuxTTS graphs through ONNX Runtime's Objective-C API.
-///
-/// gloam-dj and gloam-voice-studio-ios talk to the ORT **C** API via a vendored
-/// xcframework. The SwiftPM distribution exposes only the Objective-C surface —
-/// its framework ships no module map, so the C headers are not importable here.
-/// Same runtime, same graphs, same CPU execution provider; only the glue
-/// differs, and the arithmetic below is byte-for-byte the iOS port's.
+/// Drives the three LuxTTS graphs through ONNX Runtime's **C** API — the same
+/// surface gloam-dj and gloam-voice-studio-ios use via their vendored
+/// xcframeworks. This used to go through the SwiftPM Objective-C wrapper, but
+/// that surface hides every memory-lifecycle knob (DisableCpuMemArena,
+/// DisableMemPattern, RunOptions arena shrinkage), and the arena's default
+/// kNextPowerOfTwo growth took a single 12.6 s render to a **4.35 GB** peak
+/// RSS — the same behavior that jetsam-killed the iOS app at 3.4 GB. The C
+/// header is vendored in COnnxRuntime; the framework linked is unchanged.
+/// Same runtime, same graphs, same CPU execution provider, and the arithmetic
+/// below is byte-for-byte the iOS port's.
 #if os(macOS)
 public final class LuxEngine {
-    private let env: ORTEnv
-    private let textEncoder: ORTSession
-    private let fmDecoder: ORTSession
-    private let vocos: ORTSession
-    private let teIn: [String], teOut: [String]
-    private let fmIn: [String], fmOut: [String]
-    private let voIn: [String], voOut: [String]
+    let api: OrtApi
+    private var env: OpaquePointer?
+    private var allocator: UnsafeMutablePointer<OrtAllocator>?
+    /// Kept alive for the session lifetime (one options object per role).
+    private var optionsPool: [OpaquePointer] = []
+    private var textEncoder: OpaquePointer?
+    private var fmDecoder: OpaquePointer?
+    private var vocos: OpaquePointer?
+    private var teIn: [String] = [], teOut: [String] = []
+    private var fmIn: [String] = [], fmOut: [String] = []
+    private var voIn: [String] = [], voOut: [String] = []
     let featDim: Int
 
     /// Very short text can predict fewer total frames than the prompt occupies;
@@ -178,34 +205,139 @@ public final class LuxEngine {
         if let missing = LuxOnnx.missingModelFile(in: modelDir) {
             throw LuxOnnx.SynthError.modelsMissing(missing)
         }
-        do {
-            // `ortEnv` stays local through the loads: a nested helper that read
-            // `self.env` would capture self, and self is not fully initialized yet.
-            let ortEnv = try ORTEnv(loggingLevel: .warning)
-            func session(_ file: String) throws -> ORTSession {
-                let opts = try ORTSessionOptions()
-                try opts.setGraphOptimizationLevel(.all)
-                return try ORTSession(env: ortEnv,
-                                      modelPath: modelDir.appendingPathComponent(file).path,
-                                      sessionOptions: opts)
-            }
-            env = ortEnv
-            // Build locally, then assign: a stored property cannot be read
-            // back inside init until every one of them is initialized.
-            let te = try session("text_encoder_int8.onnx")
-            let fm = try session("fm_decoder_int8.onnx")
-            let vo = try session("vocos.onnx")
-            // Input order is load-bearing — the graphs are fed positionally below.
-            teIn = try te.inputNames(); teOut = try te.outputNames()
-            fmIn = try fm.inputNames(); fmOut = try fm.outputNames()
-            voIn = try vo.inputNames(); voOut = try vo.outputNames()
-            textEncoder = te; fmDecoder = fm; vocos = vo
-        } catch let e as LuxOnnx.SynthError {
-            throw e
-        } catch {
-            throw LuxOnnx.SynthError.engineInitFailed(error.localizedDescription)
+        guard let base = OrtGetApiBase(), let apiPtr = base.pointee.GetApi(UInt32(ORT_API_VERSION)) else {
+            throw LuxOnnx.SynthError.engineInitFailed("OrtGetApiBase/GetApi returned NULL")
         }
+        api = apiPtr.pointee
         featDim = LuxMel.nMels
+        self.modelDir = modelDir
+
+        try check(api.CreateEnv(ORT_LOGGING_LEVEL_WARNING, "gloam-lux", &env))
+        try check(api.GetAllocatorWithDefaultOptions(&allocator))
+        try registerSharedArena()
+
+        // Arena shrinkage after every Run: non-initial arena chunks are
+        // returned once a run completes, so memory held between renders is the
+        // weights plus the initial chunk, not the largest render ever seen.
+        // Allocation lifecycle only — measured bit-identical output.
+        try check(api.CreateRunOptions(&runOpts))
+        try "cpu:0".withCString { v in
+            try "memory.enable_memory_arena_shrinkage".withCString { k in
+                try check(api.AddRunConfigEntry(runOpts, k, v))
+            }
+        }
+
+        textEncoder = try makeSession(modelDir,
+            LuxOnnx.modelFile("text_encoder", in: modelDir) ?? "text_encoder.onnx")
+        fmDecoder = try makeSession(modelDir,
+            LuxOnnx.modelFile("fm_decoder", in: modelDir) ?? "fm_decoder.onnx")
+        // vocos is NOT loaded here — see the lazy load in synthesize(). Its
+        // weights/prepack buffers (~80 MB) would otherwise sit resident inside
+        // the fm_decoder peak window, which is where memory actually runs out.
+
+        // Input order is load-bearing — the graphs are fed positionally below.
+        (teIn, teOut) = try ioNames(textEncoder!)
+        (fmIn, fmOut) = try ioNames(fmDecoder!)
+        guard teIn.count >= 4, fmIn.count >= 5 else {
+            throw LuxOnnx.SynthError.engineInitFailed(
+                "unexpected session I/O arity (te \(teIn.count) in, fm \(fmIn.count) in)")
+        }
+    }
+
+    private let modelDir: URL
+    /// Run options carrying the arena-shrinkage config; reused for every Run.
+    private var runOpts: OpaquePointer?
+
+    /// One env-level CPU **arena with kSameAsRequested growth**, shared by all
+    /// three sessions via `session.use_env_allocators`.
+    ///
+    /// Why not the default per-session arena: its kNextPowerOfTwo strategy
+    /// doubles the chunk size on every extension, so the fm_decoder's ~1.8 GB
+    /// of transient attention tensors (F ≈ 3.9k frames off a 28 s reference)
+    /// ballooned into 4.35 GB of arena that was never returned. Measured on
+    /// the same 12.6 s render: 4.35 GB → 2.55 GB peak RSS, bit-identical
+    /// output, same wall time. Why not `DisableCpuMemArena`: per-op malloc
+    /// frees land in the macOS malloc large cache, which holds the freed pages
+    /// dirty anyway (measured 3.0 GB peak) — an arena we control beats both.
+    ///
+    /// ORT's env is a process singleton and an allocator can only be
+    /// registered on it once; a second LuxEngine in the same process finds it
+    /// already registered and that existing arena is exactly what it should
+    /// use, so that status is success, not failure.
+    private func registerSharedArena() throws {
+        var memInfo: OpaquePointer?
+        try check(api.CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &memInfo))
+        defer { if let m = memInfo { api.ReleaseMemoryInfo(m) } }
+        var arenaCfg: OpaquePointer?
+        try "arena_extend_strategy".withCString { key in
+            var keyPtrs: [UnsafePointer<CChar>?] = [key]
+            var vals: [size_t] = [1]  // kSameAsRequested
+            try check(api.CreateArenaCfgV2(&keyPtrs, &vals, 1, &arenaCfg))
+        }
+        defer { if let c = arenaCfg { api.ReleaseArenaCfg(c) } }
+        if let status = api.CreateAndRegisterAllocator(env, memInfo, arenaCfg) {
+            let message = api.GetErrorMessage(status).map { String(cString: $0) } ?? ""
+            api.ReleaseStatus(status)
+            if !message.contains("already registered") {
+                throw LuxOnnx.SynthError.engineInitFailed(message)
+            }
+        }
+    }
+
+    private func makeSession(_ dir: URL, _ file: String) throws -> OpaquePointer? {
+        var opts: OpaquePointer?
+        try check(api.CreateSessionOptions(&opts))
+        guard let o = opts else { throw LuxOnnx.SynthError.engineInitFailed("CreateSessionOptions NULL") }
+        optionsPool.append(o)
+        try check(api.SetSessionGraphOptimizationLevel(o, ORT_ENABLE_ALL))
+        // Memory patterns pre-plan one consolidated allocation for a run's
+        // whole activation set, which held ~1.3 GB beyond what is ever live at
+        // once on this graph (measured 4.35 GB → 3.02 GB from this knob alone,
+        // bit-identical). NOTE: SetIntraOpNumThreads and disable_prepacking
+        // were both tried here and REJECTED — each changes the output bytes
+        // (different GEMM partitioning / packed-kernel rounding).
+        try check(api.DisableMemPattern(o))
+        try "1".withCString { v in
+            try "session.use_env_allocators".withCString { k in
+                try check(api.AddSessionConfigEntry(o, k, v))
+            }
+        }
+        var s: OpaquePointer?
+        try dir.appendingPathComponent(file).path.withCString { cPath in
+            try check(api.CreateSession(env, cPath, o, &s))
+        }
+        return s
+    }
+
+    private func ioNames(_ session: OpaquePointer) throws -> ([String], [String]) {
+        var nIn = 0, nOut = 0
+        try check(api.SessionGetInputCount(session, &nIn))
+        try check(api.SessionGetOutputCount(session, &nOut))
+        var ins: [String] = [], outs: [String] = []
+        for i in 0..<nIn {
+            var c: UnsafeMutablePointer<CChar>?
+            try check(api.SessionGetInputName(session, i, allocator, &c))
+            if let c {
+                ins.append(String(cString: c))
+                try check(api.AllocatorFree(allocator, UnsafeMutableRawPointer(c)))
+            }
+        }
+        for i in 0..<nOut {
+            var c: UnsafeMutablePointer<CChar>?
+            try check(api.SessionGetOutputName(session, i, allocator, &c))
+            if let c {
+                outs.append(String(cString: c))
+                try check(api.AllocatorFree(allocator, UnsafeMutableRawPointer(c)))
+            }
+        }
+        return (ins, outs)
+    }
+
+    deinit {
+        for s in [textEncoder, fmDecoder, vocos] { if let s { api.ReleaseSession(s) } }
+        for o in optionsPool { api.ReleaseSessionOptions(o) }
+        if let r = runOpts { api.ReleaseRunOptions(r) }
+        if let e = env { api.ReleaseEnv(e) }
     }
 
 
@@ -304,9 +436,26 @@ public final class LuxEngine {
             let src = (promptLen + t) * featDim
             for j in 0..<featDim { vin[j * Tgen + t] = x[src + j] / LuxMel.featScale }
         }
+        // vocos lives only for the vocode itself: created here, after the ODE
+        // loop's arena high-water mark has passed, and released right after.
+        // Loading it costs a fraction of a second against a multi-second
+        // render, and keeps its ~80 MB out of the fm_decoder peak window
+        // (measured 2.60 GB → 2.55 GB peak on the 12.6 s bench).
+        if vocos == nil {
+            vocos = try makeSession(modelDir, "vocos.onnx")
+            (voIn, voOut) = try ioNames(vocos!)
+            guard voIn.count >= 1, voOut.count >= 2 else {
+                throw LuxOnnx.SynthError.engineInitFailed("unexpected vocos I/O arity (\(voOut.count) out)")
+            }
+        }
         let vinT = try makeFloatTensor(vin, shape: [1, Int64(featDim), Int64(Tgen)])
         let vo = try run(vocos, inputs: [(voIn[0], vinT)], outputs: [voOut[0], voOut[1]])
         releaseValue(vinT)
+        if let s = vocos {
+            api.ReleaseSession(s)
+            vocos = nil
+            voIn = []; voOut = []
+        }
         let a48 = tensorFloats(vo[0])
         let a24 = tensorFloats(vo[1])
         releaseValue(vo[0]); releaseValue(vo[1])
@@ -326,50 +475,85 @@ public final class LuxEngine {
         return (out, rate)
     }
 
-    // MARK: ORT helpers
+    // MARK: ORT helpers (same shapes as the iOS port's)
 
-    /// ORTValue wants NSMutableData it can point at; the shape is [NSNumber].
-    private func tensor<T>(_ values: [T], shape: [Int], type: ORTTensorElementDataType) throws -> ORTValue {
-        let data = values.withUnsafeBufferPointer {
-            NSMutableData(bytes: $0.baseAddress, length: $0.count * MemoryLayout<T>.stride)
+    func check(_ status: OrtStatusPtr?) throws {
+        guard let s = status else { return }
+        let message = api.GetErrorMessage(s).map { String(cString: $0) } ?? "unknown ORT error"
+        api.ReleaseStatus(s)
+        throw LuxOnnx.SynthError.engineInitFailed(message)
+    }
+
+    func makeTensor<T>(_ data: [T], shape: [Int64], type: ONNXTensorElementDataType) throws -> OpaquePointer {
+        var value: OpaquePointer?
+        try shape.withUnsafeBufferPointer { shp in
+            try check(api.CreateTensorAsOrtValue(allocator, shp.baseAddress, shape.count, type, &value))
         }
-        return try ORTValue(tensorData: data, elementType: type,
-                            shape: shape.map { NSNumber(value: $0) })
-    }
-
-    private func makeInt64Tensor(_ values: [Int64], shape: [Int64]) throws -> ORTValue {
-        try tensor(values, shape: shape.map(Int.init), type: .int64)
-    }
-
-    private func makeFloatTensor(_ values: [Float], shape: [Int64]) throws -> ORTValue {
-        try tensor(values, shape: shape.map(Int.init), type: .float)
-    }
-
-    private func run(_ session: ORTSession, inputs: [(String, ORTValue)],
-                     outputs: [String]) throws -> [ORTValue] {
-        let out = try session.run(withInputs: Dictionary(uniqueKeysWithValues: inputs),
-                                  outputNames: Set(outputs), runOptions: nil)
-        return try outputs.map {
-            guard let v = out[$0] else {
-                throw LuxOnnx.SynthError.engineInitFailed("Run produced no '\($0)' output")
+        guard let v = value else { throw LuxOnnx.SynthError.engineInitFailed("CreateTensorAsOrtValue returned NULL") }
+        if !data.isEmpty {
+            var raw: UnsafeMutableRawPointer?
+            try check(api.GetTensorMutableData(v, &raw))
+            data.withUnsafeBufferPointer { src in
+                if let b = src.baseAddress {
+                    raw!.copyMemory(from: b, byteCount: data.count * MemoryLayout<T>.stride)
+                }
             }
+        }
+        return v
+    }
+
+    private func makeInt64Tensor(_ values: [Int64], shape: [Int64]) throws -> OpaquePointer {
+        try makeTensor(values, shape: shape, type: ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64)
+    }
+
+    private func makeFloatTensor(_ values: [Float], shape: [Int64]) throws -> OpaquePointer {
+        try makeTensor(values, shape: shape, type: ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
+    }
+
+    /// Multi-output run: returns outputs in the order requested.
+    private func run(_ session: OpaquePointer?,
+                     inputs: [(String, OpaquePointer)],
+                     outputs: [String]) throws -> [OpaquePointer] {
+        let inNames: [UnsafePointer<CChar>?] = inputs.map { UnsafePointer(strdup($0.0)) }
+        let outNames: [UnsafePointer<CChar>?] = outputs.map { UnsafePointer(strdup($0)) }
+        defer {
+            for p in inNames { free(UnsafeMutablePointer(mutating: p)) }
+            for p in outNames { free(UnsafeMutablePointer(mutating: p)) }
+        }
+        var inVals: [OpaquePointer?] = inputs.map { $0.1 }
+        var outVals = [OpaquePointer?](repeating: nil, count: outputs.count)
+        var mutIn = inNames
+        var mutOut = outNames
+        try check(api.Run(session, runOpts, &mutIn, &inVals, inputs.count, &mutOut, outputs.count, &outVals))
+        return try outVals.map {
+            guard let v = $0 else { throw LuxOnnx.SynthError.engineInitFailed("Run produced NULL output") }
             return v
         }
     }
 
-    private func tensorFloats(_ value: ORTValue) -> [Float] {
-        guard let d = try? value.tensorData() else { return [] }
-        return (d as Data).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    private func tensorFloats(_ value: OpaquePointer) -> [Float] {
+        var info: OpaquePointer?
+        guard api.GetTensorTypeAndShape(value, &info) == nil, let inf = info else { return [] }
+        defer { api.ReleaseTensorTypeAndShapeInfo(inf) }
+        var count = 0
+        guard api.GetTensorShapeElementCount(inf, &count) == nil else { return [] }
+        var raw: UnsafeMutableRawPointer?
+        guard api.GetTensorMutableData(value, &raw) == nil, let r = raw else { return [] }
+        return Array(UnsafeBufferPointer(start: r.bindMemory(to: Float.self, capacity: count), count: count))
     }
 
-    private func tensorShape(_ value: ORTValue) -> [Int] {
-        guard let info = try? value.typeInfo(),
-              let shape = info.tensorTypeAndShapeInfo?.shape else { return [] }
-        return shape.map { $0.intValue }
+    private func tensorShape(_ value: OpaquePointer) -> [Int] {
+        var info: OpaquePointer?
+        guard api.GetTensorTypeAndShape(value, &info) == nil, let inf = info else { return [] }
+        defer { api.ReleaseTensorTypeAndShapeInfo(inf) }
+        var dims = 0
+        guard api.GetDimensionsCount(inf, &dims) == nil else { return [] }
+        var shape = [Int64](repeating: 0, count: dims)
+        guard api.GetDimensions(inf, &shape, dims) == nil else { return [] }
+        return shape.map(Int.init)
     }
 
-    /// ORT's Objective-C values are reference-counted; nothing to release by hand.
-    private func releaseValue(_ value: ORTValue?) {}
+    private func releaseValue(_ v: OpaquePointer) { api.ReleaseValue(v) }
 }
 
 
@@ -550,9 +734,22 @@ public enum LuxMel {
         guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return a48 }
         defer { vDSP_destroy_fftsetup(setup) }
 
+        // One buffer, reused by both calls — mirrors the iOS port. The previous
+        // shape — `Array(s)` then `append(contentsOf:)` — allocated the slice,
+        // then a zero array, then reallocated to grow, churning ~12 MB through
+        // three allocations per spectrum; under memory pressure the grow is
+        // where malloc returned null on device (swift_abortAllocationFailure,
+        // 2026-08-01).
+        var padded = [Float](repeating: 0, count: nfft)
         func spectrum(_ s: ArraySlice<Float>) -> (re: [Float], im: [Float]) {
-            var padded = Array(s)
-            padded.append(contentsOf: [Float](repeating: 0, count: nfft - padded.count))
+            // Refill: the tail past the slice must be zero for the second call
+            // too, so clear before copying rather than trusting what's there.
+            for i in 0 ..< nfft { padded[i] = 0 }
+            padded.withUnsafeMutableBufferPointer { pb in
+                s.withUnsafeBufferPointer { sb in
+                    if let src = sb.baseAddress { pb.baseAddress!.update(from: src, count: s.count) }
+                }
+            }
             var re = [Float](repeating: 0, count: half)
             var im = [Float](repeating: 0, count: half)
             re.withUnsafeMutableBufferPointer { rp in
