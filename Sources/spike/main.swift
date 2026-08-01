@@ -116,8 +116,9 @@ func usage() -> Never {
          + "[--engine <id>:<file>=<value>]... [--no-source]\n"
          + "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
          + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n"
-         + "   or: spike pocket --ref <ref.wav> --text <line> --out <file.wav> "
-         + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]\n").utf8))
+         + "   or: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav> "
+         + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] "
+         + "[--precision <fp32|int8>] [--temp <t>]\n").utf8))
     exit(2)
 }
 
@@ -408,51 +409,95 @@ if CommandLine.arguments.dropFirst().first == "lux-compare" {
 
 // MARK: - pocket subcommand
 //
-// `spike pocket --ref <ref.wav> --text <line> --out <file.wav>
-//      [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]`
+// `spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav>
+//      [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]
+//      [--precision <fp32|int8>] [--temp <t>]`
 //
-// Renders ONE line from ONE reference through the Pocket TTS backend
-// (sherpa-onnx, CPU) and writes a wav — the headless audition path, sibling to
-// lux-compare. Bypasses GloamEngine and drives PocketEngine directly so the
-// seed can be pinned (default 42, the sherpa example's) and a run is
-// reproducible; RMS/peak are printed because a wav that compiles-but-is-silent
-// is the failure mode worth catching here.
+// Renders ONE line from ONE reference through a Pocket TTS backend and writes
+// a wav — the headless audition path, sibling to lux-compare. Two backends
+// exist ON PURPOSE: `onnx` (PocketOnnxEngine, this repo driving the community
+// ONNX graphs directly) and `sherpa` (sherpa-onnx's Pocket driver, which was
+// measured chopping ~700 ms of speech off every utterance's start). Both stay
+// so the defect remains demonstrable. The seed pins the flow noise for
+// reproducible takes; RMS/peak catch silent-wav failures, and LEADING SILENCE
+// is printed because the onset chop is exactly what these numbers exist to
+// show: sherpa reads ~0 ms, a faithful engine ~100+ ms of natural ramp-in.
 if CommandLine.arguments.dropFirst().first == "pocket" {
     var refPath: String?, refText: String?, text: String?, outPath: String?
-    var modelDir = "Models/pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26"
+    var modelDir: String?
+    var backend = "onnx"
+    var precision = "fp32"
     var seed: UInt64 = 42
+    var temp: Float?
     var it = CommandLine.arguments.dropFirst(2).makeIterator()
     while let flag = it.next() {
         switch flag {
+        case "--backend": backend = it.next() ?? backend
         case "--ref": refPath = it.next()
         case "--ref-text": refText = it.next()
         case "--text": text = it.next()
         case "--out": outPath = it.next()
-        case "--model-dir": modelDir = it.next() ?? modelDir
+        case "--model-dir": modelDir = it.next()
         case "--seed": seed = UInt64(it.next() ?? "42") ?? 42
+        case "--precision": precision = it.next() ?? precision
+        case "--temp": temp = Float(it.next() ?? "")
         default: die("pocket: unknown flag \(flag)")
         }
     }
-    guard let refPath, let text, let outPath else {
-        die("usage: spike pocket --ref <ref.wav> --text <line> --out <file.wav> "
-            + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]")
+    guard let refPath, let text, let outPath, ["onnx", "sherpa"].contains(backend) else {
+        die("usage: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> "
+            + "--out <file.wav> [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] "
+            + "[--precision <fp32|int8>] [--temp <t>]")
     }
 
-    do {
-        let started = Date()
-        let engine = try PocketEngine(modelDir: URL(fileURLWithPath: modelDir))
-        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
-        let audio = try engine.synthesize(
-            text: text, refSamples: samples24k, refSampleRate: LuxOnnx.sampleRate,
-            refText: refText, seed: seed)
-        let out = URL(fileURLWithPath: outPath)
-        try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+    /// Milliseconds before the first sample above 2% of peak (floor 0.002) —
+    /// the onset metric that makes sherpa's chop visible: real speech ramps
+    /// in, a chopped take starts hot at sample 0.
+    func leadingSilenceMs(_ audio: [Float], rate: Int) -> Double {
+        let peak = audio.reduce(Float(0)) { max($0, abs($1)) }
+        let threshold = max(0.002, 0.02 * peak)
+        let idx = audio.firstIndex { abs($0) > threshold } ?? audio.count
+        return Double(idx) * 1000 / Double(rate)
+    }
+
+    func report(_ label: String, _ audio: [Float], rate: Int, started: Date, out: URL) {
         let rms = (audio.reduce(Double(0)) { $0 + Double($1) * Double($1) }
             / Double(max(1, audio.count))).squareRoot()
         let peak = audio.reduce(Float(0)) { max($0, abs($1)) }
-        print(String(format: "pocket: %.2fs audio @ %d Hz in %.2fs  rms %.4f  peak %.4f -> %@",
-                     Double(audio.count) / Double(engine.sampleRate), engine.sampleRate,
-                     Date().timeIntervalSince(started), rms, peak, out.path))
+        print(String(
+            format: "pocket[%@]: %.2fs audio @ %d Hz in %.2fs  lead-in %.0fms  "
+                + "rms %.4f  peak %.4f -> %@",
+            label, Double(audio.count) / Double(rate), rate,
+            Date().timeIntervalSince(started), leadingSilenceMs(audio, rate: rate),
+            rms, peak, out.path))
+    }
+
+    do {
+        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let out = URL(fileURLWithPath: outPath)
+        let started = Date()
+        if backend == "onnx" {
+            guard let prec = PocketOnnx.Precision(rawValue: precision) else {
+                die("pocket: --precision must be fp32 or int8")
+            }
+            let dir = URL(fileURLWithPath: modelDir ?? "Models/pocket-tts/english_2026-04")
+            let engine = try PocketOnnxEngine(bundleDir: dir, precision: prec)
+            let voice = try engine.makeVoiceState(refSamples24k: samples24k)
+            let audio = try engine.synthesize(text: text, voice: voice, seed: seed,
+                                              temperature: temp)
+            try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+            report("onnx-\(prec.rawValue)", audio, rate: engine.sampleRate,
+                   started: started, out: out)
+        } else {
+            let dir = URL(fileURLWithPath:
+                modelDir ?? "Models/pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26")
+            let engine = try PocketEngine(modelDir: dir)
+            let audio = try engine.synthesize(
+                text: text, refSamples: samples24k, refSampleRate: LuxOnnx.sampleRate,
+                refText: refText, seed: seed)
+            try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+            report("sherpa", audio, rate: engine.sampleRate, started: started, out: out)
+        }
     } catch {
         die("pocket: \(error.localizedDescription)")
     }
