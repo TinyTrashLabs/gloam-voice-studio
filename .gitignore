@@ -26,10 +26,3 @@ ExportOptions.plist
 *.jks
 *.keystore
 **/key.properties
-
-# Built .gvoice packs — NEVER committed. This repo is PUBLIC (MIT); packs embed
-# `source/ref.wav`, which for our two hosts is a recording of a real person
-# (see supertonic-mlx-spike/refs/README.md: "These are recordings of real
-# people"). Publishing them would be irreversible. Build them locally with
-# `spike gvoice-build` and keep them in a private location.
-packs/
