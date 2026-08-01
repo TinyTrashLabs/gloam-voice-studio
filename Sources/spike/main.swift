@@ -115,7 +115,9 @@ func usage() -> Never {
          + "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] "
          + "[--engine <id>:<file>=<value>]... [--no-source]\n"
          + "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
-         + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n").utf8))
+         + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n"
+         + "   or: spike pocket --ref <ref.wav> --text <line> --out <file.wav> "
+         + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]\n").utf8))
     exit(2)
 }
 
@@ -400,6 +402,59 @@ if CommandLine.arguments.dropFirst().first == "lux-compare" {
         if onnxDir == nil && mlxDir == nil { die("lux-compare: pass --onnx-dir and/or --mlx-dir") }
     } catch {
         die("lux-compare: \(error)")
+    }
+    exit(0)
+}
+
+// MARK: - pocket subcommand
+//
+// `spike pocket --ref <ref.wav> --text <line> --out <file.wav>
+//      [--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]`
+//
+// Renders ONE line from ONE reference through the Pocket TTS backend
+// (sherpa-onnx, CPU) and writes a wav — the headless audition path, sibling to
+// lux-compare. Bypasses GloamEngine and drives PocketEngine directly so the
+// seed can be pinned (default 42, the sherpa example's) and a run is
+// reproducible; RMS/peak are printed because a wav that compiles-but-is-silent
+// is the failure mode worth catching here.
+if CommandLine.arguments.dropFirst().first == "pocket" {
+    var refPath: String?, refText: String?, text: String?, outPath: String?
+    var modelDir = "Models/pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26"
+    var seed: UInt64 = 42
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let flag = it.next() {
+        switch flag {
+        case "--ref": refPath = it.next()
+        case "--ref-text": refText = it.next()
+        case "--text": text = it.next()
+        case "--out": outPath = it.next()
+        case "--model-dir": modelDir = it.next() ?? modelDir
+        case "--seed": seed = UInt64(it.next() ?? "42") ?? 42
+        default: die("pocket: unknown flag \(flag)")
+        }
+    }
+    guard let refPath, let text, let outPath else {
+        die("usage: spike pocket --ref <ref.wav> --text <line> --out <file.wav> "
+            + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>]")
+    }
+
+    do {
+        let started = Date()
+        let engine = try PocketEngine(modelDir: URL(fileURLWithPath: modelDir))
+        let samples24k = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+        let audio = try engine.synthesize(
+            text: text, refSamples: samples24k, refSampleRate: LuxOnnx.sampleRate,
+            refText: refText, seed: seed)
+        let out = URL(fileURLWithPath: outPath)
+        try WAVWriter.write(samples: audio, sampleRate: engine.sampleRate, to: out)
+        let rms = (audio.reduce(Double(0)) { $0 + Double($1) * Double($1) }
+            / Double(max(1, audio.count))).squareRoot()
+        let peak = audio.reduce(Float(0)) { max($0, abs($1)) }
+        print(String(format: "pocket: %.2fs audio @ %d Hz in %.2fs  rms %.4f  peak %.4f -> %@",
+                     Double(audio.count) / Double(engine.sampleRate), engine.sampleRate,
+                     Date().timeIntervalSince(started), rms, peak, out.path))
+    } catch {
+        die("pocket: \(error.localizedDescription)")
     }
     exit(0)
 }

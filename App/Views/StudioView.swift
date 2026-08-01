@@ -444,6 +444,9 @@ struct StudioView: View {
         case .supertonic:
             "Pick a preset voice — SuperTonic doesn't clone or take free-text direction. "
             + "Fast, multilingual, 44.1 kHz."
+        case .pocketTTS:
+            "Clones a voice from a reference clip (first ~10s) — the prosody comes from that "
+            + "clip. No free-text Direction and no delivery knobs; each take samples fresh."
         }
     }
 

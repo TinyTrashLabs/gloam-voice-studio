@@ -484,6 +484,11 @@ final class AppModel {
                     ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
                     : nil
                 let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
+                // Pocket is a sherpa-onnx layout, not an HF snapshot — no
+                // config.json; its own manifest check is the readiness marker.
+                if backend == .pocketTTS {
+                    return PocketTTS.missingModelFile(in: dir) == nil ? dir.path : nil
+                }
                 let hasConfig = FileManager.default.fileExists(
                     atPath: dir.appendingPathComponent("config.json").path)
                 return hasConfig ? dir.path : nil

@@ -155,7 +155,7 @@ struct ContentView: View {
         // qwen3-design is intentionally absent — it's Creation-only, in the Voice
         // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
         [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
-         .supertonic, .luxTTS]
+         .supertonic, .luxTTS, .pocketTTS]
     }
 
     private func modelDisplayName(_ b: BackendID) -> String {
@@ -165,6 +165,7 @@ struct ContentView: View {
         case .qwenDesign: "qwen3-design · design from text"
         case .qwenCustom: "qwen3-custom · direct a preset voice"
         case .luxTTS: "lux-tts · clone a voice"
+        case .pocketTTS: "pocket-tts · clone a voice"
         default: b.rawValue
         }
     }

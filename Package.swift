@@ -58,6 +58,13 @@ let package = Package(
                  .upToNextMinor(from: "1.20.0")),
     ],
     targets: [
+        // Header-only: vendors sherpa-onnx's c-api.h for the C struct layouts.
+        // The dylib is fetched by scripts/fetch-pocket-tts.sh and dlopen'd at
+        // runtime — see Sources/CSherpaOnnx/shim.c for why it isn't linked.
+        .target(
+            name: "CSherpaOnnx",
+            path: "Sources/CSherpaOnnx"
+        ),
         .target(
             name: "EngineKit",
             dependencies: [
@@ -88,6 +95,9 @@ let package = Package(
                 // The ORT C API, for LuxOnnxEngine — the int8 ONNX LuxTTS path
                 // that mirrors what iOS ships, so both can be compared here.
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                // sherpa-onnx C struct layouts for the Pocket TTS backend
+                // (PocketSpeechModel dlopens the actual library at runtime).
+                "CSherpaOnnx",
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
