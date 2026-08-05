@@ -223,25 +223,71 @@ public enum APIRouter {
             // emotion, so the live knob is left neutral; on the base clip, `emotion`
             // still drives the model knob (chatterbox exaggeration / fish temperature).
             // A request that omits `voice` entirely falls back to the Settings →
-            // API server "Default voice" (empty = today's raw-backend behavior) —
-            // read live off `deps.defaultVoice()` so flipping the picker applies to
-            // the next request with no server restart.
+            // API server "Default voice", read live off `deps.defaultVoice()` so
+            // flipping the picker applies to the next request with no server restart.
+            //
+            // CONTRACT (2026-08): on a cloning backend this endpoint NEVER
+            // synthesizes without a resolved reference. It used to resolve the slug
+            // with two `try?`s that threw the `voiceNotFound` away; when both missed
+            // on a `voiceClone: .optional` backend (qwen Base, fish) refPath/refText
+            // stayed nil, the planner had nothing to reject (`needsRefAudio` is false
+            // there), and the model generated UNCONDITIONED — inventing a fresh random
+            // speaker per request while returning 200 and logging a normal line naming
+            // the voice the caller asked for. An unusable voice is now an explicit,
+            // logged 4xx instead: silence about it is worse than a failed request.
             var refPath: String? = nil
             var refText: String? = nil
             var usedVariant = false
             let defaultVoice = deps.defaultVoice()
             let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            // Preset-speaker backends (kokoro/supertonic/qwen-custom) and
+            // instruct-only ones (qwen-design) have `voiceClone == .none`: their
+            // `voice` field is not a library slug at all, so an unknown one keeps
+            // falling through to the preset default exactly as before.
+            let clones = controls.voiceClone != .none
             if let voice = effectiveVoice {
                 let emo = req.emotion?.lowercased()
                 let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
+                var resolved: (slug: String, meta: VoiceMeta, refURL: URL)? = nil
                 if let variant, let found = try? deps.voices.get(variant) {
-                    refPath = found.refURL.path
-                    refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                    resolved = (variant, found.meta, found.refURL)
                     usedVariant = true
                 } else if let found = try? deps.voices.get(voice) {
-                    refPath = found.refURL.path
-                    refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                    // An emotion-variant miss still falls back to the base voice —
+                    // only a base miss is fatal.
+                    resolved = (voice, found.meta, found.refURL)
                 }
+                if let resolved {
+                    // An empty transcript is the same failure wearing a disguise on
+                    // the backends whose clone path is conditioned on text as well as
+                    // audio: a nil refText drops qwen Base out of its ICL branch into
+                    // the same unconditioned generation. Backends that clone from
+                    // audio alone (chatterbox, pocket, fish) still accept it.
+                    if clones && backend.needsRefText && resolved.meta.refText.isEmpty {
+                        logError("/v1/audio/speech: voice '\(resolved.slug)' has an empty"
+                            + " refText (model \(backend.rawValue)) — refusing to"
+                            + " synthesize an unconditioned, randomly invented speaker")
+                        throw APIError(
+                            status: .badRequest,
+                            detail: "voice '\(resolved.slug)' has an empty reference transcript"
+                                + " — \(backend.rawValue) cannot clone from it")
+                    }
+                    refPath = resolved.refURL.path
+                    refText = resolved.meta.refText.isEmpty ? nil : resolved.meta.refText
+                } else if clones {
+                    logError("/v1/audio/speech: \(StudioError.voiceNotFound(slug: voice))"
+                        + " (model \(backend.rawValue)) — refusing to synthesize an"
+                        + " unconditioned, randomly invented speaker")
+                    throw APIError(status: .badRequest, detail: "voice '\(voice)' not found")
+                }
+            } else if clones {
+                // No `voice` and no configured default: a cloning backend would
+                // invent a speaker. Say so instead.
+                logError("/v1/audio/speech: no voice given and no default voice is set"
+                    + " (model \(backend.rawValue)) — refusing to synthesize an"
+                    + " unconditioned, randomly invented speaker")
+                throw APIError(status: .badRequest,
+                               detail: "\(backend.rawValue) requires a 'voice'")
             }
             let knobEmotion = usedVariant ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)

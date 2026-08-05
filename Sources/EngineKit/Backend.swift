@@ -260,6 +260,25 @@ extension BackendID {
 }
 
 extension BackendID {
+    /// Whether the clone path is conditioned on the reference TRANSCRIPT as well as
+    /// the reference audio — i.e. whether an empty `refText` silently un-clones the
+    /// request.
+    ///
+    /// Qwen Base's in-context branch needs BOTH (`refAudio` *and* `refText`, see
+    /// Qwen3TTS.generateVoiceDesign); with either missing it falls through to the
+    /// unconditioned branch and invents a random speaker. LuxTTS's ported tokenizer
+    /// has no ASR fallback, so it throws outright. Chatterbox, Pocket and Fish clone
+    /// from the audio alone — a blank transcript there costs some quality at worst,
+    /// so their voices must keep working without one.
+    public var needsRefText: Bool {
+        switch self {
+        case .qwen06B, .qwen17B, .luxTTS: true
+        default: false
+        }
+    }
+}
+
+extension BackendID {
     /// How this backend expresses emotion. See `EmotionMechanism`.
     public var emotionMechanism: EmotionMechanism {
         switch self {

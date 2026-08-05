@@ -24,7 +24,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | --- | --- | --- |
 | `input` | string, required | Text to speak |
 | `model` | string | Backend id (`qwen3-1.7b`, `chatterbox-turbo`, `fish-s2-pro`, …); defaults to the app's Studio backend |
-| `voice` | string | Library voice slug. With `emotion`, an acted `<voice>-<emotion>` variant clip is used when it exists |
+| `voice` | string | Library voice slug. With `emotion`, an acted `<voice>-<emotion>` variant clip is used when it exists. Required on cloning backends — see below |
 | `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant |
 | `exaggeration` | float 0–1 | Chatterbox emotion knob override |
 | `speed` | float | Playback-speed multiplier (time-domain; extremes shift pitch) |
@@ -36,6 +36,24 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 
 Backend gating errors are 400s (e.g. `qwen3-design requires 'instruct'`).
 Fish returns `403` with the license notice until acknowledged in-app.
+
+### Voice resolution on cloning backends
+
+On a cloning backend (`qwen3-0.6b`, `qwen3-1.7b`, `chatterbox`,
+`chatterbox-turbo`, `fish-s2-pro`, `lux-tts`, `pocket-tts`) the endpoint never
+synthesizes without a resolved reference — an unusable voice is a logged `400`,
+not a take in some invented voice:
+
+| Case | Result |
+| --- | --- |
+| `voice` names no library slug | `400 voice '<slug>' not found` |
+| No `voice` and no Settings default voice | `400 <model> requires a 'voice'` |
+| Voice exists but its `refText` is empty, on a backend that clones from the transcript too (`qwen3-*` Base, `lux-tts`) | `400 voice '<slug>' has an empty reference transcript — <model> cannot clone from it` |
+| `emotion` given but no `<voice>-<emotion>` clip exists | Falls back to the base voice (unchanged) |
+
+Preset-voicepack backends (`kokoro`, `supertonic`, `qwen3-custom`) are
+unaffected: their `voice`/`speaker` field is a voicepack name, not a library
+slug, and an unknown one still falls back to the backend's default preset.
 
 ## Chat
 

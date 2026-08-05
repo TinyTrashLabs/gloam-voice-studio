@@ -24,18 +24,30 @@ final class CapturingProvider: ModelProviding, @unchecked Sendable {
 }
 
 final class APIControlsTests: XCTestCase, @unchecked Sendable {
-    func makeDeps(_ provider: CapturingProvider, default def: BackendID = .qwen17B) -> APIDependencies {
+    /// A library holding one usable voice, "cruz". Cloning backends refuse to
+    /// synthesize without a resolved reference, so tests whose subject is NOT voice
+    /// resolution (model precedence, instruct gating, the busy gate) need a real
+    /// voice on hand rather than the old unconditioned free ride.
+    func seededLibrary(_ tag: String) throws -> VoiceLibrary {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("apictl-\(UUID().uuidString)")
-        return APIDependencies(engine: GloamEngine(provider: provider),
-                               voices: VoiceLibrary(directory: dir),
-                               defaultBackend: def, log: APILog())
+            .appendingPathComponent("\(tag)-\(UUID().uuidString)")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Cruz", refWav: Data([0, 1, 2]), refText: "cruz ref")
+        return voices
+    }
+
+    func makeDeps(_ provider: CapturingProvider,
+                  default def: BackendID = .qwen17B) throws -> APIDependencies {
+        APIDependencies(engine: GloamEngine(provider: provider),
+                        voices: try seededLibrary("apictl"),
+                        defaultBackend: def, log: APILog(),
+                        defaultVoice: { "cruz" })
     }
 
     func testInstructAndLanguageReachEngine() async throws {
         // Direction (instruct) is honored on the design model, not Base (clone-only).
         let provider = CapturingProvider()
-        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwenDesign)))
+        let app = Application(router: APIRouter.build(try makeDeps(provider, default: .qwenDesign)))
         try await app.test(.router) { client in
             let body = #"{"input":"hello","model":"qwen3-design","instruct":"warm radio","language":"english","top_p":0.9}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
@@ -51,7 +63,7 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
     func testBaseDoesNotForwardInstruct() async throws {
         // Base is clone-only: instruct in the request must not reach the engine.
         let provider = CapturingProvider()
-        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwen17B)))
+        let app = Application(router: APIRouter.build(try makeDeps(provider, default: .qwen17B)))
         try await app.test(.router) { client in
             let body = #"{"input":"hello","model":"qwen3-1.7b","instruct":"warm radio","language":"english"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
@@ -65,7 +77,7 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
 
     func testDesignWithoutInstructIs400() async throws {
         let provider = CapturingProvider()
-        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwenDesign)))
+        let app = Application(router: APIRouter.build(try makeDeps(provider, default: .qwenDesign)))
         try await app.test(.router) { client in
             let body = #"{"input":"hello","model":"qwen3-design"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
@@ -80,7 +92,7 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
 
     func testCustomWithoutSpeakerIs400() async throws {
         let provider = CapturingProvider()
-        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwenCustom)))
+        let app = Application(router: APIRouter.build(try makeDeps(provider, default: .qwenCustom)))
         try await app.test(.router) { client in
             let body = #"{"input":"hello","model":"qwen3-custom","instruct":"calm"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
@@ -97,10 +109,10 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
     func testSpeechLogsExactlyOneEntryPerRequest() async throws {
         let provider = CapturingProvider()
         let log = APILog()
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("log1-\(UUID())")
         let deps = APIDependencies(engine: GloamEngine(provider: provider),
-                                   voices: VoiceLibrary(directory: dir),
-                                   defaultBackend: .qwen17B, log: log)
+                                   voices: try seededLibrary("log1"),
+                                   defaultBackend: .qwen17B, log: log,
+                                   defaultVoice: { "cruz" })
         let app = Application(router: APIRouter.build(deps))
 
         @Sendable func entryCount() async -> Int { await MainActor.run { log.entries.count } }
@@ -178,7 +190,11 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.refText, "ava ref")
     }
 
-    func testEmptyDefaultPreservesRawBackendBehavior() async throws {
+    func testNoVoiceAndNoDefaultOnCloningBackendIs400() async throws {
+        // Was `testEmptyDefaultPreservesRawBackendBehavior`, which asserted a 200
+        // here. That "raw backend" behavior is the bug: qwen Base with no reference
+        // generates UNCONDITIONED, inventing a random speaker per request while
+        // reporting success. A cloning backend with nothing to clone now says so.
         let provider = CapturingProvider()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("defvoice-empty-\(UUID())")
@@ -191,11 +207,155 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
                                      body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String, "qwen3-1.7b requires a 'voice'")
+            }
+        }
+        XCTAssertNil(provider.model.last, "the engine must not be reached at all")
+    }
+
+    func testUnknownVoiceOnCloningBackendIs400AndLogged() async throws {
+        let provider = CapturingProvider()
+        let log = APILog()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("unknown-voice"),
+                                   defaultBackend: .qwen17B, log: log)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"ghost"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String, "voice 'ghost' not found")
+            }
+        }
+        XCTAssertNil(provider.model.last, "the engine must not be reached at all")
+        // The failure is on the record, naming the slug — the old `try?` swallowed
+        // it and logged a green 200 line for a voice that was never used.
+        var entry: APILogEntry?
+        for _ in 0..<50 {
+            entry = await MainActor.run {
+                log.entries.first { $0.path == "/v1/audio/speech" }
+            }
+            if entry != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(entry?.status, 400)
+        XCTAssertEqual(entry?.note, "voice 'ghost' not found")
+    }
+
+    func testUnknownVoiceWithEmotionSuffixIs400NamingTheBaseSlug() async throws {
+        // The variant probe ("ghost-excited") missing is not itself an error — the
+        // 400 must name what the caller actually asked for.
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("unknown-variant"),
+                                   defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"ghost","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String, "voice 'ghost' not found")
+            }
+        }
+    }
+
+    func testEmptyRefTextOnQwenIs400() async throws {
+        // A voice saved without a transcript is corrupt for qwen's in-context clone
+        // path: nil refText drops it into the same unconditioned branch as no voice
+        // at all. Fail loudly instead.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blank-reftext-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Mute", refWav: Data([0, 1, 2]), refText: "")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"mute"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String,
+                               "voice 'mute' has an empty reference transcript"
+                                   + " — qwen3-1.7b cannot clone from it")
+            }
+        }
+        XCTAssertNil(provider.model.last, "the engine must not be reached at all")
+    }
+
+    func testEmptyRefTextIsFineOnAudioOnlyCloneBackends() async throws {
+        // Chatterbox clones from the audio alone — it never reads refText — so a
+        // transcript-less voice must keep working there.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blank-reftext-cb-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Mute", refWav: Data([0, 1, 2]), refText: "")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .chatterboxTurbo)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"chatterbox-turbo","voice":"mute"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
                 XCTAssertEqual(resp.status, .ok)
             }
         }
-        XCTAssertNil(provider.model.last?.refAudioPath)
+        XCTAssertTrue(provider.model.last?.refAudioPath?.hasSuffix("mute/ref.wav") == true)
         XCTAssertNil(provider.model.last?.refText)
+    }
+
+    func testUnknownVoiceOnKokoroStillFallsBackToAPresetVoicepack() async throws {
+        // Kokoro has no clone path: its `voice` field IS a voicepack name, so an
+        // unknown one keeps falling back to the backend's best-first preset rather
+        // than 400. The new contract must not leak onto preset backends.
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("kokoro-unknown"),
+                                   defaultBackend: .kokoro)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"kokoro","voice":"ghost"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.speaker, BackendID.kokoroVoices.first)
+        XCTAssertNil(provider.model.last?.refAudioPath)
+    }
+
+    func testEmotionVariantMissFallsBackToBaseVoice() async throws {
+        // Existing behavior that must keep working: "ava" + an emotion with no acted
+        // "ava-<emotion>" clip reads the base voice, it does not 400.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("variant-miss-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Ava", refWav: Data([0, 1, 2]), refText: "ava base")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"ava","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "ava base")
     }
 
     func testDefaultVoiceWithEmotionRoutesToVariant() async throws {
@@ -224,13 +384,12 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
 
     func testDefaultModelUsedWhenRequestOmitsModel() async throws {
         let provider = CapturingProvider()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("defmodel-omit-\(UUID())")
         // qwen06B, not fish: fish backends sit behind the license-ack gate
         // (403), which is not what this test is about.
         let deps = APIDependencies(engine: GloamEngine(provider: provider),
-                                   voices: VoiceLibrary(directory: dir),
+                                   voices: try seededLibrary("defmodel-omit"),
                                    defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
                                    defaultModel: { "qwen3-0.6b" })
         let app = Application(router: APIRouter.build(deps))
         try await app.test(.router) { client in
@@ -245,11 +404,10 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
 
     func testExplicitModelOverridesDefaultModel() async throws {
         let provider = CapturingProvider()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("defmodel-override-\(UUID())")
         let deps = APIDependencies(engine: GloamEngine(provider: provider),
-                                   voices: VoiceLibrary(directory: dir),
+                                   voices: try seededLibrary("defmodel-override"),
                                    defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
                                    defaultModel: { "fish-s2-pro" })
         let app = Application(router: APIRouter.build(deps))
         try await app.test(.router) { client in
@@ -265,7 +423,7 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
     func testEmptyDefaultModelFollowsStudioEngine() async throws {
         let provider = CapturingProvider()
         // No defaultModel closure passed — falls back to defaultBackend.
-        let app = Application(router: APIRouter.build(makeDeps(provider, default: .qwen17B)))
+        let app = Application(router: APIRouter.build(try makeDeps(provider, default: .qwen17B)))
         try await app.test(.router) { client in
             let body = #"{"input":"hello"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
@@ -280,11 +438,10 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         // A stale persisted raw value (e.g. a removed backend) must not 500 —
         // it falls through to the Studio engine.
         let provider = CapturingProvider()
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("defmodel-stale-\(UUID())")
         let deps = APIDependencies(engine: GloamEngine(provider: provider),
-                                   voices: VoiceLibrary(directory: dir),
+                                   voices: try seededLibrary("defmodel-stale"),
                                    defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
                                    defaultModel: { "retired-backend" })
         let app = Application(router: APIRouter.build(deps))
         try await app.test(.router) { client in
@@ -332,11 +489,11 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             func loadModel(backend: BackendID) async throws -> any SpeechModel { SlowModel() }
             func didEvictModel() {}
         }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("busy-\(UUID())")
         let deps = APIDependencies(
             engine: GloamEngine(provider: SlowProvider()),
-            voices: VoiceLibrary(directory: dir), defaultBackend: .qwen17B,
-            gate: RequestGate(maxConcurrent: 1, maxQueued: 1))
+            voices: try seededLibrary("busy"), defaultBackend: .qwen17B,
+            gate: RequestGate(maxConcurrent: 1, maxQueued: 1),
+            defaultVoice: { "cruz" })
         let app = Application(router: APIRouter.build(deps))
         try await app.test(.live) { client in
             // The server processes one request at a time per connection, so each

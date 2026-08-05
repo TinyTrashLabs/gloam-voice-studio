@@ -24,6 +24,20 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(BackendID.chatterbox.isQwen)
     }
 
+    func testNeedsRefTextTracksTheTextConditionedClonePaths() {
+        // Qwen Base's in-context branch needs audio AND transcript (without the
+        // transcript it silently generates unconditioned); LuxTTS's ported tokenizer
+        // has no ASR fallback and throws. Everything else clones from audio alone.
+        XCTAssertTrue(BackendID.qwen06B.needsRefText)
+        XCTAssertTrue(BackendID.qwen17B.needsRefText)
+        XCTAssertTrue(BackendID.luxTTS.needsRefText)
+        XCTAssertFalse(BackendID.chatterbox.needsRefText)
+        XCTAssertFalse(BackendID.chatterboxTurbo.needsRefText)
+        XCTAssertFalse(BackendID.pocketTTS.needsRefText)
+        XCTAssertFalse(BackendID.fishS2Pro.needsRefText)
+        XCTAssertFalse(BackendID.kokoro.needsRefText)
+    }
+
     func testLegacyQwenMigration() {
         XCTAssertEqual(BackendID.migrating(rawValue: "qwen3"), .qwen06B)
         XCTAssertEqual(BackendID.migrating(rawValue: "fish-s2-pro"), .fishS2Pro)
