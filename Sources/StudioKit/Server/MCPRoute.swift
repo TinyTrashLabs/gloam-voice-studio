@@ -133,13 +133,44 @@ enum MCPRoute {
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return toolError(id: id, "speak requires non-empty 'text'")
             }
+            let backend = deps.defaultBackend
+            let controls = backend.controls
+            // CONTRACT (matches /v1/audio/speech — PR #38 "400 on an unresolvable
+            // voice instead of inventing a speaker"): on a cloning backend this tool
+            // never synthesizes without a resolved reference. An unknown voice, an
+            // omitted voice with no default configured, or a resolved voice whose
+            // meta.json carries an empty transcript (on backends whose clone path is
+            // conditioned on text too — BackendID.needsRefText) used to leave
+            // refPath/refText nil with zero gating, falling into the model's
+            // UNCONDITIONED branch and inventing a random speaker while reporting
+            // success. Refuse explicitly instead, same as the HTTP endpoint.
+            let clones = controls.voiceClone != .none
+            let effectiveVoice = (arguments["voice"] as? String) ?? {
+                let def = deps.defaultVoice()
+                return def.isEmpty ? nil : def
+            }()
             let resolved: (path: String, text: String?)?
-            if let voice = arguments["voice"] as? String {
+            if let voice = effectiveVoice {
                 guard let found = try? deps.voices.get(voice) else {
+                    APIRouter.logError("mcp speak: voice '\(voice)' not found"
+                        + " (model \(backend.rawValue)) — refusing to synthesize an"
+                        + " unconditioned, randomly invented speaker")
                     return toolError(id: id, "voice '\(voice)' not found — call list_voices")
+                }
+                if clones && backend.needsRefText && found.meta.refText.isEmpty {
+                    APIRouter.logError("mcp speak: voice '\(voice)' has an empty refText"
+                        + " (model \(backend.rawValue)) — refusing to synthesize an"
+                        + " unconditioned, randomly invented speaker")
+                    return toolError(id: id, "voice '\(voice)' has an empty reference"
+                        + " transcript — \(backend.rawValue) cannot clone from it")
                 }
                 resolved = (found.refURL.path,
                             found.meta.refText.isEmpty ? nil : found.meta.refText)
+            } else if clones {
+                APIRouter.logError("mcp speak: no voice given and no default voice is set"
+                    + " (model \(backend.rawValue)) — refusing to synthesize an"
+                    + " unconditioned, randomly invented speaker")
+                return toolError(id: id, "\(backend.rawValue) requires a 'voice' — call list_voices")
             } else {
                 resolved = nil
             }
@@ -150,7 +181,7 @@ enum MCPRoute {
             do {
                 let result = try await deps.gate.run {
                     try await deps.engine.synthesize(
-                        backend: deps.defaultBackend,
+                        backend: backend,
                         request: SynthesisRequest(
                             text: text, refAudioPath: refPath, refText: refText,
                             emotion: emotion, speed: 1.0))
