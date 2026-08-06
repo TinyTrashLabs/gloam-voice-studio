@@ -165,21 +165,28 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
         }
     }
 
-    func testSpeechUnknownVoiceFallsThroughToRefAudioRequired() async throws {
+    func testSpeechUnknownVoiceIs400NamingTheSlug() async throws {
         try await app().test(.router) { client in
-            // chatterbox-turbo requires ref audio; unknown voice resolves none → 400
+            // chatterbox-turbo clones; an unresolvable slug is an explicit refusal
+            // naming what was asked for, not a silent unconditioned take.
             let speech = #"{"input":"hello","voice":"alloy"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
                                      body: ByteBuffer(string: speech)) { response in
                 XCTAssertEqual(response.status, .badRequest)
-                XCTAssertNotNil(try self.json(response.body)["detail"])
+                XCTAssertEqual(try self.json(response.body)["detail"] as? String,
+                               "voice 'alloy' not found")
             }
         }
     }
 
     func testSpeechFishWithoutAckIs403WithNotice() async throws {
         try await app().test(.router) { client in
-            let speech = #"{"input":"hello","model":"fish-s2-pro"}"#
+            // A resolvable voice, so the request gets past the cloning contract and
+            // the license gate is what answers.
+            let create = #"{"name":"Cruz","refAudio":"AAEC","refText":"hi"}"#
+            try await client.execute(uri: "/voices", method: .post,
+                                     body: ByteBuffer(string: create)) { _ in }
+            let speech = #"{"input":"hello","model":"fish-s2-pro","voice":"cruz"}"#
             try await client.execute(uri: "/v1/audio/speech", method: .post,
                                      body: ByteBuffer(string: speech)) { response in
                 XCTAssertEqual(response.status, .forbidden)
