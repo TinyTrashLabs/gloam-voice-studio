@@ -30,9 +30,16 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// independently-named voice like "dj-nova" must never be mistaken for a
     /// variant of "dj" just because its slug starts with "dj-".
     public var variantOf: String?
+    /// Delivery pace, 1.0 = the reference's own pace. Nil means unset — which
+    /// is NOT the same as 1.0, because writing a default into every pack would
+    /// make "unset" indistinguishable from "deliberately 1.0" on re-export.
+    public var pace: Double?
+    /// Engine id -> pace override. See `GVoice.pace(for:in:)` for resolution.
+    public var enginePace: [String: Double]?
 
     public init(name: String, slug: String, refText: String, createdAt: String,
-                persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil) {
+                persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil,
+                pace: Double? = nil, enginePace: [String: Double]? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
@@ -40,6 +47,8 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         self.persona = persona
         self.provenance = provenance
         self.variantOf = variantOf
+        self.pace = pace
+        self.enginePace = enginePace
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -53,6 +62,9 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         persona = (try? c.decodeIfPresent(Persona.self, forKey: .persona)) ?? nil
         provenance = (try? c.decodeIfPresent(JSONValue.self, forKey: .provenance)) ?? nil
         variantOf = try c.decodeIfPresent(String.self, forKey: .variantOf)
+        // Tolerant like the fields above: a malformed pace must not break load.
+        pace = (try? c.decodeIfPresent(Double.self, forKey: .pace)) ?? nil
+        enginePace = (try? c.decodeIfPresent([String: Double].self, forKey: .enginePace)) ?? nil
     }
 }
 
@@ -74,7 +86,9 @@ public struct VoiceLibrary: Sendable {
     /// asset it cannot render is still useful when the pack is bound elsewhere.
     public func save(name: String, refWav: Data?, refText: String,
                      provenance: JSONValue? = nil,
-                     engines: [String: [String: Data]] = [:]) throws -> VoiceMeta {
+                     engines: [String: [String: Data]] = [:],
+                     pace: Double? = nil,
+                     enginePace: [String: Double]? = nil) throws -> VoiceMeta {
         let slug = try Slug.slugify(name)
         let voiceDir = directory.appendingPathComponent(slug)
         guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
@@ -87,7 +101,8 @@ public struct VoiceLibrary: Sendable {
         if let refWav { try refWav.write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
-                             createdAt: Self.timestamp(), provenance: provenance)
+                             createdAt: Self.timestamp(), provenance: provenance,
+                             pace: pace, enginePace: enginePace)
         try write(meta, to: voiceDir)
         return meta
     }

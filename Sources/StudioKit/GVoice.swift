@@ -17,6 +17,15 @@ public enum GVoice {
     /// an additive change, so it takes a version bump.
     public static let version = 2
 
+    /// Delivery pace for one engine: its own override, else the voice-level
+    /// pace, else 1.0. A non-positive value is treated as absent — it would
+    /// divide a predicted duration to infinity or flip it negative.
+    public static func pace(for engineId: String, in manifest: Manifest) -> Double {
+        if let p = manifest.enginePace?[engineId], p > 0 { return p }
+        if let p = manifest.pace, p > 0 { return p }
+        return 1.0
+    }
+
     // MARK: manifest
 
     public struct Manifest: Codable, Equatable, Sendable {
@@ -37,6 +46,17 @@ public enum GVoice {
         /// one is already right at 1.0, so no single global setting serves
         /// both. Absent means 1.0.
         public var pace: Double?
+        /// engine id -> delivery pace, overriding `pace` for that engine alone.
+        ///
+        /// Exists because engines do not implement speed the same way. On
+        /// `lux-tts` it is native and graph-level, and on `supertonic` it feeds
+        /// the duration predictor — both clean. Every other backend gets a
+        /// generic time-domain stretch, which is audibly wrong on a voice, so a
+        /// pack must be able to say "1.08 here, 1.0 there".
+        ///
+        /// A reader that ignores this falls back to `pace`, which the format
+        /// already calls a valid reading — hence NO `gvoice` bump.
+        public var enginePace: [String: Double]?
         /// variant key -> source audio + its transcript
         public var source: [String: Source]?
         /// engine id -> variant key -> pack-relative member paths. A list
@@ -67,6 +87,7 @@ public enum GVoice {
             slug: base.meta.slug.isEmpty ? slug : base.meta.slug,
             createdAt: base.meta.createdAt.isEmpty ? nil : base.meta.createdAt,
             variants: orderedKeys(variants.keys),
+            pace: base.meta.pace, enginePace: base.meta.enginePace,
             source: [:], engines: [:], provenance: base.meta.provenance)
         var entries: [(name: String, data: Data)] = []
 
@@ -212,7 +233,8 @@ public enum GVoice {
         }
         let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
                                         refText: sources["base"]?.text ?? "",
-                                        provenance: manifest.provenance, engines: baseAssets)
+                                        provenance: manifest.provenance, engines: baseAssets,
+                                        pace: manifest.pace, enginePace: manifest.enginePace)
 
         for key in keys where key != "base" {
             let safeKey = try safeComponent(key)
