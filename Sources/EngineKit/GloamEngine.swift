@@ -8,6 +8,20 @@ private let engineLog = Logger(subsystem: "fm.gloam.studio", category: "engine")
 /// serialized through this actor (MLX streams/graphs are execution-context
 /// bound — see SPIKE-RESULTS.md "silent failure when two models load").
 public actor GloamEngine {
+    /// All model work (loads, synthesis, chat) runs BELOW default priority.
+    ///
+    /// The engine shares a process with the gloam.fm shell's WKWebView, whose
+    /// MusicKit playback it can starve: a sustained generation window pegged
+    /// the process at ~108% CPU and stalled the player mid-song (a
+    /// non-deliberate waiting(8) underrun whose recovery seam is the audible
+    /// pop — gloam-dj #297, measured 2026-08-22). Utility keeps the scheduler
+    /// favoring the audio/media pipeline under pressure.
+    ///
+    /// CAVEAT (priority escalation): awaiting these tasks from a
+    /// higher-priority task boosts them back up for the wait's duration, so
+    /// callers that care (the loopback API routes) must themselves run at
+    /// utility — see StudioKit's APIRouter.
+    public static let modelWorkPriority: TaskPriority = .utility
     private let provider: ModelProviding
     private var resident: (backend: BackendID, model: any SpeechModel)?
     private var ackedLicenses: Set<BackendID> = []
@@ -62,7 +76,7 @@ public actor GloamEngine {
     public func chat(backend: LLMBackendID, request: ChatRequest) async throws -> ChatResult {
         guard languageProvider != nil else { throw EngineError.languageProviderUnavailable }
         let previous = tail
-        let work = Task<ChatResult, Error> { [self] in
+        let work = Task<ChatResult, Error>(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
             let model = try await self.residentLanguageModel(for: backend)
             return try await model.complete(request)
@@ -88,7 +102,7 @@ public actor GloamEngine {
             return stream
         }
         let previous = tail
-        let work = Task { [self] in
+        let work = Task(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
             chatStreamActive = true
             engineLog.log("chat stream begin (\(backend.rawValue, privacy: .public))")
@@ -183,7 +197,7 @@ public actor GloamEngine {
             throw EngineError.licenseAckRequired(backend)
         }
         let previous = tail
-        let work = Task<Void, Error> { [self] in
+        let work = Task<Void, Error>(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
             _ = try await self.residentModel(for: backend)
         }
@@ -201,7 +215,7 @@ public actor GloamEngine {
 
         // Chain model work so concurrent calls never overlap at await points.
         let previous = tail
-        let work = Task<SynthesisResult, Error> { [self] in
+        let work = Task<SynthesisResult, Error>(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
             return try await self.performSynthesis(backend: backend, request: request)
         }
