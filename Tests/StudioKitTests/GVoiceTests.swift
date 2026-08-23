@@ -361,4 +361,34 @@ final class GVoiceTests: XCTestCase {
         let m = makeManifest(enginePace: ["x-mycompany-engine": 1.5])
         XCTAssertEqual(GVoice.pace(for: "x-mycompany-engine", in: m), 1.5, accuracy: 0.0001)
     }
+
+    func testEnginePaceSurvivesExportImportRoundTrip() throws {
+        _ = try lib.save(name: "Sonny Vale", refWav: Data([1, 2, 3, 4]),
+                         refText: "Evening, and welcome in.",
+                         pace: 1.0, enginePace: ["supertonic": 1.08, "lux-tts": 1.0])
+        let pack = try GVoice.export("sonny-vale", from: lib)
+
+        XCTAssertEqual(try manifest(pack).enginePace?["supertonic"] ?? 0, 1.08, accuracy: 0.0001)
+
+        try lib.delete("sonny-vale")
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertEqual(meta.enginePace?["supertonic"] ?? 0, 1.08, accuracy: 0.0001)
+        XCTAssertEqual(meta.enginePace?["lux-tts"] ?? 0, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(meta.pace ?? 0, 1.0, accuracy: 0.0001)
+    }
+
+    func testAPackWithoutPaceImportsWithNilRatherThanOne() throws {
+        // Absent must stay absent through the round trip: writing a default 1.0
+        // into every pack would make "unset" indistinguishable from
+        // "deliberately 1.0" on the next export.
+        _ = try lib.save(name: "No Pace", refWav: Data([1]), refText: "Hi.")
+        let pack = try GVoice.export("no-pace", from: lib)
+        XCTAssertNil(try manifest(pack).pace)
+        XCTAssertNil(try manifest(pack).enginePace)
+
+        try lib.delete("no-pace")
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertNil(meta.pace)
+        XCTAssertNil(meta.enginePace)
+    }
 }

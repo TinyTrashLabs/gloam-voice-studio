@@ -87,6 +87,7 @@ public enum GVoice {
             slug: base.meta.slug.isEmpty ? slug : base.meta.slug,
             createdAt: base.meta.createdAt.isEmpty ? nil : base.meta.createdAt,
             variants: orderedKeys(variants.keys),
+            pace: base.meta.pace, enginePace: base.meta.enginePace,
             source: [:], engines: [:], provenance: base.meta.provenance)
         var entries: [(name: String, data: Data)] = []
 
@@ -232,7 +233,8 @@ public enum GVoice {
         }
         let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
                                         refText: sources["base"]?.text ?? "",
-                                        provenance: manifest.provenance, engines: baseAssets)
+                                        provenance: manifest.provenance, engines: baseAssets,
+                                        pace: manifest.pace, enginePace: manifest.enginePace)
 
         for key in keys where key != "base" {
             let safeKey = try safeComponent(key)
