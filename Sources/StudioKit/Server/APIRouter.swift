@@ -209,7 +209,14 @@ public enum APIRouter {
             // closure below — a reassigned `var` can't cross that boundary.
             let effectiveSpeaker: String? = {
                 let s = blank(req.speaker) ? req.voice : req.speaker
-                if !controls.presetSpeakers.isEmpty,
+                // Only pure preset-voicepack backends (Kokoro, SuperTonic — no
+                // instruct control) default a missing/unknown speaker to their best
+                // voice. A backend that pairs a chosen identity with a Direction
+                // (qwen3-custom, instruct != .none) must NOT silently substitute a
+                // house voice — a missing speaker there is a 400 (speakerRequired),
+                // not a synth as "Vivian". (#28 broadened the Kokoro fallback to all
+                // preset backends and unintentionally swept in qwen3-custom.)
+                if controls.instruct == .none, !controls.presetSpeakers.isEmpty,
                    blank(s) || !controls.presetSpeakers.contains(s ?? "") {
                     return controls.presetSpeakers.first
                 }
