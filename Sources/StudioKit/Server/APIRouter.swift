@@ -144,9 +144,15 @@ public enum APIRouter {
                 throw APIError(status: .badRequest, detail: "no user message")
             }
             do {
-                let result = try await deps.gate.run {
-                    try await deps.engine.chat(backend: backend, request: chatReq)
-                }
+                // Utility-priority hop: model work must not outrank the host
+                // app's audio pipeline (gloam-dj #297) — and because awaiting
+                // escalates the awaited task to the WAITER's priority, the cap
+                // has to start here at the route, not only inside the engine.
+                let result = try await Task(priority: GloamEngine.modelWorkPriority) {
+                    try await deps.gate.run {
+                        try await deps.engine.chat(backend: backend, request: chatReq)
+                    }
+                }.value
                 deps.log.record(.init(
                     method: "POST", path: "/v1/chat/completions", status: 200,
                     model: backend.rawValue, voice: nil, instruct: nil,
@@ -302,19 +308,25 @@ public enum APIRouter {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
                 do {
-                    result = try await deps.gate.run {
-                        try await deps.engine.synthesize(
-                            backend: backend,
-                            request: SynthesisRequest(
-                                text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
-                                emotion: knobEmotion,
-                                speed: req.speed ?? 1.0,
-                                temperatureOverride: req.temperature,
-                                exaggerationOverride: req.exaggeration,
-                                exaggerationCeiling: req.exaggeration_ceiling,
-                                instruct: req.instruct, speaker: effectiveSpeaker, language: req.language,
-                                topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
-                    }
+                    // Same utility-priority hop as the chat route — see the
+                    // note there and gloam-dj #297. Synthesis is the measured
+                    // starver (a sustained generation stalled MusicKit
+                    // mid-song on the gloam.fm shell).
+                    result = try await Task(priority: GloamEngine.modelWorkPriority) {
+                        try await deps.gate.run {
+                            try await deps.engine.synthesize(
+                                backend: backend,
+                                request: SynthesisRequest(
+                                    text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
+                                    emotion: knobEmotion,
+                                    speed: req.speed ?? 1.0,
+                                    temperatureOverride: req.temperature,
+                                    exaggerationOverride: req.exaggeration,
+                                    exaggerationCeiling: req.exaggeration_ceiling,
+                                    instruct: req.instruct, speaker: effectiveSpeaker, language: req.language,
+                                    topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
+                        }
+                    }.value
                 } catch is RequestGate.Busy {
                     throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
                 }

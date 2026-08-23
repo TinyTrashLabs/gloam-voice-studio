@@ -19,9 +19,15 @@ let package = Package(
         // docs/chatterbox-quality-todo.md.
         // Pinned to the merge commit of TinyTrashLabs/mlx-audio-swift#5 (merged into
         // main), which adds the native-MLX SuperTonic 3 model (model_type "supertonic").
+        // Bumped 2026-08-23 to the paced-vocoder-decode merge (our #6): the Qwen
+        // batch path now decodes in 50-token passes with 20ms gaps BY DEFAULT —
+        // the end-of-generation 24s-per-pass Metal bursts audibly glitched any
+        // co-resident audio playback (gloam-dj #297; A/B'd 3/3 crackle → 3/3
+        // clean). Tunable via qwenDecodeChunkTokens/qwenDecodePaceMs defaults
+        // or MLX_AUDIO_QWEN_DECODE_* env; explicit paceMs=0 disables.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "d19af644801ed4c0791652d1bd67ac28e9076c4b"),
+            revision: "e06c739479fabc2d8f44272c3e4dae59c91310cf"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
