@@ -152,6 +152,7 @@ doc showed one; it was never implemented and this is the correction.)
   "createdAt": "2026-07-24T04:11:00Z",
   "variants": ["base", "hype"],
   "pace": 1.0,
+  "enginePace": { "supertonic": 1.08 },
   "source": {
     "base": { "audio": "source/ref.wav",      "text": "…" },
     "hype": { "audio": "source/ref-hype.wav", "text": "…" }
@@ -179,6 +180,7 @@ doc showed one; it was never implemented and this is the correction.)
 | `createdAt` | no | RFC 3339 UTC, from the producing library. Informational only, same caveat as `slug`. |
 | `variants` | no | Ordered variant keys. `base` is semantically first regardless of list position — see Rule 4. |
 | `pace` | no | Delivery pace, `1.0` = the reference's own pace. Absent means `1.0`. A property of the VOICE: a slow, deliberate reference needs ~1.7 to sound like radio while a brisk one is right at 1.0, so no single app-wide setting serves both. A reader that ignores it renders at the reference's own pace, which is always a valid reading. |
+| `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
 | `source` | no | Variant key → `{ audio, text }`. Paths are pack-relative. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
@@ -198,6 +200,9 @@ safely ignore per Rule 1 — MUST ship without bumping `gvoice`. Only a change
 an old reader would misinterpret if it tried to read it (a field changing
 meaning, a required-ness change, restructuring `source`/`engines`) justifies a
 bump.
+
+`enginePace` (added 2026-08-23) is the worked example: a new optional key that
+an old reader ignores, falling back to `pace`. No bump.
 
 That split is what makes forward compatibility possible at all: readers
 reject `gvoice` values *above* what they implement (they don't understand the
