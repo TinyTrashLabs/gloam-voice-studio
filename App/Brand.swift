@@ -1,4 +1,26 @@
+import AppKit
 import SwiftUI
+
+/// Native behind-window glass: blurs the desktop/windows behind this window,
+/// the way Finder/Music sidebars do. SwiftUI's `Material` styles only blur
+/// in-window content on macOS, so window glass needs an NSVisualEffectView.
+/// Layer a Brand tint on top (`.background(tint).background(WindowGlass())`)
+/// to keep the night palette while the desktop glows through.
+struct WindowGlass: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .underWindowBackground
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+    }
+}
 
 enum Brand {
     // Night palette

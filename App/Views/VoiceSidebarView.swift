@@ -161,6 +161,12 @@ struct VoiceSidebarView: View {
     private func voiceRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
         let isPlaying = refPlayer.playingID == voice.slug
         let showControls = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
+        // Engine-matched enablement: derived from the voice's pack contents
+        // (source audio and/or engines/<id>/ renditions). Unrenderable rows
+        // stay selectable (editing, persona) but dim and say what they DO work
+        // on, so a supertonic-only pack isn't mistaken for broken.
+        let caps = model.voices.capabilities(voice.slug)
+        let renderable = caps.supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -180,6 +186,20 @@ struct VoiceSidebarView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(voice.name).font(isVariant ? .callout : .body)
+                        .foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
+                    if !renderable && !isVariant {
+                        let supported = BackendID.allCases.filter { caps.supports($0) }.map(\.rawValue)
+                        Text(supported.isEmpty ? "no assets"
+                             : supported.prefix(2).joined(separator: " · ")
+                               + (supported.count > 2 ? " +\(supported.count - 2)" : ""))
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.white.opacity(0.06)))
+                            .foregroundStyle(Brand.fgFaint)
+                            .help(supported.isEmpty
+                                  ? "\(voice.name)'s pack has no renderable assets."
+                                  : "\(voice.name) has no assets \(model.backend.rawValue) can render — it works on: \(supported.joined(separator: ", ")).")
+                    }
                     if variantCount > 0 {
                         Text("\(variantCount)")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))

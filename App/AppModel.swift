@@ -257,6 +257,16 @@ final class AppModel {
     var serverDefaultModel: String {
         didSet { UserDefaults.standard.set(serverDefaultModel, forKey: "serverDefaultModel") }
     }
+    /// Raw `LLMBackendID` that answers `/v1/chat/completions` requests which
+    /// don't name a `model` ("" = follow the Chat tab's model). Unlike the
+    /// voice/model defaults above, `defaultLLM` is snapshotted into the deps
+    /// at server build time, so changing it triggers a server sync.
+    var serverDefaultLLM: String {
+        didSet {
+            UserDefaults.standard.set(serverDefaultLLM, forKey: "serverDefaultLLM")
+            scheduleServerSync()
+        }
+    }
     var didAcceptCloneConsent: Bool {
         didSet { UserDefaults.standard.set(didAcceptCloneConsent, forKey: "didAcceptCloneConsent") }
     }
@@ -444,6 +454,7 @@ final class AppModel {
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
+        serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
         serverEnabled = defaults.bool(forKey: "serverEnabled")
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         // Per-backend license acks; migrate the old Fish-only bool so existing
@@ -767,17 +778,29 @@ final class AppModel {
         var refPath: String?
         var refText: String?
         var resolvedVoice: String?
+        // Baked engine rendition (e.g. a pack's supertonic style tensors):
+        // when the selected voice carries assets for THIS backend, they render
+        // the voice instead of a house preset. Emotion-variant slug first;
+        // renditionStyleURL itself falls back variant → base.
+        let styleURL: URL? = voiceSlug.flatMap { slug in
+            let variant = emotion != .neutral ? "\(slug)-\(emotion.rawValue)" : nil
+            return variant.flatMap { voices.renditionStyleURL($0, engine: backend.rawValue) }
+                ?? voices.renditionStyleURL(slug, engine: backend.rawValue)
+        }
         // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
         // the BASE voice — so resolve to the base clip, not an acted `-emotion`
         // variant (that path is for the variant-clip backends).
         let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
         if let slug = voiceSlug {
-            guard let found = try? voices.resolve(slug, emotion: resolveEmotion) else {
+            if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
+                refPath = found.refURL.path
+                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                resolvedVoice = found.meta.slug
+            } else if styleURL == nil {
+                // A rendition-only pack (no ref.wav) is fine when this backend
+                // has a baked style to render; otherwise the voice is unusable.
                 throw AppGenerationError(message: "Voice '\(slug)' is missing.")
             }
-            refPath = found.refURL.path
-            refText = found.meta.refText.isEmpty ? nil : found.meta.refText
-            resolvedVoice = found.meta.slug
         }
         if backend.spec.needsRefAudio && refPath == nil {
             throw AppGenerationError(
@@ -791,7 +814,15 @@ final class AppModel {
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
             instruct: controls.instruct != .none ? instruct : nil,
-            speaker: controls.presetSpeakers.isEmpty ? nil : speaker,
+            // The stored `speaker` tracks the STUDIO backend's preset set; when a
+            // different preset backend renders (e.g. Kokoro as the chat voice
+            // engine while the Studio runs Chatterbox) that name isn't in this
+            // backend's set — fall back to its best-first preset instead of
+            // failing, mirroring the API route's fallback.
+            speaker: controls.presetSpeakers.isEmpty ? nil
+                : (controls.presetSpeakers.contains(speaker) ? speaker
+                   : controls.presetSpeakers.first),
+            styleURL: styleURL,
             language: controls.language ? language : nil,
             topP: controls.knobs.topP != nil ? qwenTopP : nil,
             topK: controls.knobs.topK != nil ? qwenTopK : nil,
@@ -993,12 +1024,23 @@ final class AppModel {
         }
     }
 
+    /// The LLM `/v1/chat/completions` falls back to when a request names no
+    /// model: the explicit Settings pick if it's on disk, else the Chat tab's
+    /// model if it's on disk, else nil (the route 503s with a clear message).
+    func resolvedServerDefaultLLM() -> LLMBackendID? {
+        if let explicit = LLMBackendID(rawValue: serverDefaultLLM),
+           downloads.state(for: explicit) == .ready {
+            return explicit
+        }
+        return downloads.state(for: chatLLM) == .ready ? chatLLM : nil
+    }
+
     /// Deps are immutable — rebuilt fresh by every caller so defaultLLM/
     /// defaultBackend stay current at start time.
     private func makeDependencies() -> APIDependencies {
         APIDependencies(
             engine: engine, voices: voices, defaultBackend: backend,
-            defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
+            defaultLLM: resolvedServerDefaultLLM(),
             log: apiLog,
             // Live reads (not captured values): the Settings pickers take
             // effect on the next request without rebuilding the server.

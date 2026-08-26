@@ -21,7 +21,8 @@ struct ContentView: View {
         HStack(spacing: 0) {
             VoiceSidebarView()
                 .frame(width: 248)
-                .background(Brand.ink2)
+                .background(Brand.ink2.opacity(0.6))
+                .background(WindowGlass(material: .sidebar))
             Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
             Group {
                 switch section {
@@ -31,7 +32,8 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .background(Brand.ink)
+            .background(Brand.ink.opacity(0.82))
+            .background(WindowGlass())
             if historyVisible {
                 // Floating drawer: elevated surface + leading shadow so it reads
                 // as sliding over the bench rather than mirroring the library.
@@ -346,7 +348,9 @@ struct ContentView: View {
         }
         .padding(8)
         .frame(width: 260)
-        .background(Brand.ink2)
+        // Translucent over the popover's native glass chrome rather than
+        // opaque ink — keeps the tint, lets the system material show.
+        .background(Brand.ink2.opacity(0.5))
     }
 }
 

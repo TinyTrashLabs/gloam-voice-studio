@@ -227,6 +227,24 @@ struct ServerSettings: View {
                 Text("Answer API requests that don't name a model or voice.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Chat models (LLM)") {
+                Picker("Default chat model", selection: $model.serverDefaultLLM) {
+                    Text("Follow Chat tab (\(model.chatLLM.rawValue))").tag("")
+                    ForEach(LLMBackendID.allCases, id: \.rawValue) { llm in
+                        Text(model.hasSufficientRAM(for: llm)
+                             ? llm.rawValue
+                             : "\(llm.rawValue) (\(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes)))")
+                            .tag(llm.rawValue)
+                            .disabled(!model.hasSufficientRAM(for: llm))
+                    }
+                }
+                .accessibilityIdentifier("server-default-llm-picker")
+                Text("Answers /v1/chat/completions requests that don't name a model. Requests can also name any downloaded model directly.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(LLMBackendID.allCases, id: \.self) { llm in
+                    llmRow(llm)
+                }
+            }
             Section {
                 Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
                 Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
@@ -253,6 +271,63 @@ struct ServerSettings: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { model.downloads.refresh() }
+        .task { await model.refreshEngineStatus() }
+    }
+
+    /// Download/loaded state row for one chat LLM — mirrors the Backends tab's
+    /// model rows so the API-server tab is a complete picture of what
+    /// /v1/chat/completions can serve.
+    @ViewBuilder
+    private func llmRow(_ llm: LLMBackendID) -> some View {
+        let state = model.downloads.state(for: llm)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(llm.rawValue)
+                Text("≈ " + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
+                                                      countStyle: .file))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !model.hasSufficientRAM(for: llm) {
+                Text(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes).capitalized)
+                    .foregroundStyle(.red)
+                    .help("This Mac's RAM is below what \(llm.rawValue) needs to run safely.")
+                if state != .notDownloaded {
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                }
+            } else {
+                switch state {
+                case .notDownloaded:
+                    Button("Download") { model.downloads.download(llm) }
+                        .help("Download this model to your Mac")
+                case .downloading(let fraction):
+                    ProgressView(value: fraction).frame(width: 120)
+                    Text(String(format: "%.0f%%", fraction * 100))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { model.downloads.cancelDownload(llm) }
+                        .help("Cancel the download")
+                case .ready:
+                    if model.loadedLLM == llm {
+                        Text("Loaded").foregroundStyle(.green)
+                            .help("Resident in memory — answering requests with no load delay")
+                        Button("Unload") { Task { await model.unloadChatLLM() } }
+                            .help("Release this model from memory")
+                    } else {
+                        Text("On disk").foregroundStyle(.secondary)
+                            .help("Downloaded — loads into memory on the first request")
+                    }
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                case .failed(let message):
+                    Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
+                    Button("Retry") { model.downloads.download(llm) }
+                        .help("Retry the download")
+                }
+            }
+        }
     }
 
     /// Same curated order as `ModelSettings.backends`. qwen3-design is offered

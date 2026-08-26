@@ -716,7 +716,9 @@ struct StudioView: View {
         }
         .frame(width: 240)
         .frame(maxHeight: 360)
-        .background(Brand.ink2)
+        // Translucent over the popover's native glass chrome rather than
+        // opaque ink — keeps the tint, lets the system material show.
+        .background(Brand.ink2.opacity(0.5))
     }
 
     /// One VOICE-popover row. A base voice with acted variants shows a disclosure
@@ -726,6 +728,10 @@ struct StudioView: View {
     @ViewBuilder
     private func voicePickerRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
         let selected = model.selectedVoiceSlug == voice.slug
+        // This popover picks the voice the CURRENT backend will speak with, so
+        // (unlike the sidebar, where selection also means editing) rows the
+        // backend can't render are disabled outright.
+        let renderable = model.voices.capabilities(voice.slug).supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -756,7 +762,12 @@ struct StudioView: View {
                         name: voice.name,
                         avatarURL: model.voices.avatarURL(voice.slug),
                         size: isVariant ? 18 : 22)
-                    Text(voice.name).foregroundStyle(Brand.fg)
+                    Text(voice.name).foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
+                    if !renderable {
+                        Text("not on \(model.backend.rawValue)")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Brand.fgFaint)
+                    }
                     if variantCount > 0 {
                         Text("\(variantCount)")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -779,6 +790,9 @@ struct StudioView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(!renderable)
+            .help(renderable ? "" :
+                  "\(voice.name) has no assets \(model.backend.rawValue) can render.")
         }
     }
 

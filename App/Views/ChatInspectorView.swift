@@ -83,10 +83,14 @@ struct ChatInspectorView: View {
 
     // MARK: voice engine
 
-    /// TTS backends fast enough for conversation. Fish is deliberately absent
-    /// (measured ~10× slower than realtime — a quality engine, not a chat one).
+    /// Every backend that can speak a chat reply unattended. Only qwen3-design
+    /// is excluded: it requires a typed Direction per line, so it can't render
+    /// replies automatically. Preset-voicepack backends (custom/kokoro/
+    /// supertonic) speak in their preset voice rather than the conversation's
+    /// cloned voice; the measured speed labels flag the slow ones (Fish).
     private static let chatVoiceBackends: [BackendID] =
-        [.qwen06B, .qwen17B, .chatterboxTurbo, .chatterbox]
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro,
+         .chatterbox, .kokoro, .supertonic, .luxTTS, .pocketTTS]
 
     private var voiceSection: some View {
         @Bindable var appModel = model
@@ -97,10 +101,21 @@ struct ChatInspectorView: View {
                 .font(.caption).foregroundStyle(Brand.fgDim)
             // Speed labels are MEASURED on this machine (audio seconds per
             // wall second, EMA). >1× keeps up with playback = gapless chat.
+            // Engines gate on the CONVERSATION's voice pack: a preset engine
+            // without a baked rendition for this voice would speak as a house
+            // voice, not the character — disable it and say why.
+            let voiceCaps = model.selectedVoiceSlug.map { model.voices.capabilities($0) }
             Picker("", selection: $appModel.chatTTSBackend) {
                 ForEach(Self.chatVoiceBackends, id: \.self) { backend in
-                    Text(backend.rawValue + model.ttsSpeedLabel(for: backend))
+                    let enoughRAM = model.hasSufficientRAM(for: backend)
+                    let hasAssets = voiceCaps?.supports(backend) ?? true
+                    Text(!enoughRAM
+                         ? "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))"
+                         : !hasAssets
+                         ? "\(backend.rawValue) (no assets for this voice)"
+                         : backend.rawValue + model.ttsSpeedLabel(for: backend))
                         .tag(backend)
+                        .disabled(!enoughRAM || !hasAssets)
                 }
             }
             .labelsHidden()
