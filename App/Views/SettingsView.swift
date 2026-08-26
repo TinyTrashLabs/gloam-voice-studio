@@ -229,6 +229,7 @@ struct ServerSettings: View {
                     Image(systemName: "circle.fill").font(.system(size: 7))
                         .foregroundStyle(model.serverError != nil ? Color.red
                                          : model.serverEnabled ? Color.green : Color.secondary)
+                        .accessibilityHidden(true)
                     Text(model.serverError.map {
                             "Couldn't start on port \(model.serverPort): \($0)"
                          } ?? (model.serverEnabled
@@ -240,6 +241,7 @@ struct ServerSettings: View {
                         .contentTransition(.identity)
                 }
                 .accessibilityIdentifier("server-status-line")
+                .accessibilityElement(children: .combine)
                 Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
                     .accessibilityIdentifier("server-lan-toggle")
                 if model.serverLANEnabled {
@@ -264,6 +266,7 @@ struct ServerSettings: View {
                                 NSPasteboard.general.setString(model.serverAuthToken, forType: .string)
                             }
                             .accessibilityIdentifier("copy-server-auth-token")
+                            .accessibilityLabel("Copy Server Token")
                             .help("Copy the bearer token")
                         }
                     }
@@ -333,6 +336,7 @@ struct ServerSettings: View {
                                 NSPasteboard.general.setString(addCommand, forType: .string)
                             }
                             .accessibilityIdentifier("copy-mcp-command")
+                            .accessibilityLabel("Copy MCP Connect Command")
                             .help("Copy the Claude Code connect command")
                         }
                         Button("MCP docs — tools & other clients") {

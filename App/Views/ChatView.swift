@@ -117,6 +117,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
                 .accessibilityIdentifier("chat-new-conversation")
+                .accessibilityLabel("New Chat")
                 .help("New chat")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
@@ -255,6 +256,7 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove attachment")
+                    .accessibilityLabel("Remove Clip")
                     Spacer()
                 }
                 .padding(.horizontal, 12).padding(.top, 8)
@@ -314,6 +316,8 @@ struct ChatView: View {
                         .help(isPending ? "Synthesizing…"
                               : (isSpeakingThis ? "Speaking…" : "Speak this reply"))
                         .accessibilityIdentifier("chat-speak")
+                        .accessibilityLabel(isPending ? "Synthesizing"
+                              : (isSpeakingThis ? "Speaking" : "Speak This Reply"))
                         Menu {
                             chatAudioMenu(for: message)
                         } label: {
@@ -323,6 +327,7 @@ struct ChatView: View {
                         .foregroundStyle(Brand.fgFaint)
                         .help("Takes, regenerate, export")
                         .accessibilityIdentifier("chat-audio-menu")
+                        .accessibilityLabel("Takes, Regenerate, Export")
                     }
                 }
                 if let attachments = message.attachments, !attachments.isEmpty {
@@ -448,6 +453,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-attach-image")
+                .accessibilityLabel("Attach Image")
                 .help("Attach an image for the model to look at")
                 .fileImporter(isPresented: $imageImporterPresented,
                               allowedContentTypes: [.png, .jpeg, .heic, .image]) { result in
@@ -474,6 +480,7 @@ struct ChatView: View {
                     }
                 }
                 .accessibilityIdentifier("chat-activity")
+                .accessibilityHidden(true)
                 .padding(.bottom, 12)
                 Button { model.chat.stop() } label: {
                     Image(systemName: "stop.fill")
@@ -481,6 +488,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-stop")
+                .accessibilityLabel("Stop")
                 .help("Stop generating / speaking")
             } else {
                 Button { sendFromComposer() } label: {
@@ -492,6 +500,7 @@ struct ChatView: View {
                 .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .padding(.bottom, 9)
                 .accessibilityIdentifier("chat-send")
+                .accessibilityLabel("Send")
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Send (⏎)")
             }
@@ -555,5 +564,6 @@ struct BouncingDots: View {
         }
         .frame(width: 24, height: 14)
         .onAppear { animating = true }
+        .accessibilityHidden(true)
     }
 }

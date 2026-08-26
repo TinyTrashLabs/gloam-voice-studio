@@ -61,6 +61,7 @@ private struct LineRow: View {
                 }
                 .help("Takes & direction")
                 .accessibilityIdentifier("expand-line")
+                .accessibilityLabel(expanded ? "Collapse Takes & Direction" : "Expand Takes & Direction")
                 statusDot
                 TextField("Line text", text: Binding(
                     get: { line.text },
@@ -83,11 +84,13 @@ private struct LineRow: View {
                     }
                     .help("Generate this line")
                     .accessibilityIdentifier("generate-line")
+                    .accessibilityLabel("Generate This Line")
                 }
                 Button(role: .destructive) { script.removeLine(line.id) } label: {
                     Image(systemName: "trash")
                 }
                 .help("Delete this line")
+                .accessibilityLabel("Delete Line")
             }
             if case .failed(let message) = script.status[line.id] ?? .idle {
                 Text(message).font(.caption).foregroundStyle(.red)
@@ -106,6 +109,7 @@ private struct LineRow: View {
             .fill(statusColor(status))
             .frame(width: 8, height: 8)
             .padding(.top, 6)
+            .accessibilityHidden(true)
     }
 
     private func statusColor(_ status: ScriptModel.LineStatus) -> Color {
@@ -155,6 +159,7 @@ private struct LineRow: View {
                 }
                 .help("Use this take in exports")
                 .accessibilityIdentifier("star-take")
+                .accessibilityLabel(line.starredTakeID == take.id ? "Starred Take" : "Star This Take")
                 if let wav = script.takeWavData(take.id) {
                     WaveformView(wavData: wav).frame(width: 160, height: 24)
                 }
@@ -169,6 +174,7 @@ private struct LineRow: View {
                 } label: { Image(systemName: "trash") }
                 .controlSize(.small)
                 .help("Delete this take")
+                .accessibilityLabel("Delete Take")
                 Spacer()
             }
             .padding(.leading, 16)

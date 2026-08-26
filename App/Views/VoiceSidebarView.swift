@@ -53,16 +53,19 @@ struct VoiceSidebarView: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("new-voice")
+                .accessibilityLabel("New Voice")
                 .help("Create a new voice from a recording or audio file")
                 Button { importerPresented = true } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Import Voice Pack")
                 .help("Import .gvoice voice packs")
                 Button { catalogPresented = true } label: {
                     Image(systemName: "person.crop.circle.badge.plus")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Browse Voice Catalog")
                 .help("Browse free downloadable voices")
                 .accessibilityIdentifier("browse-catalog")
             }
@@ -176,6 +179,7 @@ struct VoiceSidebarView: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(expandedBases.contains(voice.slug) ? "Collapse Variants" : "Expand Variants")
             } else {
                 Color.clear.frame(width: 12)
             }
@@ -228,6 +232,7 @@ struct VoiceSidebarView: View {
                 .buttonStyle(.borderless)
                 .help(isPlaying ? "Stop preview" : "Play sample")
                 .accessibilityIdentifier("play-voice")
+                .accessibilityLabel("Preview Voice")
             }
             if showControls && !isVariant {
                 Button { openEdit(voice.slug) } label: {
@@ -236,12 +241,14 @@ struct VoiceSidebarView: View {
                 .buttonStyle(.borderless).foregroundStyle(Brand.fgDim)
                 .help("Edit this voice (name, reference, emotion variants)")
                 .accessibilityIdentifier("edit-voice")
+                .accessibilityLabel("Edit Voice")
             }
             Menu { voiceActions(voice) } label: {
                 Image(systemName: "ellipsis").foregroundStyle(Brand.fgDim)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .help("More actions").accessibilityIdentifier("voice-menu")
+            .accessibilityLabel("More Actions")
         }
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -453,5 +460,6 @@ struct EqualizerBars: View {
         }
         .frame(width: 14, height: 14)
         .onAppear { animating = true }
+        .accessibilityHidden(true)
     }
 }

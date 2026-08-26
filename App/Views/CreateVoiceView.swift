@@ -496,6 +496,7 @@ struct CreateVoiceView: View {
             } label: { Image(systemName: "trash") }
                 .font(.caption).buttonStyle(.bordered)
                 .accessibilityIdentifier("variant-delete-\(suffix)")
+                .accessibilityLabel("Delete Variant")
         }
         .padding(.vertical, 6)
         .accessibilityIdentifier("variant-row-\(suffix)")
@@ -556,6 +557,7 @@ struct CreateVoiceView: View {
         .foregroundStyle(Brand.fgDim)
         .help("Open documentation")
         .accessibilityIdentifier("create-voice-docs-help")
+        .accessibilityLabel("Open Documentation")
     }
 
     private func errorText(_ text: String) -> some View {
@@ -604,6 +606,7 @@ private struct FoundryCandidateRow: View {
                     .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
                     .help("Show the prompt that made this candidate")
                     .accessibilityIdentifier("foundry-info-toggle")
+                    .accessibilityLabel("Candidate Details")
                     Button("Save as Voice…", action: onSave)
                         .buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
                 }

@@ -258,6 +258,7 @@ struct ContentView: View {
     /// 7pt status dot — the single source of truth for every status dot.
     private func dot(_ color: Color) -> some View {
         Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(color)
+            .accessibilityHidden(true)
     }
 
     /// API server chip: green dot + full loopback address when running, dim dot
@@ -279,6 +280,9 @@ struct ContentView: View {
         // edge (otherwise it hugs the curve and reads as bleeding over).
         .padding(.horizontal, 9)
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(model.serverError != nil ? "API server error"
+            : on ? "API server running at 127.0.0.1 port \(model.serverPort)" : "API server off")
     }
 
     private var apiIndicatorHelp: String {
@@ -313,6 +317,8 @@ struct ContentView: View {
         // Make the WHOLE chip tappable — without this the Button only registers on
         // the opaque name text, so clicking the chevron/spacing did nothing.
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.backend.rawValue) model, \(modelStateText(model.backend))")
     }
 
     /// Status-dot color for a chat LLM, same scheme as the voice backends.
@@ -353,6 +359,8 @@ struct ContentView: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.chatLLM.rawValue) chat model, \(llmStateText(model.chatLLM))")
     }
 
     /// Popover for the LLM chooser: one row per chat LLM (dot + name + state +
@@ -558,6 +566,7 @@ struct RAMChip: View {
         .padding(.horizontal, 9).padding(.vertical, 2)
         .help(ramHelp)
         .accessibilityIdentifier("ram-chip")
+        .accessibilityElement(children: .combine)
     }
 
     private var ramHelp: String {
@@ -606,6 +615,7 @@ struct ModelManagerView: View {
                 .fill(isLoaded ? .green
                       : downloadState == .ready ? Brand.fgFaint : .orange)
                 .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(backend.rawValue)
                 Text(caption(downloadState, isLoaded: isLoaded))

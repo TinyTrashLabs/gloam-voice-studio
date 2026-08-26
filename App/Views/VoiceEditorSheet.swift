@@ -99,6 +99,7 @@ struct VoiceEditorForm: View {
                                 }
                                 .buttonStyle(.plain)
                                 .help("Remove this clip")
+                                .accessibilityLabel("Remove Clip")
                             }
                         }
                         if refClips.count > 1 {

@@ -59,7 +59,9 @@ struct GloamVoiceStudioApp: App {
         }
         .defaultSize(width: 900, height: 640)
         Settings {
-            SettingsView().environment(model)
+            SettingsView()
+                .environment(model)
+                .preferredColorScheme(.dark)
         }
     }
 }
