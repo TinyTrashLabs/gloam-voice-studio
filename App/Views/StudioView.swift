@@ -21,6 +21,8 @@ struct StudioView: View {
     @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
     @AppStorage("studioInspectorVisible") private var inspectorVisible = true
+    @State private var transcribingSlug: String?
+    @State private var transcribeError: String?
 
     private var mode: StudioMode {
         StudioMode(rawValue: modeRaw) ?? .single
@@ -86,6 +88,33 @@ struct StudioView: View {
         [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
          .supertonic, .luxTTS, .pocketTTS]
 
+    /// Auto-transcribe a voice's reference audio into `meta.refText` using the
+    /// same STT engine the RECORD flow uses — unlocking the transcript-
+    /// conditioned engines (qwen3-0.6b/1.7b, lux-tts) for this pack.
+    private func transcribeRef(_ slug: String) {
+        transcribingSlug = slug
+        transcribeError = nil
+        Task {
+            defer { transcribingSlug = nil }
+            do {
+                let (_, refURL) = try model.voices.get(slug)
+                let wav = try Data(contentsOf: refURL)
+                let transcriber = model.speech.makeTranscriber()
+                let hint = model.speech.effectiveLanguageHint
+                let text = try await transcriber.transcribe(wavData: wav, languageHint: hint)
+                    .text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    transcribeError = "Transcription came back empty — add it by hand in Edit."
+                    return
+                }
+                try model.voices.update(slug, refText: text)
+                model.voicesVersion += 1
+            } catch {
+                transcribeError = "Transcription failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func packChip(_ label: String, icon: String? = nil, active: Bool) -> some View {
         HStack(spacing: 4) {
             if let icon { Image(systemName: icon).font(.system(size: 8)) }
@@ -109,6 +138,9 @@ struct StudioView: View {
     @ViewBuilder
     private var voicePackBar: some View {
         if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+            // Read voicesVersion so a saved transcript re-derives capabilities
+            // (and re-lights the engine chips) without reselecting the voice.
+            let _ = model.voicesVersion
             let caps = model.voices.capabilities(slug)
             let renderable = caps.supports(model.backend)
             let cloneActive = renderable && !caps.engines.contains(model.backend.rawValue)
@@ -124,6 +156,23 @@ struct StudioView: View {
                         packChip("clone ref", icon: "mic", active: cloneActive)
                             .help("Reference audio — any cloning engine can speak this voice: "
                                   + cloneEngines.joined(separator: ", "))
+                        // A missing transcript silently halves the cloning
+                        // roster (qwen/lux condition on it) — say so, and fix
+                        // it in one click via the same STT the RECORD flow uses.
+                        if !caps.hasRefText {
+                            if transcribingSlug == slug {
+                                ProgressView().controlSize(.mini)
+                                Text("transcribing…").font(.caption2).foregroundStyle(Brand.fgFaint)
+                            } else {
+                                Text("no transcript").font(.caption2).foregroundStyle(Brand.fgFaint)
+                                Button("Transcribe") { transcribeRef(slug) }
+                                    .font(.caption2).buttonStyle(.borderless)
+                                    .foregroundStyle(Brand.accent)
+                                    .help("Auto-transcribe the reference audio — unlocks the "
+                                          + "transcript-conditioned engines (qwen3, lux-tts)")
+                                    .accessibilityIdentifier("pack-bar-transcribe")
+                            }
+                        }
                     }
                     ForEach(caps.engines.sorted(), id: \.self) { engine in
                         packChip(engine, active: engine == model.backend.rawValue)
@@ -144,7 +193,15 @@ struct StudioView: View {
                             .font(.system(size: 10)).foregroundStyle(.orange)
                         Text("\(model.backend.rawValue) can't render this voice")
                             .font(.caption).foregroundStyle(Brand.fgDim)
-                        if !targets.isEmpty {
+                        // Engines the pack would support if only the transcript
+                        // existed — shown disabled with the reason, so "why not
+                        // qwen?" answers itself.
+                        let transcriptLocked = Self.packBarBackendOrder.filter {
+                            !caps.supports($0) && caps.hasSource && $0.needsRefText
+                                && $0.controls.voiceClone != .none
+                                && model.hasSufficientRAM(for: $0)
+                        }
+                        if !targets.isEmpty || !transcriptLocked.isEmpty {
                             Menu("Switch engine") {
                                 ForEach(targets, id: \.self) { target in
                                     Button(caps.engines.contains(target.rawValue)
@@ -156,12 +213,23 @@ struct StudioView: View {
                                         }
                                     }
                                 }
+                                if !transcriptLocked.isEmpty {
+                                    Divider()
+                                    ForEach(transcriptLocked, id: \.self) { locked in
+                                        Button("\(locked.rawValue) — needs a reference transcript") {}
+                                            .disabled(true)
+                                    }
+                                }
                             }
                             .menuStyle(.borderlessButton).fixedSize()
                             .font(.caption)
                             .accessibilityIdentifier("pack-bar-switch")
                         }
                     }
+                }
+                if let error = transcribeError {
+                    Text(error).font(.caption2).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
