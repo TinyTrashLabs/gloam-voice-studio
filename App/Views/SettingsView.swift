@@ -245,18 +245,23 @@ struct ServerSettings: View {
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
-                    HStack {
-                        Text(verbatim: model.serverAuthToken)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("server-auth-token")
-                        Spacer()
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(model.serverAuthToken, forType: .string)
+                    // Defense in depth: AppModel.init self-heals an empty token
+                    // whenever LAN mode is already on, so this should be
+                    // unreachable — but never render a blank Copy target.
+                    if !model.serverAuthToken.isEmpty {
+                        HStack {
+                            Text(verbatim: model.serverAuthToken)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("server-auth-token")
+                            Spacer()
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(model.serverAuthToken, forType: .string)
+                            }
+                            .accessibilityIdentifier("copy-server-auth-token")
+                            .help("Copy the bearer token")
                         }
-                        .accessibilityIdentifier("copy-server-auth-token")
-                        .help("Copy the bearer token")
                     }
                     Text("Other devices must send this token as a Bearer authorization header.")
                         .font(.caption).foregroundStyle(.secondary)

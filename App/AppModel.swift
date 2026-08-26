@@ -478,8 +478,22 @@ final class AppModel {
             ?? .fishS2Pro
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
-        serverLANEnabled = defaults.bool(forKey: "serverLANEnabled")
-        serverAuthToken = defaults.string(forKey: "serverAuthToken") ?? ""
+        let lanEnabled = defaults.bool(forKey: "serverLANEnabled")
+        var authToken = defaults.string(forKey: "serverAuthToken") ?? ""
+        // Self-heal: an install that turned LAN mode on before this branch
+        // (commit e20df91a) has serverLANEnabled == true with no persisted
+        // token. `didSet` does not fire for assignments inside `init`, so
+        // without this the live authToken closure reads nil forever and the
+        // LAN-bound server stays silently open. Computed via locals (not
+        // `self.serverLANEnabled`/`self.serverAuthToken` reads) because
+        // `@Observable` property access requires `self` to be fully
+        // initialized first — reading them mid-init is a compile error.
+        if lanEnabled && authToken.isEmpty {
+            authToken = UUID().uuidString
+            defaults.set(authToken, forKey: "serverAuthToken")
+        }
+        serverLANEnabled = lanEnabled
+        serverAuthToken = authToken
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
