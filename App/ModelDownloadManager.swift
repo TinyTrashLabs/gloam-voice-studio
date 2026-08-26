@@ -169,8 +169,14 @@ final class ModelDownloadManager {
     /// throws "Invalid file destination" for nested repo files when copying to an
     /// explicit destination — flat repos (chatterbox/fish) work, subdir repos
     /// (qwen3) don't. Public resolve URLs need no auth for mlx-community repos.
-    private func downloadRepoSnapshot(repo: String, to dir: URL,
-                                      onProgress: (Double) -> Void) async throws {
+    // `nonisolated` so the per-byte streaming loop below doesn't hop to the
+    // MainActor on every byte of a multi-GB file — only `onProgress`, called
+    // once per ~1MB flush, does that (it's typed `@MainActor` so the `await`
+    // there is the only actor hop in the hot loop).
+    nonisolated private func downloadRepoSnapshot(
+        repo: String, to dir: URL,
+        onProgress: @MainActor @Sendable (Double) -> Void
+    ) async throws {
         struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
         guard let treeURL = URL(
             string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true") else {
@@ -185,6 +191,10 @@ final class ModelDownloadManager {
         guard !files.isEmpty else {
             throw DownloadError(message: "No files found in \(repo)")
         }
+        // `size` is optional per the HF tree API — some entries omit it. `total`
+        // only counts known sizes, so a repo with any nil-size file would let
+        // `done` overshoot `total` once that file's real byte count is added;
+        // every reported fraction is clamped to 1.0 to keep progress sane.
         let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
         var done: Int64 = 0
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -197,7 +207,7 @@ final class ModelDownloadManager {
                    atPath: target.path)[.size] as? Int64,
                onDisk == size {
                 done += size
-                onProgress(Double(done) / Double(total))
+                await onProgress(min(1.0, Double(done) / Double(total)))
                 continue
             }
             guard let src = URL(
@@ -216,27 +226,31 @@ final class ModelDownloadManager {
             try? FileManager.default.removeItem(at: tmp)
             FileManager.default.createFile(atPath: tmp.path, contents: nil)
             let handle = try FileHandle(forWritingTo: tmp)
-            defer { try? handle.close() }
-            var buffer = Data()
-            buffer.reserveCapacity(1 << 20)
-            var fileDone: Int64 = 0
-            for try await byte in bytes {
-                buffer.append(byte)
-                if buffer.count >= 1 << 20 {
-                    try handle.write(contentsOf: buffer)
-                    fileDone += Int64(buffer.count)
-                    buffer.removeAll(keepingCapacity: true)
-                    onProgress(Double(done + fileDone) / Double(total))
-                    try Task.checkCancellation()
+            do {
+                var buffer = Data()
+                buffer.reserveCapacity(1 << 20)
+                var fileDone: Int64 = 0
+                for try await byte in bytes {
+                    buffer.append(byte)
+                    if buffer.count >= 1 << 20 {
+                        try handle.write(contentsOf: buffer)
+                        fileDone += Int64(buffer.count)
+                        buffer.removeAll(keepingCapacity: true)
+                        await onProgress(min(1.0, Double(done + fileDone) / Double(total)))
+                        try Task.checkCancellation()
+                    }
                 }
+                try handle.write(contentsOf: buffer)
+                fileDone += Int64(buffer.count)
+                try handle.close()
+                try? FileManager.default.removeItem(at: target)
+                try FileManager.default.moveItem(at: tmp, to: target)
+                done += file.size ?? fileDone
+                await onProgress(min(1.0, Double(done) / Double(total)))
+            } catch {
+                try? handle.close()
+                throw error
             }
-            try handle.write(contentsOf: buffer)
-            fileDone += Int64(buffer.count)
-            try handle.close()
-            try? FileManager.default.removeItem(at: target)
-            try FileManager.default.moveItem(at: tmp, to: target)
-            done += file.size ?? fileDone
-            onProgress(Double(done) / Double(total))
         }
     }
 
