@@ -196,6 +196,8 @@ struct LicenseSheet: View {
 
 struct ServerSettings: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage("docsPage") private var docsPage = DocsWindow.Page.guide.rawValue
 
     var body: some View {
         @Bindable var model = model
@@ -246,6 +248,31 @@ struct ServerSettings: View {
                 ForEach(LLMBackendID.allCases, id: \.self) { llm in
                     llmRow(llm)
                 }
+            }
+            Section("MCP (agents)") {
+                Text("An MCP server is mounted at /mcp whenever the API server is on — "
+                     + "Claude Code, Cursor, and other MCP agents can browse your voices, "
+                     + "speak in them, and transcribe audio.")
+                    .font(.caption).foregroundStyle(.secondary)
+                let addCommand = "claude mcp add --transport http gloam "
+                    + "http://127.0.0.1:\(model.serverPort)/mcp"
+                HStack {
+                    Text(verbatim: addCommand)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(addCommand, forType: .string)
+                    }
+                    .accessibilityIdentifier("copy-mcp-command")
+                    .help("Copy the Claude Code connect command")
+                }
+                Button("MCP docs — tools & other clients") {
+                    docsPage = DocsWindow.Page.mcp.rawValue
+                    openWindow(id: "docs")
+                }
+                .buttonStyle(.link).font(.caption)
             }
             Section {
                 Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")

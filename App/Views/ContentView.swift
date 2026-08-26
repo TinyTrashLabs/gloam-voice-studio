@@ -278,8 +278,9 @@ struct ContentView: View {
 
     private var apiIndicatorHelp: String {
         model.serverEnabled
-            ? "API server at http://127.0.0.1:\(model.serverPort) — open settings"
-            : "API server off — open settings to enable"
+            ? "API server at http://127.0.0.1:\(model.serverPort) — OpenAI-compatible, "
+              + "MCP for agents at /mcp. Open settings"
+            : "API server off — open settings to enable (OpenAI-compatible API + MCP)"
     }
 
     /// The toolbar chip: status dot + current backend name + chevron. No custom

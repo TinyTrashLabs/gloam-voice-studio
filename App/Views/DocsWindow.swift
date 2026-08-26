@@ -19,11 +19,18 @@ struct DocsWindow: View {
         }
     }
 
-    @State private var page: Page = .guide
+    // AppStorage (not plain @State) so other surfaces can deep-link a page
+    // before opening the window — e.g. Settings → API Server's MCP docs link.
+    @AppStorage("docsPage") private var pageRaw = Page.guide.rawValue
+
+    private var page: Page { Page(rawValue: pageRaw) ?? .guide }
+    private var pageSelection: Binding<Page> {
+        Binding(get: { page }, set: { pageRaw = $0.rawValue })
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(Page.allCases, selection: $page) { page in
+            List(Page.allCases, selection: pageSelection) { page in
                 Text(page.rawValue).tag(page)
             }
             .navigationSplitViewColumnWidth(170)
