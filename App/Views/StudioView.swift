@@ -80,10 +80,101 @@ struct StudioView: View {
         }
     }
 
+    /// Same curated order as the toolbar's model picker — used to pick the
+    /// best engine to offer when the current one can't render the voice.
+    private static let packBarBackendOrder: [BackendID] =
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
+         .supertonic, .luxTTS, .pocketTTS]
+
+    /// Best engine for `caps` on this Mac: a baked rendition first, else the
+    /// first cloning engine the pack's source unlocks.
+    private func bestBackend(for caps: VoiceCapabilities) -> BackendID? {
+        let usable = Self.packBarBackendOrder.filter {
+            caps.supports($0) && model.hasSufficientRAM(for: $0)
+        }
+        return usable.first { caps.engines.contains($0.rawValue) } ?? usable.first
+    }
+
+    private func packChip(_ label: String, icon: String? = nil, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(size: 8)) }
+            if active {
+                Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(.green)
+            }
+            Text(label).font(.system(.caption2, design: .monospaced))
+        }
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Capsule().fill(Color.white.opacity(active ? 0.09 : 0.04)))
+        .overlay(Capsule().stroke(active ? Brand.accent.opacity(0.5) : Color.white.opacity(0.1),
+                                  lineWidth: 1))
+        .foregroundStyle(active ? Brand.fg : Brand.fgDim)
+    }
+
+    /// Manifest-driven pack summary for the selected voice: what assets the
+    /// pack holds (clone ref + baked engine renditions), which one the active
+    /// engine uses, and — on a mismatch — a plain-words warning with a
+    /// one-click switch to the pack's best engine. This is the greyed-out
+    /// sidebar row explained, where a new user is actually looking.
+    @ViewBuilder
+    private var voicePackBar: some View {
+        if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+            let caps = model.voices.capabilities(slug)
+            let renderable = caps.supports(model.backend)
+            let cloneActive = renderable && !caps.engines.contains(model.backend.rawValue)
+            let cloneEngines = Self.packBarBackendOrder
+                .filter { $0.controls.voiceClone != .none }.map(\.rawValue)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    VoiceAvatarView(slug: slug, name: meta.name,
+                                    avatarURL: model.voices.avatarURL(slug), size: 20)
+                    Text(meta.name).font(.callout.weight(.semibold))
+                    Text("in this pack:").font(.caption).foregroundStyle(Brand.fgFaint)
+                    if caps.hasSource {
+                        packChip("clone ref", icon: "mic", active: cloneActive)
+                            .help("Reference audio — any cloning engine can speak this voice: "
+                                  + cloneEngines.joined(separator: ", "))
+                    }
+                    ForEach(caps.engines.sorted(), id: \.self) { engine in
+                        packChip(engine, active: engine == model.backend.rawValue)
+                            .help("Baked \(engine) rendition — speaks this voice with no reference needed")
+                    }
+                    Spacer(minLength: 0)
+                }
+                if !renderable {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                        Text("\(model.backend.rawValue) can't render this voice")
+                            .font(.caption).foregroundStyle(Brand.fgDim)
+                        if let target = bestBackend(for: caps) {
+                            Button("Switch to \(target.rawValue)") {
+                                model.backend = target
+                                if model.downloads.state(for: target) == .ready {
+                                    Task { await model.loadModel(target) }
+                                }
+                            }
+                            .font(.caption)
+                            .accessibilityIdentifier("pack-bar-switch")
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(renderable ? 0.02 : 0.035)))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(renderable ? Color.white.opacity(0.05) : Color.orange.opacity(0.25),
+                        lineWidth: 1))
+            .accessibilityIdentifier("voice-pack-bar")
+        }
+    }
+
     /// Center column: mode switch + write/act/takes.
     @ViewBuilder
     private var mainColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
+            voicePackBar
             Picker("Mode", selection: Binding(
                 get: { StudioMode(rawValue: modeRaw) ?? .single },
                 set: { modeRaw = $0.rawValue })) {
