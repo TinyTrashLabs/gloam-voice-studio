@@ -682,7 +682,7 @@ struct OnboardingSheet: View {
 
     private var starterSize: String {
         ByteCountFormatter.string(
-            fromByteCount: model.downloads.approxBytes(for: .qwen06B), countStyle: .file)
+            fromByteCount: model.downloads.approxBytes(for: .kokoro), countStyle: .file)
     }
 
     var body: some View {
@@ -691,9 +691,10 @@ struct OnboardingSheet: View {
             Text("Welcome to Gloam Voice Studio").font(.title2.bold())
             Text("""
             Clone, design, and direct voices — entirely on this Mac. To speak, \
-            the studio needs a voice engine on disk. qwen3-0.6b (\(starterSize)) \
-            is a good starter: it clones from a short recording and handles ten \
-            languages. You can add or switch engines any time in Settings → Backends.
+            the studio needs a voice engine on disk. kokoro (\(starterSize)) is a \
+            good starter: it ships 54 ready-to-speak voices, no license to accept \
+            and no recording to clone. You can add or switch engines any time in \
+            Settings → Backends.
             """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -701,8 +702,7 @@ struct OnboardingSheet: View {
                 Spacer()
                 Button("Not Now") { dismiss() }
                 Button("Download Starter Engine") {
-                    model.backend = .qwen06B
-                    model.downloads.download(.qwen06B)
+                    model.downloadStarterEngine()
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)

@@ -479,8 +479,12 @@ final class AppModel {
         deviceCapabilities = EngineCapabilities.current()
         // qwen3-design is Creation-only now (it lives in the Voice Foundry, not the
         // Studio picker) — redirect a persisted design backend to a real clone model.
+        // Fresh install defaults to kokoro — the only backend that needs
+        // neither a license ack nor a cloned/uploaded voice (its 54 preset
+        // voicepacks ship in the weights), so onboarding's one download
+        // reaches a working Generate with no further decisions.
         let loadedBackend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
-            ?? .fishS2Pro
+            ?? .kokoro
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         let lanEnabled = defaults.bool(forKey: "serverLANEnabled")
@@ -681,6 +685,63 @@ final class AppModel {
     func cancelDownloadPrompt() {
         downloadPrompt = nil
         pendingSynthesisAction = nil
+    }
+
+    /// Onboarding's "Download Starter Engine": switches to kokoro (the
+    /// zero-gate backend — no license ack, no cloned voice needed), starts
+    /// the download, and on completion installs one bundled CC0 catalog
+    /// voice + prefills the WRITE text so Generate is a single remaining
+    /// click. Reuses the same download-completion poll `confirmDownload
+    /// FromPrompt` uses, since `ModelDownloadManager` exposes no completion
+    /// callback/publisher — only pollable state.
+    func downloadStarterEngine() {
+        backend = .kokoro
+        downloads.download(.kokoro)
+        Task {
+            while true {
+                try? await Task.sleep(for: .milliseconds(400))
+                switch downloads.state(for: .kokoro) {
+                case .ready:
+                    installOnboardingVoice()
+                    return
+                case .failed, .notDownloaded:
+                    return   // user cancelled or the download failed
+                case .downloading:
+                    continue
+                }
+            }
+        }
+    }
+
+    /// Installs the bundled "Ava" catalog voice (ships in-bundle, no
+    /// network) so a fresh library isn't empty, and prefills the WRITE
+    /// field if the user hasn't typed anything yet.
+    private func installOnboardingVoice() {
+        if voices.list().isEmpty,
+           let url = Bundle.main.url(forResource: "catalog", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let catalog = try? JSONDecoder().decode([CatalogVoice].self, from: data),
+           let starter = catalog.first(where: { $0.id == "jl-ava" }) {
+            let manager = VoiceCatalogManager()
+            manager.install(starter, into: voices, transcriber: speech.makeTranscriber())
+            // install() is fire-and-forget (spawns its own Task); poll its
+            // published state so the sidebar refresh (voicesVersion) lands
+            // only once the bundled clips are actually on disk.
+            Task {
+                while true {
+                    switch manager.state(for: starter, installedSlugs: Set(voices.list().map(\.slug))) {
+                    case .installed, .failed:
+                        voicesVersion += 1
+                        return
+                    default:
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+            }
+        }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = "Welcome to Gloam Voice Studio. This line was generated on this Mac."
+        }
     }
 
     /// Dispatches whatever action was waiting on a download/license prompt
