@@ -34,7 +34,7 @@ public enum APIRouter {
         // `.oneOf` is exact-match, so `*.gloam.fm` subdomains aren't covered.
         router.add(middleware: CORSMiddleware(
             allowOrigin: .oneOf("https://gloam.fm", "https://gloam-app.pages.dev"),
-            allowHeaders: [.contentType],
+            allowHeaders: [.contentType, .authorization],
             allowMethods: [.get, .post, .patch, .delete, .options]))
 
         router.add(middleware: APILogMiddleware(log: deps.log))

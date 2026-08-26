@@ -27,6 +27,12 @@ struct SettingsView: View {
         }
         .frame(width: 560)
         .padding(20)
+        .onAppear {
+            // Migrate the removed "console" tab tag (dropped when the API
+            // console was folded into the API Server tab) so a stale
+            // persisted value doesn't select a nonexistent tab.
+            if tab == "console" { tab = SettingsTab.api.rawValue }
+        }
     }
 }
 

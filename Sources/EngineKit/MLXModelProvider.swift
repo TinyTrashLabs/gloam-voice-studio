@@ -36,9 +36,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "LuxTTS requires pre-converted local weights (no HF auto-download "
-                        + "path yet) — run convert_weights.py and populate the resolver's "
-                        + "Application Support/Models directory for \(BackendID.luxTTS.rawValue).")
+                    message: "lux-tts weights are not installed — this model is not "
+                        + "downloadable in-app.")
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
@@ -51,9 +50,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "Pocket TTS requires a local sherpa-onnx model directory — run "
-                        + "scripts/fetch-pocket-tts.sh and populate the resolver's "
-                        + "Application Support/Models directory for \(BackendID.pocketTTS.rawValue).")
+                    message: "Pocket TTS model not downloaded — download it in "
+                        + "Settings → Models.")
             }
             return try PocketSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }

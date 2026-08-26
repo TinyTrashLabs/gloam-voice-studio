@@ -131,6 +131,10 @@ Model weights are licensed separately:
 - **Chatterbox & Chatterbox-Turbo:** MIT
 - **Qwen3-TTS:** [Apache-2.0](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) (commercial use permitted)
 - **Fish S2-Pro:** [Fish Audio Research License](https://huggingface.co/fishaudio/fish-speech-1.5) (personal/research use; commercial use requires a license from business@fish.audio)
+- **Kokoro:** [Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M) (commercial use permitted)
+- **SuperTonic:** [BigScience Open RAIL-M](https://huggingface.co/Supertone/supertonic-3) — permissive on IP, but carries use-based restrictions (no impersonation/deepfakes without consent, no harassment or disinformation, and more); the app requires an explicit in-app acknowledgement before downloading. See [`docs/supertonic-licensing.md`](docs/supertonic-licensing.md).
+- **pocket-tts (Kyutai Pocket TTS):** weights are CC-BY-4.0; the bundled sherpa-onnx runtime library that runs them (`App/Vendor/sherpa-onnx/`) is Apache-2.0 and ships inside the app bundle — see [`App/Vendor/sherpa-onnx/README.md`](App/Vendor/sherpa-onnx/README.md).
+- **LuxTTS:** not currently downloadable in-app (requires pre-converted local weights).
 
 ## Contributing
 
