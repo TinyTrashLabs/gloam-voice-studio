@@ -68,6 +68,40 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     }
 }
 
+/// What a stored voice can actually render, derived from its pack contents on
+/// disk (the voice folder IS an exploded .gvoice pack: optional ref.wav source
+/// plus optional engines/<engine-id>/ renditions). One shared truth for the
+/// sidebar, the pickers, and the API server, so they never disagree about
+/// which engines a voice works on.
+public struct VoiceCapabilities: Sendable, Equatable {
+    /// ref.wav exists — the cross-engine asset every cloning backend consumes.
+    public var hasSource: Bool
+    /// meta.refText non-empty — required alongside source by the engines whose
+    /// clone path is conditioned on the transcript too (see `needsRefText`).
+    public var hasRefText: Bool
+    /// engines/<id>/ directories holding at least one file. Ids are BackendID
+    /// raw values when the pack was baked for this app; unknown ids are
+    /// carried but simply never match.
+    public var engines: Set<String>
+
+    public init(hasSource: Bool, hasRefText: Bool, engines: Set<String>) {
+        self.hasSource = hasSource
+        self.hasRefText = hasRefText
+        self.engines = engines
+    }
+
+    /// Whether `backend` can render this voice: a baked rendition for it, or
+    /// source audio on a cloning backend (plus transcript where the engine
+    /// conditions on it). qwen3-design mints voices from an instruct rather
+    /// than speaking stored ones, so no library voice ever enables it.
+    public func supports(_ backend: BackendID) -> Bool {
+        guard backend != .qwenDesign else { return false }
+        if engines.contains(backend.rawValue) { return true }
+        guard backend.controls.voiceClone != .none else { return false }
+        return hasSource && (!backend.needsRefText || hasRefText)
+    }
+}
+
 /// Voice library rooted at an injectable directory (sandbox container in the
 /// app, temp dir in tests). Stateless: all state lives on disk.
 public struct VoiceLibrary: Sendable {
@@ -159,6 +193,34 @@ public struct VoiceLibrary: Sendable {
                 files.map { ($0.lastPathComponent, $0) }, uniquingKeysWith: { a, _ in a })
         }
         return (meta, ref, engines)
+    }
+
+    /// Derive what `slug` can render from cheap filesystem checks. An unknown
+    /// slug reports empty capabilities rather than throwing — callers render
+    /// lists where a race with a delete must not crash the row.
+    public func capabilities(_ slug: String) -> VoiceCapabilities {
+        guard let (meta, refURL, engines) = try? entry(slug) else {
+            return VoiceCapabilities(hasSource: false, hasRefText: false, engines: [])
+        }
+        return VoiceCapabilities(hasSource: refURL != nil,
+                                 hasRefText: !meta.refText.isEmpty,
+                                 engines: Set(engines.keys))
+    }
+
+    /// The baked style file for `engine` in `slug`'s pack (supertonic:
+    /// engines/supertonic/style.json). An emotion-variant voice without its
+    /// own rendition falls back to its base voice's — same resolution order
+    /// as reference audio.
+    public func renditionStyleURL(_ slug: String, engine: String) -> URL? {
+        func direct(_ s: String) -> URL? {
+            guard let (_, _, engines) = try? entry(s),
+                  let files = engines[engine] else { return nil }
+            return files.sorted { $0.key < $1.key }
+                .first { $0.value.pathExtension == "json" }?.value
+        }
+        if let url = direct(slug) { return url }
+        guard let base = (try? entry(slug))?.meta.variantOf else { return nil }
+        return direct(base)
     }
 
     /// Variant key -> library slug for `slug` and its "<slug>-<x>" siblings.

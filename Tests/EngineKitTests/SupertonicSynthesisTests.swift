@@ -49,6 +49,35 @@ final class SupertonicSynthesisTests: XCTestCase {
         }
     }
 
+    func testStyleURLWaivesSpeakerRequirement() async throws {
+        // A baked .gvoice supertonic rendition (style.json) IS the voice — no
+        // preset speaker needed, and the path must reach the provider.
+        let provider = FakeProvider()
+        let model = FakeModel()
+        provider.models[.supertonic] = model
+        let engine = GloamEngine(provider: provider)
+        await engine.acknowledgeLicense(for: .supertonic)
+        let style = URL(fileURLWithPath: "/tmp/billie/style.json")
+        _ = try await engine.synthesize(
+            backend: .supertonic,
+            request: SynthesisRequest(text: "hi", styleURL: style))
+        XCTAssertEqual(model.received.first?.styleURL, style)
+        XCTAssertNil(model.received.first?.speaker)
+    }
+
+    func testStyleURLIgnoredByBackendsWithoutPresetStyles() async throws {
+        // Clone backends must not leak a stray styleURL to the provider.
+        let provider = FakeProvider()
+        let model = FakeModel()
+        provider.models[.chatterbox] = model
+        let engine = GloamEngine(provider: provider)
+        _ = try await engine.synthesize(
+            backend: .chatterbox,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/ref.wav",
+                                      styleURL: URL(fileURLWithPath: "/tmp/style.json")))
+        XCTAssertNil(model.received.first?.styleURL)
+    }
+
     func testSynthesizeWithoutLicenseAckThrows() async {
         // Open RAIL-M use restrictions require an explicit ack, like Fish.
         let engine = GloamEngine(provider: FakeProvider())

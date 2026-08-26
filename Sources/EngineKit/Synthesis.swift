@@ -27,6 +27,11 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var instruct: String?
     /// Qwen CustomVoice preset speaker name.
     public var speaker: String?
+    /// Baked per-voice style file from a .gvoice pack's engine rendition
+    /// (supertonic: {style_ttl, style_dp} .json). When set on a preset-style
+    /// backend it IS the voice — `speaker` is not required. Ignored by
+    /// backends without preset styles.
+    public var styleURL: URL?
     /// Language hint ("auto" or one of the 10 languages); nil = auto.
     public var language: String?
     /// Qwen sampling overrides (nil = model default).
@@ -46,7 +51,8 @@ public struct SynthesisRequest: Sendable, Equatable {
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
                 temperatureOverride: Float? = nil, exaggerationOverride: Float? = nil,
                 cfgWeight: Float? = nil, exaggerationCeiling: Float? = nil,
-                instruct: String? = nil, speaker: String? = nil, language: String? = nil,
+                instruct: String? = nil, speaker: String? = nil, styleURL: URL? = nil,
+                language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil) {
@@ -62,6 +68,7 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.exaggerationCeiling = exaggerationCeiling
         self.instruct = instruct
         self.speaker = speaker
+        self.styleURL = styleURL
         self.language = language
         self.topP = topP
         self.topK = topK
@@ -88,6 +95,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var instruct: String?
     /// Qwen CustomVoice preset speaker.
     public var speaker: String?
+    /// Supertonic only: baked custom style file standing in for a preset.
+    public var styleURL: URL?
     /// Qwen language hint (nil = auto).
     public var language: String?
     /// Qwen sampling overrides.
@@ -110,13 +119,15 @@ public struct ProviderRequest: Sendable, Equatable {
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
-                instruct: String? = nil, speaker: String? = nil, language: String? = nil,
+                instruct: String? = nil, speaker: String? = nil, styleURL: URL? = nil,
+                language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
                 tShift: Float? = nil, returnSmooth: Bool? = nil) {
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
-        self.instruct = instruct; self.speaker = speaker; self.language = language
+        self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
+        self.language = language
         self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
         self.speed = speed; self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.returnSmooth = returnSmooth
@@ -203,9 +214,12 @@ enum RequestPlanner {
         // it; or a chat "Regenerate with…" override, which bypasses the
         // Studio bench's own reset entirely) must fail loudly here instead of
         // reaching the model with an invalid voicepack/name.
+        // A baked style file (a .gvoice pack's supertonic rendition) IS the
+        // voice on a preset-style backend, so it stands in for the speaker.
+        let styleURL = controls.presetSpeakers.isEmpty ? nil : request.styleURL
         let cleanedSpeaker = controls.presetSpeakers.isEmpty ? nil : clean(request.speaker)
         let speaker = cleanedSpeaker.flatMap { controls.presetSpeakers.contains($0) ? $0 : nil }
-        if !controls.presetSpeakers.isEmpty && speaker == nil {
+        if !controls.presetSpeakers.isEmpty && speaker == nil && styleURL == nil {
             throw EngineError.speakerRequired(backend)
         }
 
@@ -243,7 +257,9 @@ enum RequestPlanner {
                 : nil,
             cfgWeight: knobs.cfgWeight != nil ? request.cfgWeight : nil,
             instruct: instruct,
-            speaker: speaker,
+            // The baked style wins over a (possibly stale) preset name.
+            speaker: styleURL == nil ? speaker : nil,
+            styleURL: styleURL,
             language: language,
             topP: knobs.topP != nil ? request.topP : nil,
             topK: knobs.topK != nil ? request.topK : nil,

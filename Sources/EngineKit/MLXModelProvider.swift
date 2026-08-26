@@ -155,7 +155,10 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 audio = try await model.generate(
                     text: request.text,
                     voice: backend.isQwen ? request.instruct
-                        : backend == .kokoro || backend == .supertonic ? request.speaker
+                        // Supertonic: an absolute style-file path renders that
+                        // baked voice (fork PR #7); a bare name stays a preset.
+                        : backend == .supertonic ? (request.styleURL?.path ?? request.speaker)
+                        : backend == .kokoro ? request.speaker
                         : nil,
                     refAudio: refAudio,
                     refText: request.refText,

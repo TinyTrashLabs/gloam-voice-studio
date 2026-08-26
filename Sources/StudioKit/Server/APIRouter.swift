@@ -54,7 +54,9 @@ public enum APIRouter {
         }
 
         router.get("voices") { _, _ in
-            VoicesResponse(voices: deps.voices.list())
+            VoicesResponse(voices: deps.voices.list().map {
+                APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug))
+            })
         }
 
         router.post("voices") { request, context in
@@ -253,6 +255,16 @@ public enum APIRouter {
             var usedVariant = false
             let defaultVoice = deps.defaultVoice()
             let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            // Baked engine rendition: a pack carrying assets for THIS backend
+            // (e.g. Billie Frost's engines/supertonic/style.json) renders that
+            // voice instead of a house preset. Variant rendition first, then
+            // the voice's own (renditionStyleURL also walks variantOf → base).
+            let styleURL: URL? = effectiveVoice.flatMap { voice in
+                let emo = req.emotion?.lowercased()
+                let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
+                return variant.flatMap { deps.voices.renditionStyleURL($0, engine: backend.rawValue) }
+                    ?? deps.voices.renditionStyleURL(voice, engine: backend.rawValue)
+            }
             // Preset-speaker backends (kokoro/supertonic/qwen-custom) and
             // instruct-only ones (qwen-design) have `voiceClone == .none`: their
             // `voice` field is not a library slug at all, so an unknown one keeps
@@ -323,7 +335,8 @@ public enum APIRouter {
                                     temperatureOverride: req.temperature,
                                     exaggerationOverride: req.exaggeration,
                                     exaggerationCeiling: req.exaggeration_ceiling,
-                                    instruct: req.instruct, speaker: effectiveSpeaker, language: req.language,
+                                    instruct: req.instruct, speaker: effectiveSpeaker,
+                                    styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                         }
                     }.value

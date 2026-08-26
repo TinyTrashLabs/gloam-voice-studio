@@ -44,6 +44,59 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
                         defaultVoice: { "cruz" })
     }
 
+    func testSupertonicRenditionRendersBakedStyleNotPreset() async throws {
+        // A voice whose pack carries engines/supertonic/style.json must speak
+        // with that baked style — not silently fall back to preset M1.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rendition-\(UUID().uuidString)")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Billie", refWav: nil, refText: "",
+                            engines: ["supertonic": ["style.json": Data([1, 2])]])
+        let engine = GloamEngine(provider: provider)
+        await engine.acknowledgeLicense(for: .supertonic)
+        let deps = APIDependencies(engine: engine, voices: voices,
+                                   defaultBackend: .supertonic, log: APILog(),
+                                   defaultVoice: { "" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"supertonic","voice":"billie"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+            XCTAssertEqual(provider.model.last?.styleURL?.lastPathComponent, "style.json")
+            XCTAssertNil(provider.model.last?.speaker)
+        }
+    }
+
+    func testVoicesListReportsCapabilities() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("caps-\(UUID().uuidString)")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Billie", refWav: nil, refText: "",
+                            engines: ["supertonic": ["style.json": Data([1])]])
+        _ = try voices.save(name: "Cruz", refWav: Data([1]), refText: "t")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B,
+                                   log: APILog(), defaultVoice: { "" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/voices", method: .get) { resp in
+                XCTAssertEqual(resp.status, .ok)
+                let listed = try JSONDecoder().decode(
+                    VoicesResponse.self, from: Data(buffer: resp.body))
+                let billie = listed.voices.first { $0.meta.slug == "billie" }
+                let cruz = listed.voices.first { $0.meta.slug == "cruz" }
+                XCTAssertEqual(billie?.engines, ["supertonic"])
+                XCTAssertEqual(billie?.hasSource, false)
+                XCTAssertEqual(cruz?.engines, [])
+                XCTAssertEqual(cruz?.hasSource, true)
+            }
+        }
+    }
+
     func testInstructAndLanguageReachEngine() async throws {
         // Direction (instruct) is honored on the design model, not Base (clone-only).
         let provider = CapturingProvider()
