@@ -20,6 +20,7 @@ struct VoiceSidebarView: View {
     @State private var hoveredSlug: String?
     @State private var catalogPresented = false
     @State private var pendingDeleteSlug: String?
+    @State private var searchText = ""
 
     var body: some View {
         @Bindable var model = model
@@ -96,9 +97,17 @@ struct VoiceSidebarView: View {
                     .padding(.vertical, 8)
                     .accessibilityIdentifier("voices-empty-state")
                 }
-                ForEach(groupedVoices(voiceList), id: \.base.slug) { group in
+                let groups = filteredGroups
+                if groups.isEmpty && !voiceList.isEmpty && !searchText.isEmpty {
+                    Text("No voices match “\(searchText)”")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.vertical, 6)
+                }
+                ForEach(groups, id: \.base.slug) { group in
                     voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
-                    if expandedBases.contains(group.base.slug) {
+                    // While searching, matched groups show their variants without
+                    // needing a chevron click — the match may BE a variant.
+                    if expandedBases.contains(group.base.slug) || !searchText.isEmpty {
                         ForEach(group.variants, id: \.slug) { variant in
                             voiceRow(variant, isVariant: true, variantCount: 0)
                         }
@@ -106,6 +115,7 @@ struct VoiceSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .searchable(text: $searchText, placement: .sidebar, prompt: "Search voices")
             .scrollContentBackground(.hidden)
             .fileImporter(isPresented: $importerPresented,
                           allowedContentTypes: [.gvoice, .zip],
@@ -290,6 +300,19 @@ struct VoiceSidebarView: View {
     private var voiceList: [VoiceMeta] {
         _ = model.voicesVersion
         return model.voices.list()
+    }
+
+    /// Groups surviving the search filter: a group stays when its base or any
+    /// variant matches by name or slug (case-insensitive substring).
+    private var filteredGroups: [(base: VoiceMeta, variants: [VoiceMeta])] {
+        let groups = groupedVoices(voiceList)
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return groups }
+        func matches(_ v: VoiceMeta) -> Bool {
+            v.name.localizedCaseInsensitiveContains(query)
+                || v.slug.localizedCaseInsensitiveContains(query)
+        }
+        return groups.filter { matches($0.base) || $0.variants.contains(where: matches) }
     }
 
     private func export(_ slug: String) {
