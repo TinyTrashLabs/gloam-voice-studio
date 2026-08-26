@@ -412,7 +412,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Text("No LLM resident — loads on the first chat reply")
+                Text("No chat model loaded — loads on the first reply")
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .padding(.horizontal, 8).padding(.vertical, 2)
             }
@@ -558,9 +558,9 @@ struct RAMChip: View {
 
     private var ramHelp: String {
         var parts: [String] = []
-        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) (voice) resident") }
-        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) resident") }
-        if parts.isEmpty { parts.append("no model resident") }
+        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) (voice) loaded") }
+        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) loaded") }
+        if parts.isEmpty { parts.append("no model loaded") }
         parts.append(String(format: "%.2f GB app memory", model.memGB))
         return parts.joined(separator: " · ")
             + " — voice models load/unload in the model picker, the LLM in the chat inspector"
@@ -577,7 +577,7 @@ struct ModelManagerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Models — one resident at a time")
+            Text("Models — one loaded at a time")
                 .font(.headline)
             ForEach(backends, id: \.self) { row($0) }
             Divider()
@@ -631,7 +631,7 @@ struct ModelManagerView: View {
     private func caption(_ state: ModelDownloadManager.State,
                          isLoaded: Bool) -> String {
         switch state {
-        case .ready: isLoaded ? "resident in memory" : "on disk, not loaded"
+        case .ready: isLoaded ? "loaded in memory" : "on disk, not loaded"
         case .downloading: "downloading"
         case .notDownloaded: "not downloaded"
         case .failed(let message): message
@@ -691,17 +691,17 @@ struct OnboardingSheet: View {
             Text("Welcome to Gloam Voice Studio").font(.title2.bold())
             Text("""
             Clone, design, and direct voices — entirely on this Mac. To speak, \
-            the studio needs a voice engine on disk. kokoro (\(starterSize)) is a \
+            the studio needs a voice model on disk. kokoro (\(starterSize)) is a \
             good starter: it ships 54 ready-to-speak voices, no license to accept \
-            and no recording to clone. You can add or switch engines any time in \
-            Settings → Backends.
+            and no recording to clone. You can add or switch models any time in \
+            Settings → Models.
             """)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
                 Button("Not Now") { dismiss() }
-                Button("Download Starter Engine") {
+                Button("Download Starter Model") {
                     model.downloadStarterEngine()
                     dismiss()
                 }

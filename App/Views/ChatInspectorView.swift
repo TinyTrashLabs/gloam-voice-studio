@@ -147,7 +147,7 @@ struct ChatInspectorView: View {
                     .font(.caption2)
             }
         case .notDownloaded:
-            Button("Download voice engine") { model.downloads.download(backend) }
+            Button("Download voice model") { model.downloads.download(backend) }
                 .accessibilityIdentifier("chat-tts-download")
         case .failed(let message):
             VStack(alignment: .leading, spacing: 4) {

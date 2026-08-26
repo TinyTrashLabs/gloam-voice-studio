@@ -285,7 +285,7 @@ struct VoiceSidebarView: View {
     @ViewBuilder
     private func voiceActions(_ voice: VoiceMeta) -> some View {
         Button("Edit…") { openEdit(voice.slug) }
-            .help("Edit this voice (name, reference, bake variants)")
+            .help("Edit this voice (name, recording, emotion versions)")
         Button(refPlayer.playingID == voice.slug ? "Stop Sample" : "Play Sample") {
             previewRef(voice)
         }
@@ -319,7 +319,7 @@ struct VoiceSidebarView: View {
         do {
             exportDoc = DataDocument(data: try GVoice.export(slug, from: model.voices))
             exportName = slug
-        } catch { actionError = "\(error)" }
+        } catch { actionError = model.describeAny(error) }
     }
 
     private func delete(_ slug: String) {
@@ -327,7 +327,7 @@ struct VoiceSidebarView: View {
             try model.voices.delete(slug)
             if model.selectedVoiceSlug == slug { model.selectedVoiceSlug = nil }
             model.voicesVersion += 1
-        } catch { actionError = "\(error)" }
+        } catch { actionError = model.describeAny(error) }
     }
 
     private func importPacks(_ result: Result<[URL], Error>) {
@@ -337,7 +337,7 @@ struct VoiceSidebarView: View {
             guard url.startAccessingSecurityScopedResource() else { continue }
             defer { url.stopAccessingSecurityScopedResource() }
             do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
-            catch { failures.append("\(url.lastPathComponent): \(error)") }
+            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
@@ -375,7 +375,7 @@ struct VoiceSidebarView: View {
                 let refWav = try Data(contentsOf: refURL)
                 _ = try model.voices.save(name: name, refWav: refWav, refText: refText)
             } catch {
-                failures.append("\(subdir.lastPathComponent): \(error)")
+                failures.append("\(subdir.lastPathComponent): \(model.describeAny(error))")
             }
         }
         model.voicesVersion += 1

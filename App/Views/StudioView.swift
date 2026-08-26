@@ -49,10 +49,10 @@ struct StudioView: View {
                 Button {
                     inspectorVisible.toggle()
                 } label: {
-                    Label("Engine Controls", systemImage: "sidebar.trailing")
+                    Label("Model Controls", systemImage: "sidebar.trailing")
                         .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
                 }
-                .help("Toggle the engine controls inspector")
+                .help("Toggle the model controls inspector")
                 .accessibilityIdentifier("studio-inspector-toggle")
             }
         }
@@ -151,9 +151,9 @@ struct StudioView: View {
                     VoiceAvatarView(slug: slug, name: meta.name,
                                     avatarURL: model.voices.avatarURL(slug), size: 20)
                     Text(meta.name).font(.callout.weight(.semibold))
-                    Text("in this pack:").font(.caption).foregroundStyle(Brand.fgFaint)
+                    Text("This voice includes:").font(.caption).foregroundStyle(Brand.fgFaint)
                     if caps.hasSource {
-                        packChip("clone ref", icon: "mic", active: cloneActive)
+                        packChip("voice recording", icon: "mic", active: cloneActive)
                             .help("Reference audio — any cloning engine can speak this voice: "
                                   + cloneEngines.joined(separator: ", "))
                         // A missing transcript silently halves the cloning
@@ -164,7 +164,7 @@ struct StudioView: View {
                                 ProgressView().controlSize(.mini)
                                 Text("transcribing…").font(.caption2).foregroundStyle(Brand.fgFaint)
                             } else {
-                                Text("no transcript").font(.caption2).foregroundStyle(Brand.fgFaint)
+                                Text("transcript missing").font(.caption2).foregroundStyle(Brand.fgFaint)
                                 Button("Transcribe") { transcribeRef(slug) }
                                     .font(.caption2).buttonStyle(.borderless)
                                     .foregroundStyle(Brand.accent)
@@ -176,7 +176,7 @@ struct StudioView: View {
                     }
                     ForEach(caps.engines.sorted(), id: \.self) { engine in
                         packChip(engine, active: engine == model.backend.rawValue)
-                            .help("Baked \(engine) rendition — speaks this voice with no reference needed")
+                            .help("Pre-rendered for \(engine) — speaks this voice with no recording needed")
                     }
                     Spacer(minLength: 0)
                 }
@@ -191,7 +191,7 @@ struct StudioView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
-                        Text("\(model.backend.rawValue) can't render this voice")
+                        Text("\(model.backend.rawValue) can't speak this voice yet")
                             .font(.caption).foregroundStyle(Brand.fgDim)
                         // Engines the pack would support if only the transcript
                         // existed — shown disabled with the reason, so "why not
@@ -205,7 +205,7 @@ struct StudioView: View {
                             Menu("Switch engine") {
                                 ForEach(targets, id: \.self) { target in
                                     Button(caps.engines.contains(target.rawValue)
-                                           ? "\(target.rawValue) — baked rendition"
+                                           ? "\(target.rawValue) — pre-rendered"
                                            : target.rawValue) {
                                         model.backend = target
                                         if model.downloads.state(for: target) == .ready {
@@ -216,7 +216,7 @@ struct StudioView: View {
                                 if !transcriptLocked.isEmpty {
                                     Divider()
                                     ForEach(transcriptLocked, id: \.self) { locked in
-                                        Button("\(locked.rawValue) — needs a reference transcript") {}
+                                        Button("\(locked.rawValue) needs a transcript of the recording") {}
                                             .disabled(true)
                                     }
                                 }
@@ -377,7 +377,7 @@ struct StudioView: View {
                 HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
                 emotionPicker
                 Text("Switches to an acted “-emotion” voice variant when one exists — add them via "
-                     + "New Emotion Variant, or bake them in Create Voice.")
+                     + "New Emotion Variant, or generate them in Create Voice.")
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -976,7 +976,7 @@ struct StudioView: View {
                         size: isVariant ? 18 : 22)
                     Text(voice.name).foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
                     if !renderable {
-                        Text("not on \(model.backend.rawValue)")
+                        Text("can't speak this voice")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
                             .foregroundStyle(Brand.fgFaint)
                     }

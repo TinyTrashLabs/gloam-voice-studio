@@ -633,7 +633,7 @@ final class AppModel {
                 generationError = describe(error)
                 return
             } catch {
-                generationError = "\(error)"
+                generationError = error.localizedDescription
                 return
             }
         }
@@ -877,11 +877,11 @@ final class AppModel {
         let engine = engineOverride ?? self.engine
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
-                message: "Download the \(backend.rawValue) model in Settings first.")
+                message: "Download the \(backend.rawValue) model in Settings → Models first.")
         }
         if backend.spec.needsLicenseAck && !didAck(backend) {
             throw AppGenerationError(
-                message: "Acknowledge the \(backend.rawValue) license in Settings first.")
+                message: "Acknowledge the \(backend.rawValue) license in Settings → Models first.")
         }
         var refPath: String?
         var refText: String?
@@ -953,10 +953,15 @@ final class AppModel {
             sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
         if recordHistory {
-            _ = try? history.save(
-                pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
-                text: text, backend: backend.rawValue, voice: resolvedVoice,
-                emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+            do {
+                try history.save(
+                    pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
+                    text: text, backend: backend.rawValue, voice: resolvedVoice,
+                    emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+            } catch {
+                AppLog.history.error(
+                    "history save failed: \(String(describing: error), privacy: .public)")
+            }
         }
         return result
     }
@@ -1047,12 +1052,12 @@ final class AppModel {
             foundryError = "Base voice '\(baseSlug)' is missing."; return
         }
         if baker.spec.needsLicenseAck && !didAck(baker) {
-            foundryError = "Baking with \(baker.rawValue) needs its license — acknowledge it in Settings first."
+            foundryError = "Generating with \(baker.rawValue) needs its license — acknowledge it in Settings → Models first."
             return
         }
         guard downloads.state(for: baker) == .ready else {
             if case .notDownloaded = downloads.state(for: baker) { downloads.download(baker) }
-            foundryError = "Downloading \(baker.rawValue) to bake with — try again once it's ready."
+            foundryError = "Downloading \(baker.rawValue) to generate with — try again once it's ready."
             return
         }
         foundryBaking = true
@@ -1081,7 +1086,7 @@ final class AppModel {
                                   name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text)
                 await refreshEngineStatus()   // model resident now — update the RAM chip
             } catch {
-                foundryError = "Bake failed for \(expr.label): \(describeAny(error))"
+                foundryError = "Generation failed for \(expr.label): \(describeAny(error))"
                 break
             }
         }
@@ -1098,9 +1103,9 @@ final class AppModel {
     private func describe(_ error: EngineError) -> String {
         switch error {
         case .licenseAckRequired:
-            return "Acknowledge the Fish license in Settings first."
+            return "Acknowledge the Fish license in Settings → Models first."
         case .refAudioRequired:
-            return "This backend needs a reference voice."
+            return "This model needs a reference voice."
         case .generationFailed(_, let message):
             return "Generation failed: \(message)"
         case .invalidSpeed(let s):
@@ -1110,7 +1115,7 @@ final class AppModel {
         case .speakerRequired:
             return "Pick a preset speaker for this model."
         case .languageProviderUnavailable:
-            return "This model's language provider isn't loaded yet."
+            return "The model is still loading — try again in a moment."
         case .referenceTooLong(_, let seconds, let maxSeconds):
             return String(
                 format: "This voice's reference clip is %.0fs and could not be trimmed "

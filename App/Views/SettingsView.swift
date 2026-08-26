@@ -14,7 +14,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            BackendsSettings().tabItem { Label("Backends", systemImage: "cpu") }
+            BackendsSettings().tabItem { Label("Models", systemImage: "cpu") }
                 .tag(SettingsTab.backends.rawValue)
             SpeechSettings().tabItem { Label("Speech", systemImage: "waveform.and.mic") }
                 .tag(SettingsTab.speech.rawValue)
@@ -71,12 +71,12 @@ struct BackendsSettings: View {
                         .disabled(!model.hasSufficientRAM(for: backend))
                 }
             }
-            Section("Models") {
+            Section("Downloads") {
                 ForEach(backends, id: \.self) { backend in
                     backendRow(backend)
                 }
                 Toggle("Keep models loaded under memory pressure", isOn: $model.keepModelsResident)
-                    .help("Stay resident through memory-pressure warnings so chat and "
+                    .help("Stay loaded through memory-pressure warnings so chat and "
                           + "voice replies never cold-start; models are still released "
                           + "when pressure turns critical. Turn off to free memory eagerly.")
             }
@@ -287,7 +287,7 @@ struct ServerSettings: View {
                 }
                 .accessibilityIdentifier("server-default-model-picker")
                 Picker("Default voice", selection: $model.serverDefaultVoice) {
-                    Text("Backend voice (no reference)").tag("")
+                    Text("Model's built-in voice").tag("")
                     ForEach(defaultVoiceLibrary, id: \.slug) { voice in
                         Text(voice.name).tag(voice.slug)
                     }

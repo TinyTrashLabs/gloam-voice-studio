@@ -19,7 +19,7 @@ struct TagChipsView: View {
           "volume down", "shouting", "screaming", "echo", "with strong accent"]),
         ("sounds", .orange,
          ["laughing", "laughing tone", "chuckle", "chuckling", "sigh",
-          "inhale", "exhale", "panting", "moaning", "clearing throat", "tsk",
+          "inhale", "exhale", "panting", "clearing throat", "tsk",
           "audience laughter", "singing"]),
         ("pacing", .green,
          ["pause", "short pause", "emphasis", "interrupting"]),
