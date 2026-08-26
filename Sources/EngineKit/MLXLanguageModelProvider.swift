@@ -11,9 +11,10 @@ import Tokenizers
 /// Must only be used from the GloamEngine actor.
 public final class MLXLanguageModelProvider: LanguageModelProviding, @unchecked Sendable {
     /// Resolves a backend to a local model directory (whose config.json exists).
-    /// The app injects a resolver pointing at its managed Caches/Models directory
-    /// so weights always arrive through the in-app download manager — loading
-    /// from a local directory means no network fetch happens here.
+    /// The app injects a resolver pointing at its managed Application
+    /// Support/Models directory so weights always arrive through the in-app
+    /// download manager — loading from a local directory means no network
+    /// fetch happens here.
     private let modelDirectoryResolver: @Sendable (LLMBackendID) -> URL
 
     public init(modelDirectoryResolver: @escaping @Sendable (LLMBackendID) -> URL) {

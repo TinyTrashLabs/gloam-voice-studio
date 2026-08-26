@@ -9,14 +9,34 @@ public enum StoragePaths {
     public static var history: URL { appSupport.appendingPathComponent("History") }
     public static var models: URL {
         let newRoot = appSupport.appendingPathComponent("Models")
-        // Models used to live in Caches/, which macOS may purge; move once.
-        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Models")
-        if FileManager.default.fileExists(atPath: old.path),
-           !FileManager.default.fileExists(atPath: newRoot.path) {
-            try? FileManager.default.moveItem(at: old, to: newRoot)
-        }
+        migrateLegacyModelsRoot(to: newRoot)
         return newRoot
+    }
+
+    /// Models used to live in Caches/, which macOS may purge; merge any
+    /// leftovers into Application Support once. Migrating per-child (rather
+    /// than one `moveItem` on the whole directory) makes an interrupted
+    /// prior migration self-healing: a backend already present at `newRoot`
+    /// is left alone (never overwritten, never deleted), everything else is
+    /// moved over, and the old root is removed only once it's empty.
+    private static func migrateLegacyModelsRoot(to newRoot: URL) {
+        let fm = FileManager.default
+        let old = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Models")
+        guard fm.fileExists(atPath: old.path) else { return }
+        if !fm.fileExists(atPath: newRoot.path) {
+            try? fm.createDirectory(at: newRoot, withIntermediateDirectories: true)
+        }
+        let children = (try? fm.contentsOfDirectory(
+            at: old, includingPropertiesForKeys: nil)) ?? []
+        for child in children {
+            let dest = newRoot.appendingPathComponent(child.lastPathComponent)
+            guard !fm.fileExists(atPath: dest.path) else { continue }
+            try? fm.moveItem(at: child, to: dest)
+        }
+        if let remaining = try? fm.contentsOfDirectory(atPath: old.path), remaining.isEmpty {
+            try? fm.removeItem(at: old)
+        }
     }
 
     public static func directorySize(_ url: URL) -> Int64 {

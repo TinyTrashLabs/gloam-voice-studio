@@ -5,4 +5,5 @@ import os
 /// made residency questions ("did something evict the model?") unanswerable.
 enum AppLog {
     static let memory = Logger(subsystem: "fm.gloam.studio", category: "memory")
+    static let storage = Logger(subsystem: "fm.gloam.studio", category: "storage")
 }
