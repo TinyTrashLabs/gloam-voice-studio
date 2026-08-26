@@ -243,6 +243,15 @@ final class AppModel {
     var serverPort: Int {
         didSet { UserDefaults.standard.set(serverPort, forKey: "serverPort") }
     }
+    /// Bind 0.0.0.0 instead of loopback so other devices on the network can
+    /// reach the API + MCP. Off by default; there is no auth, so the Settings
+    /// toggle carries the warning. Needs a rebind → server sync.
+    var serverLANEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(serverLANEnabled, forKey: "serverLANEnabled")
+            scheduleServerSync()
+        }
+    }
     /// Slug of the library voice that answers `/v1/audio/speech` requests
     /// which don't name a `voice` ("" = none — the raw backend voice, today's
     /// behavior). Threaded into the server as a live closure (see
@@ -452,6 +461,7 @@ final class AppModel {
             ?? .fishS2Pro
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
+        serverLANEnabled = defaults.bool(forKey: "serverLANEnabled")
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
@@ -1065,7 +1075,8 @@ final class AppModel {
             await server?.stop()
             server = nil
             server = LocalAPIServer(deps: makeDependencies())
-            try? await server?.start(port: serverPort)
+            try? await server?.start(port: serverPort,
+                                     host: serverLANEnabled ? "0.0.0.0" : "127.0.0.1")
         } else {
             await server?.stop()
             server = nil

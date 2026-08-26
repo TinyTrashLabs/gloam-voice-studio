@@ -206,6 +206,16 @@ struct ServerSettings: View {
                 .accessibilityIdentifier("server-toggle")
             TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
                 .disabled(model.serverEnabled)
+            Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
+                .accessibilityIdentifier("server-lan-toggle")
+            if model.serverLANEnabled {
+                Text("⚠️ No authentication — anyone on this network can use your voices, "
+                     + "the chat LLM, and the microphone listen tool. Reachable at "
+                     + "http://\(ProcessInfo.processInfo.hostName):\(model.serverPort)")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
             Section {
                 // Live settings — not disabled while the server runs, unlike
                 // Port: the router reads them fresh on every request, so
@@ -275,7 +285,9 @@ struct ServerSettings: View {
                 .buttonStyle(.link).font(.caption)
             }
             Section {
-                Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
+                Text(model.serverLANEnabled
+                     ? "Bound to all interfaces (0.0.0.0) — OpenAI-compatible. Try:"
+                     : "Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
                 Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)

@@ -57,7 +57,9 @@ unaffected by this gate.
 
 ## Notes & limits
 
-- Loopback only, no auth — same trust model as the rest of the local API.
+- Loopback by default, no auth — same trust model as the rest of the local
+  API. Settings → API Server → **Allow other devices on this network** opens
+  it to the LAN (still no auth; trust the network first).
 - Stateless: no SSE stream, no sessions, no server-initiated messages.
   `GET /mcp` returns 405 by design.
 - Synthesis shares the app's single-generation gate; a busy engine surfaces
