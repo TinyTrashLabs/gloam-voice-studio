@@ -35,9 +35,9 @@ public enum PocketTTS {
         public var errorDescription: String? {
             switch self {
             case .modelsMissing(let m):
-                return "Pocket TTS model files missing: \(m) — run scripts/fetch-pocket-tts.sh"
+                return "Pocket TTS model files missing: \(m) — download the model in Settings → Models."
             case .libraryMissing(let m):
-                return "sherpa-onnx library problem: \(m) — run scripts/fetch-pocket-tts.sh"
+                return "sherpa-onnx library problem: \(m)"
             case .engineInitFailed(let m): return "sherpa-onnx failed: \(m)"
             case .emptyAudio: return "engine returned no samples"
             }
