@@ -10,8 +10,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     /// Maps a backend to a local model directory (a path whose config.json
     /// exists), or nil to fall back to the HuggingFace repo id (which makes
     /// mlx-audio-swift download to its own cache). The app injects a resolver
-    /// pointing at its managed Caches/Models directory so downloads always go
-    /// through the in-app download manager.
+    /// pointing at its managed Application Support/Models directory so
+    /// downloads always go through the in-app download manager.
     private let modelPathResolver: (@Sendable (BackendID) -> String?)?
 
     public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
@@ -38,7 +38,7 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
                     backend: backend,
                     message: "LuxTTS requires pre-converted local weights (no HF auto-download "
                         + "path yet) — run convert_weights.py and populate the resolver's "
-                        + "Caches/Models directory for \(BackendID.luxTTS.rawValue).")
+                        + "Application Support/Models directory for \(BackendID.luxTTS.rawValue).")
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
@@ -53,7 +53,7 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
                     backend: backend,
                     message: "Pocket TTS requires a local sherpa-onnx model directory — run "
                         + "scripts/fetch-pocket-tts.sh and populate the resolver's "
-                        + "Caches/Models directory for \(BackendID.pocketTTS.rawValue).")
+                        + "Application Support/Models directory for \(BackendID.pocketTTS.rawValue).")
             }
             return try PocketSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }

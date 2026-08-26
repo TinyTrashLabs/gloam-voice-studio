@@ -8,8 +8,15 @@ public enum StoragePaths {
     public static var voices: URL { appSupport.appendingPathComponent("Voices") }
     public static var history: URL { appSupport.appendingPathComponent("History") }
     public static var models: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let newRoot = appSupport.appendingPathComponent("Models")
+        // Models used to live in Caches/, which macOS may purge; move once.
+        let old = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Models")
+        if FileManager.default.fileExists(atPath: old.path),
+           !FileManager.default.fileExists(atPath: newRoot.path) {
+            try? FileManager.default.moveItem(at: old, to: newRoot)
+        }
+        return newRoot
     }
 
     public static func directorySize(_ url: URL) -> Int64 {

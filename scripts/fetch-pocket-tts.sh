@@ -81,7 +81,7 @@ echo "     swift run spike pocket --ref \"$DEST/test_wavs/bria.wav\" \\"
 echo "       --text \"Hello from Pocket TTS.\" --out /tmp/pocket.wav --model-dir \"$DEST\""
 
 if [[ "$INSTALL_APP" == "1" ]]; then
-  APP_MODELS="$HOME/Library/Containers/fm.gloam.studio/Data/Library/Caches/Models"
+  APP_MODELS="$HOME/Library/Containers/fm.gloam.studio/Data/Library/Application Support/Models"
   APP_DEST="$APP_MODELS/pocket-tts"
   mkdir -p "$APP_MODELS"
   rm -rf "$APP_DEST"
