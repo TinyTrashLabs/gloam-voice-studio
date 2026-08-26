@@ -118,6 +118,11 @@ final class AppModel {
             scheduleServerSync()
         }
     }
+    /// nil once the server is off or actually bound; set when the last start
+    /// attempt failed (e.g. the port was already in use) so Settings and the
+    /// toolbar chip can show the truth instead of a green "Serving at…" for
+    /// a server that never bound. Transient — not persisted.
+    var serverError: String?
     /// LLM used by the chat tab (and as the API server's default LLM).
     var chatLLM: LLMBackendID {
         didSet {
@@ -1116,12 +1121,20 @@ final class AppModel {
         if serverEnabled {
             await server?.stop()
             server = nil
-            server = LocalAPIServer(deps: makeDependencies())
-            try? await server?.start(port: serverPort,
-                                     host: serverLANEnabled ? "0.0.0.0" : "127.0.0.1")
+            let newServer = LocalAPIServer(deps: makeDependencies())
+            do {
+                try await newServer.start(port: serverPort,
+                                          host: serverLANEnabled ? "0.0.0.0" : "127.0.0.1")
+                server = newServer
+                serverError = nil
+            } catch {
+                server = nil
+                serverError = error.localizedDescription
+            }
         } else {
             await server?.stop()
             server = nil
+            serverError = nil
         }
     }
 
@@ -1130,8 +1143,15 @@ final class AppModel {
     /// settings entirely so a one-off headless `--port` never leaks into the
     /// next normal GUI launch.
     func startHeadlessServer(port: Int) async {
-        server = LocalAPIServer(deps: makeDependencies())
-        try? await server?.start(port: port)
+        let newServer = LocalAPIServer(deps: makeDependencies())
+        do {
+            try await newServer.start(port: port)
+            server = newServer
+            serverError = nil
+        } catch {
+            server = nil
+            serverError = error.localizedDescription
+        }
     }
 
     /// Stops the server for a clean process exit (SIGINT/SIGTERM in `--serve`).

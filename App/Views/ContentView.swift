@@ -261,10 +261,11 @@ struct ContentView: View {
     /// chrome. Clicking opens the API Server settings tab.
     @ViewBuilder
     private var apiIndicatorLabel: some View {
-        let on = model.serverEnabled
+        let on = model.serverEnabled && model.serverError == nil
         HStack(spacing: 5) {
-            dot(on ? .green : Brand.fgFaint)
-            Text(verbatim: on ? "127.0.0.1:\(model.serverPort)" : "API off")
+            dot(model.serverError != nil ? .red : on ? .green : Brand.fgFaint)
+            Text(verbatim: model.serverError != nil ? "API error"
+                 : on ? "127.0.0.1:\(model.serverPort)" : "API off")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Brand.fgDim)
                 .lineLimit(1)
@@ -277,7 +278,10 @@ struct ContentView: View {
     }
 
     private var apiIndicatorHelp: String {
-        model.serverEnabled
+        if let serverError = model.serverError {
+            return "Couldn't start on port \(model.serverPort): \(serverError). Open settings"
+        }
+        return model.serverEnabled
             ? "API server at http://127.0.0.1:\(model.serverPort) — OpenAI-compatible, "
               + "MCP for agents at /mcp. Open settings"
             : "API server off — open settings to enable (OpenAI-compatible API + MCP)"

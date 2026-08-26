@@ -264,6 +264,40 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
         XCTFail("server never came up: \(String(describing: lastError))")
     }
 
+    /// A busy port must THROW from `start()`, not silently return as if the
+    /// server were serving — the caller (AppModel) has no other way to learn
+    /// the bind never happened.
+    func testStartThrowsWhenPortAlreadyBound() async throws {
+        let occupier = LocalAPIServer(deps: deps)
+        let port = 18798
+        try await occupier.start(port: port)
+
+        // start() returns as soon as the probe bind clears — the actual
+        // Hummingbird listener comes up asynchronously after that, so poll
+        // /health until it's really up before racing the contender against it.
+        let url = URL(string: "http://127.0.0.1:\(port)/health")!
+        var up = false
+        for _ in 0..<30 {
+            if let (_, response) = try? await URLSession.shared.data(from: url),
+               (response as? HTTPURLResponse)?.statusCode == 200 {
+                up = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(up, "occupier never came up")
+
+        let contender = LocalAPIServer(deps: deps)
+        do {
+            try await contender.start(port: port)
+            await contender.stop()
+            XCTFail("expected a bind failure on an already-occupied port")
+        } catch {
+            // Any thrown error is fine — AppModel surfaces its description.
+        }
+        await occupier.stop()
+    }
+
     func testExportImportOverHTTP() async throws {
         try await app().test(.router) { client in
             let create = #"{"name":"Cruz","refAudio":"AAEC","refText":"hi"}"#

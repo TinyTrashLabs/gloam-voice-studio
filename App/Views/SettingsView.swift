@@ -227,12 +227,16 @@ struct ServerSettings: View {
                 }
                 HStack(spacing: 5) {
                     Image(systemName: "circle.fill").font(.system(size: 7))
-                        .foregroundStyle(model.serverEnabled ? Color.green : Color.secondary)
-                    Text(model.serverEnabled
+                        .foregroundStyle(model.serverError != nil ? Color.red
+                                         : model.serverEnabled ? Color.green : Color.secondary)
+                    Text(model.serverError.map {
+                            "Couldn't start on port \(model.serverPort): \($0)"
+                         } ?? (model.serverEnabled
                          ? "Serving at http://127.0.0.1:\(model.serverPort)"
                            + (model.serverLANEnabled ? " — and to this network" : "")
-                         : "Server off")
-                        .font(.caption).foregroundStyle(.secondary)
+                         : "Server off"))
+                        .font(.caption)
+                        .foregroundStyle(model.serverError != nil ? Color.red : Color.secondary)
                         .contentTransition(.identity)
                 }
                 .accessibilityIdentifier("server-status-line")
