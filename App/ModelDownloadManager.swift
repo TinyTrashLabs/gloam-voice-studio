@@ -190,18 +190,52 @@ final class ModelDownloadManager {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for file in files {
             try Task.checkCancellation()
+            let target = dir.appendingPathComponent(file.path)
+            // File-level resume: a prior run already wrote this file in full.
+            if let size = file.size, size > 0,
+               let onDisk = try? FileManager.default.attributesOfItem(
+                   atPath: target.path)[.size] as? Int64,
+               onDisk == size {
+                done += size
+                onProgress(Double(done) / Double(total))
+                continue
+            }
             guard let src = URL(
                 string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
-            let target = dir.appendingPathComponent(file.path)
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let (tmp, response) = try await URLSession.shared.download(from: src)
+            let (bytes, response) = try await URLSession.shared.bytes(from: src)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 throw DownloadError(message: "\(file.path): HTTP \(http.statusCode)")
             }
+            // Stream to a .part file so progress moves within a single large
+            // file instead of jumping only when each file completes. Any
+            // leftover .part from a previous attempt of this same file is
+            // discarded — we always restart the in-flight file from scratch.
+            let tmp = target.appendingPathExtension("part")
+            try? FileManager.default.removeItem(at: tmp)
+            FileManager.default.createFile(atPath: tmp.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: tmp)
+            defer { try? handle.close() }
+            var buffer = Data()
+            buffer.reserveCapacity(1 << 20)
+            var fileDone: Int64 = 0
+            for try await byte in bytes {
+                buffer.append(byte)
+                if buffer.count >= 1 << 20 {
+                    try handle.write(contentsOf: buffer)
+                    fileDone += Int64(buffer.count)
+                    buffer.removeAll(keepingCapacity: true)
+                    onProgress(Double(done + fileDone) / Double(total))
+                    try Task.checkCancellation()
+                }
+            }
+            try handle.write(contentsOf: buffer)
+            fileDone += Int64(buffer.count)
+            try handle.close()
             try? FileManager.default.removeItem(at: target)
             try FileManager.default.moveItem(at: tmp, to: target)
-            done += file.size ?? 0
+            done += file.size ?? fileDone
             onProgress(Double(done) / Double(total))
         }
     }
