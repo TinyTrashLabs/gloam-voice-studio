@@ -40,20 +40,25 @@ struct ChatView: View {
         @Bindable var chat = model.chat
         Group {
             if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
-                // Draggable split (conversations | transcript) + the native
-                // resizable inspector for the LLM/voice controls — replaces
-                // three fixed-width columns.
-                HSplitView {
+                // Fixed side panes + one flexible middle column. NOT an
+                // HSplitView: split panes keep their sizes when the window
+                // shrinks, overflow the window, and NavigationSplitView then
+                // slides the sidebar off the left edge. Fixed widths guarantee
+                // the layout fits at every window size ≥ the 960pt minimum
+                // (200 + 240 + 300 + sidebar 220 = 960).
+                HStack(spacing: 0) {
                     conversationColumn
-                        .frame(minWidth: 160, idealWidth: 200, maxWidth: 300)
+                        .frame(width: 200)
                         .background(Brand.ink2.opacity(0.5))
+                    Divider().overlay(Color.white.opacity(0.06))
                     transcriptColumn(voice: meta)
-                        .frame(minWidth: 380, maxWidth: .infinity)
-                }
-                .inspector(isPresented: $inspectorVisible) {
-                    ChatInspectorView()
-                        .inspectorColumnWidth(min: 240, ideal: 280, max: 380)
-                        .background(Brand.ink2.opacity(0.5))
+                        .frame(minWidth: 240, maxWidth: .infinity)
+                    if inspectorVisible {
+                        Divider().overlay(Color.white.opacity(0.06))
+                        ChatInspectorView()
+                            .frame(width: 300)
+                            .background(Brand.ink2.opacity(0.5))
+                    }
                 }
                 .toolbar {
                     ToolbarItem(placement: .automatic) {

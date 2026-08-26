@@ -28,31 +28,19 @@ struct StudioView: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Mode", selection: Binding(
-                get: { StudioMode(rawValue: modeRaw) ?? .single },
-                set: { modeRaw = $0.rawValue })) {
-                ForEach(StudioMode.allCases, id: \.self) {
-                    Text($0.rawValue).tag($0)
-                }
+        HStack(spacing: 0) {
+            mainColumn
+                .frame(minWidth: 320, maxWidth: .infinity)
+            // Fixed-width trailing pane, NOT an HSplitView/`.inspector` — both
+            // keep or render their size past the window edge when the window
+            // shrinks (the sidebar then slides off the left edge). A fixed
+            // 300pt pane + flexible main column fits every window size.
+            if inspectorVisible {
+                Divider().overlay(Color.white.opacity(0.06))
+                studioInspector
+                    .frame(width: 300)
+                    .background(Brand.ink2.opacity(0.5))
             }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("studio-mode")
-            .help("Switch between single-line and script generation modes")
-
-            if mode == .script {
-                ScriptView()
-            } else {
-                singleModeStack
-            }
-        }
-        .padding(16)
-        // Engine controls (DIRECT/knobs) live in the native resizable
-        // inspector, matching Chat — the center column keeps write/act/takes.
-        .inspector(isPresented: $inspectorVisible) {
-            studioInspector
-                .inspectorColumnWidth(min: 240, ideal: 300, max: 400)
-                .background(Brand.ink2.opacity(0.5))
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -90,6 +78,30 @@ struct StudioView: View {
             }
             .padding(22).frame(width: 420)
         }
+    }
+
+    /// Center column: mode switch + write/act/takes.
+    @ViewBuilder
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Mode", selection: Binding(
+                get: { StudioMode(rawValue: modeRaw) ?? .single },
+                set: { modeRaw = $0.rawValue })) {
+                ForEach(StudioMode.allCases, id: \.self) {
+                    Text($0.rawValue).tag($0)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("studio-mode")
+            .help("Switch between single-line and script generation modes")
+
+            if mode == .script {
+                ScriptView()
+            } else {
+                singleModeStack
+            }
+        }
+        .padding(16)
     }
 
     private func commitSaveDirection() {
@@ -236,7 +248,7 @@ struct StudioView: View {
         HStack(spacing: 6) {
             Text("Speed")
             Slider(value: $model.speed, in: 0.5...2.0, step: 0.05)
-                .frame(width: 140)
+                .frame(minWidth: 60, maxWidth: 160)
                 .help("Adjust speech rate (0.5x–2.0x)")
             Text(String(format: "%.2f×", model.speed))
                 .font(.system(.caption, design: .monospaced))
@@ -375,7 +387,8 @@ struct StudioView: View {
                             Slider(value: Binding(
                                 get: { Float(model.qwenTopK) },
                                 set: { model.qwenTopK = Int($0) }),
-                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                                in: Float(r.lowerBound)...Float(r.upperBound))
+                                .frame(minWidth: 60, maxWidth: 160)
                             Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
                         }
                         Text("How many options it considers each step. Lower = constrained; higher = varied.")
@@ -402,7 +415,8 @@ struct StudioView: View {
                             Slider(value: Binding(
                                 get: { Float(model.luxNumSteps) },
                                 set: { model.luxNumSteps = Int($0) }),
-                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                                in: Float(r.lowerBound)...Float(r.upperBound))
+                                .frame(minWidth: 60, maxWidth: 160)
                             Text("\(model.luxNumSteps)").font(.system(.caption, design: .monospaced))
                         }
                         Text("Flow-matching sampling steps. 3–4 is the efficient sweet spot; higher "
@@ -455,7 +469,7 @@ struct StudioView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(label)
-                Slider(value: value, in: range).frame(width: 160)
+                Slider(value: value, in: range).frame(minWidth: 60, maxWidth: 160)
                 Text(String(format: "%.2f", value.wrappedValue))
                     .font(.system(.caption, design: .monospaced))
             }
@@ -700,7 +714,7 @@ struct StudioView: View {
                     Text("Language").font(.caption).foregroundStyle(Brand.fgDim)
                     Picker("", selection: $model.language) {
                         ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
-                    }.labelsHidden().frame(width: 160)
+                    }.labelsHidden().frame(maxWidth: 160)
                         .help("Language of your text. Auto detects it.")
                 }
             }
