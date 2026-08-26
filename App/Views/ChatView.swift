@@ -88,8 +88,18 @@ struct ChatView: View {
         VStack(spacing: 10) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 34)).foregroundStyle(Brand.fgFaint)
-            Text("Pick a voice in the sidebar to start chatting.")
-                .foregroundStyle(Brand.fgDim)
+            if model.voices.list().isEmpty {
+                // No voices anywhere yet — the sidebar's empty state would say
+                // the same thing off to the left where it's easy to miss, so
+                // offer the same three ways in right where the user is looking.
+                Text("No voices yet")
+                    .foregroundStyle(Brand.fgDim)
+                VoiceEmptyStateActions()
+                    .frame(maxWidth: 280)
+            } else {
+                Text("Pick a voice in the sidebar to start chatting.")
+                    .foregroundStyle(Brand.fgDim)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -390,7 +400,7 @@ struct ChatView: View {
             Divider()
         }
         Menu("Regenerate with…") {
-            ForEach(BackendID.allCases, id: \.self) { backend in
+            ForEach(ChatInspectorView.chatVoiceBackends, id: \.self) { backend in
                 let ramOK = model.hasSufficientRAM(for: backend)
                 Button(ramOK ? backend.rawValue
                        : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))") {

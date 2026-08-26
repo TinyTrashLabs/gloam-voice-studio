@@ -401,6 +401,7 @@ final class AppModel {
     enum PendingSynthesisAction: Equatable {
         case studioGenerate
         case chatRegenerate(conversationID: String, messageID: String, backend: BackendID)
+        case foundryGenerate
     }
     var pendingSynthesisAction: PendingSynthesisAction?
 
@@ -769,6 +770,8 @@ final class AppModel {
         case .chatRegenerate(let conversationID, let messageID, let backend):
             Task { await self.chat.resumeRegenerate(
                 conversationID: conversationID, messageID: messageID, backend: backend) }
+        case .foundryGenerate:
+            Task { await self.generateFoundryCandidate() }
         case nil:
             break
         }
@@ -988,18 +991,13 @@ final class AppModel {
         guard !instruct.isEmpty else { foundryError = "Describe the voice first."; return }
         let line = foundryAuditionLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { foundryError = "Add an audition line for the voice to speak."; return }
-        switch downloads.state(for: designBackend) {
-        case .ready: break
-        case .notDownloaded:
-            downloads.download(designBackend)
-            foundryError = "Downloading qwen3-design… press Generate again once it's ready "
-                + "(progress is in the toolbar)."
-            return
-        case .downloading:
-            foundryError = "qwen3-design is still downloading — try again once it's ready."
-            return
-        case .failed(let message):
-            foundryError = "qwen3-design download failed: \(message)"
+        // Model not on disk yet (or still downloading, or a prior attempt
+        // failed) → offer to download it, same as Studio's `generate()`. The
+        // sheet's confirm starts a background download and generates once
+        // it's ready — no red error for what's just an unfinished download.
+        if downloads.state(for: designBackend) != .ready {
+            pendingSynthesisAction = .foundryGenerate
+            downloadPrompt = designBackend
             return
         }
         foundryGenerating = true

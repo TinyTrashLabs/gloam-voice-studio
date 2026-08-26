@@ -88,7 +88,7 @@ struct ChatInspectorView: View {
     /// replies automatically. Preset-voicepack backends (custom/kokoro/
     /// supertonic) speak in their preset voice rather than the conversation's
     /// cloned voice; the measured speed labels flag the slow ones (Fish).
-    private static let chatVoiceBackends: [BackendID] =
+    static let chatVoiceBackends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro,
          .chatterbox, .kokoro, .supertonic, .luxTTS, .pocketTTS]
 

@@ -80,19 +80,7 @@ struct VoiceSidebarView: View {
                         Text("A voice is a reusable identity — record a clip, import a .gvoice pack, or grab a free one.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Button {
-                            model.editingVoiceSlug = nil
-                            model.createVoiceSource = .record
-                            sectionRaw = StudioSection.createVoice.rawValue
-                        } label: {
-                            Label("Record a voice", systemImage: "mic")
-                        }
-                        Button { catalogPresented = true } label: {
-                            Label("Browse free voices", systemImage: "person.crop.circle.badge.plus")
-                        }
-                        Button { importerPresented = true } label: {
-                            Label("Import .gvoice", systemImage: "square.and.arrow.down")
-                        }
+                        VoiceEmptyStateActions()
                     }
                     .padding(.vertical, 8)
                     .accessibilityIdentifier("voices-empty-state")
@@ -377,6 +365,61 @@ struct VoiceSidebarView: View {
             } catch {
                 failures.append("\(subdir.lastPathComponent): \(model.describeAny(error))")
             }
+        }
+        model.voicesVersion += 1
+        if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
+    }
+}
+
+/// The three ways to get a first voice — record, browse the free catalog, or
+/// import a .gvoice pack. Shown by the sidebar's own empty state and reused
+/// by Chat's empty state so a voiceless container isn't a dead end there too.
+struct VoiceEmptyStateActions: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @State private var catalogPresented = false
+    @State private var importerPresented = false
+    @State private var actionError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                model.editingVoiceSlug = nil
+                model.createVoiceSource = .record
+                sectionRaw = StudioSection.createVoice.rawValue
+            } label: {
+                Label("Record a voice", systemImage: "mic")
+            }
+            Button { catalogPresented = true } label: {
+                Label("Browse free voices", systemImage: "person.crop.circle.badge.plus")
+            }
+            Button { importerPresented = true } label: {
+                Label("Import .gvoice", systemImage: "square.and.arrow.down")
+            }
+        }
+        .fileImporter(isPresented: $importerPresented,
+                      allowedContentTypes: [.gvoice, .zip],
+                      allowsMultipleSelection: true) { result in
+            importPacks(result)
+        }
+        .sheet(isPresented: $catalogPresented) {
+            VoiceCatalogView()
+                .environment(model)
+        }
+        .alert("Voice Library", isPresented: .init(get: { actionError != nil },
+                                                    set: { if !$0 { actionError = nil } })) {
+            Button("OK") { actionError = nil }
+        } message: { Text(actionError ?? "") }
+    }
+
+    private func importPacks(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        var failures: [String] = []
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+            do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
+            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
