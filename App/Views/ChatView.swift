@@ -17,6 +17,7 @@ struct ChatView: View {
     /// the already-sent text back into the cleared draft.
     @State private var dictation = DictationController()
     @State private var exportDoc: DataDocument?
+    @AppStorage("chatInspectorVisible") private var inspectorVisible = true
 
     /// Pin the transcript to its end on the NEXT runloop pass, after layout
     /// has absorbed whatever change triggered this.
@@ -39,17 +40,32 @@ struct ChatView: View {
         @Bindable var chat = model.chat
         Group {
             if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
-                HStack(spacing: 0) {
+                // Draggable split (conversations | transcript) + the native
+                // resizable inspector for the LLM/voice controls — replaces
+                // three fixed-width columns.
+                HSplitView {
                     conversationColumn
-                        .frame(width: 190)
+                        .frame(minWidth: 160, idealWidth: 200, maxWidth: 300)
                         .background(Brand.ink2.opacity(0.5))
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
                     transcriptColumn(voice: meta)
-                        .frame(maxWidth: .infinity)
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
+                        .frame(minWidth: 380, maxWidth: .infinity)
+                }
+                .inspector(isPresented: $inspectorVisible) {
                     ChatInspectorView()
-                        .frame(width: 280)
+                        .inspectorColumnWidth(min: 240, ideal: 280, max: 380)
                         .background(Brand.ink2.opacity(0.5))
+                }
+                .toolbar {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            inspectorVisible.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.trailing")
+                                .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
+                        }
+                        .help("Toggle the chat inspector")
+                        .accessibilityIdentifier("chat-inspector-toggle")
+                    }
                 }
             } else {
                 emptyState

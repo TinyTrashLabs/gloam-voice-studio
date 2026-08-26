@@ -6,7 +6,7 @@ import SwiftUI
 /// Stable tab identifiers so other UI (e.g. the toolbar API chip) can deep-link
 /// to a specific Settings tab via the shared "settingsTab" AppStorage key.
 enum SettingsTab: String {
-    case backends, speech, api, storage, about
+    case backends, speech, api, console, storage, about
 }
 
 struct SettingsView: View {
@@ -20,6 +20,8 @@ struct SettingsView: View {
                 .tag(SettingsTab.speech.rawValue)
             ServerSettings().tabItem { Label("API Server", systemImage: "network") }
                 .tag(SettingsTab.api.rawValue)
+            ConsoleSettings().tabItem { Label("Console", systemImage: "terminal") }
+                .tag(SettingsTab.console.rawValue)
             StorageSettings().tabItem { Label("Storage", systemImage: "internaldrive") }
                 .tag(SettingsTab.storage.rawValue)
             AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
@@ -251,24 +253,6 @@ struct ServerSettings: View {
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
             }
-            Section("Request console") {
-                if model.apiLog.entries.isEmpty {
-                    Text("No requests yet.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Button("Clear") { model.apiLog.clear() }
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(model.apiLog.entries) { e in
-                                Text(consoleLine(e))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(e.status >= 400 ? .orange : Brand.fgDim)
-                                    .textSelection(.enabled)
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 180)
-                }
-            }
         }
         .formStyle(.grouped)
         .onAppear { model.downloads.refresh() }
@@ -343,6 +327,47 @@ struct ServerSettings: View {
     private var defaultVoiceLibrary: [VoiceMeta] {
         _ = model.voicesVersion
         return model.voices.list()
+    }
+
+}
+
+/// API request console — its own tab so the API Server form stays a settings
+/// form and the log gets room to breathe.
+struct ConsoleSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(model.serverEnabled
+                     ? "Requests to http://127.0.0.1:\(model.serverPort)"
+                     : "API server is off — enable it in the API Server tab.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { model.apiLog.clear() }
+                    .disabled(model.apiLog.entries.isEmpty)
+            }
+            if model.apiLog.entries.isEmpty {
+                Spacer()
+                Text("No requests yet.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(model.apiLog.entries) { e in
+                            Text(consoleLine(e))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(e.status >= 400 ? .orange : Brand.fgDim)
+                                .textSelection(.enabled)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .frame(minHeight: 320)
     }
 
     private func consoleLine(_ e: APILogEntry) -> String {

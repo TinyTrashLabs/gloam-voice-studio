@@ -20,6 +20,7 @@ struct StudioView: View {
     @State private var saveDirectionName = ""
     @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
+    @AppStorage("studioInspectorVisible") private var inspectorVisible = true
 
     private var mode: StudioMode {
         StudioMode(rawValue: modeRaw) ?? .single
@@ -46,6 +47,25 @@ struct StudioView: View {
             }
         }
         .padding(16)
+        // Engine controls (DIRECT/knobs) live in the native resizable
+        // inspector, matching Chat — the center column keeps write/act/takes.
+        .inspector(isPresented: $inspectorVisible) {
+            studioInspector
+                .inspectorColumnWidth(min: 240, ideal: 300, max: 400)
+                .background(Brand.ink2.opacity(0.5))
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    inspectorVisible.toggle()
+                } label: {
+                    Image(systemName: "sidebar.trailing")
+                        .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
+                }
+                .help("Toggle the engine controls inspector")
+                .accessibilityIdentifier("studio-inspector-toggle")
+            }
+        }
         .fileExporter(isPresented: .init(get: { exportDoc != nil },
                                          set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .wav,
@@ -84,7 +104,7 @@ struct StudioView: View {
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
-        ScrollViewReader { proxy in
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
@@ -92,14 +112,38 @@ struct StudioView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.never)
-            .onChange(of: model.variants.count) { _, count in
-                if count > 0 {
-                    withAnimation {
-                        proxy.scrollTo("variants-anchor", anchor: .top)
+            // TAKES shelf pinned to the bottom of the write column: new takes
+            // are always in view without scrolling past the bench.
+            if !model.variants.isEmpty {
+                Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 8)
+                zoneLabel("TAKES")
+                ScrollView {
+                    VStack(spacing: 10) {
+                        ForEach(model.variants) { variant in
+                            variantCard(variant)
+                        }
                     }
                 }
+                .frame(maxHeight: 240)
+                .padding(.top, 6)
             }
         }
+    }
+
+    /// Inspector content: everything about HOW the engine speaks (speaker,
+    /// direction, language, delivery, speed, advanced sampling) — the DIRECT
+    /// card that used to sit mid-column.
+    @ViewBuilder
+    private var studioInspector: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                zoneLabel("DIRECT")
+                directCard
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.never)
     }
 
     @ViewBuilder
@@ -513,9 +557,31 @@ struct StudioView: View {
             TagChipsView(text: $model.text, selection: $lineSelection)
         }
 
-        // ── DIRECT zone (inset card) ─────────────────────────────────────────
+        // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
-        zoneLabel("DIRECT")
+        HStack(spacing: 10) {
+            Button("Generate") { Task { await model.generate(takes: 1) } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model.isGenerating)
+                .accessibilityIdentifier("generate")
+                .help("Synthesize this line (⌘↩)")
+            Button("Generate A/B") { Task { await model.generate(takes: 2) } }
+                .disabled(model.isGenerating)
+                .help("Two takes to compare")
+            if model.isGenerating { ProgressView().controlSize(.small) }
+            Spacer()
+        }
+
+        if let error = model.generationError {
+            Text(error).foregroundStyle(.red).font(.callout)
+                .accessibilityIdentifier("generation-error")
+        }
+    }
+
+    /// The DIRECT card — engine-facing controls, rendered in the inspector.
+    @ViewBuilder
+    private var directCard: some View {
+        @Bindable var model = model
         let controls = model.backend.controls
         VStack(alignment: .leading, spacing: 10) {
             // Per-model explainer so the controls below make sense.
@@ -526,25 +592,25 @@ struct StudioView: View {
             // Speaker (CustomVoice / Kokoro)
             if !controls.presetSpeakers.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                        if model.backend == .kokoro {
-                            Picker("", selection: $model.speaker) {
-                                ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
-                                    Section(lang) {
-                                        ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
-                                            Text(Self.kokoroVoiceLabel(name)).tag(name)
-                                        }
+                    // Label above, picker full-width — the inspector column is
+                    // narrow and resizable, so no fixed 220pt row here.
+                    Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
+                    if model.backend == .kokoro {
+                        Picker("", selection: $model.speaker) {
+                            ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
+                                Section(lang) {
+                                    ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
+                                        Text(Self.kokoroVoiceLabel(name)).tag(name)
                                     }
                                 }
-                            }.labelsHidden().frame(width: 220)
-                        } else {
-                            Picker("", selection: $model.speaker) {
-                                ForEach(controls.presetSpeakers, id: \.self) { name in
-                                    Text(Self.speakerLabel(name)).tag(name)
-                                }
-                            }.labelsHidden().frame(width: 220)
-                        }
+                            }
+                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
+                    } else {
+                        Picker("", selection: $model.speaker) {
+                            ForEach(controls.presetSpeakers, id: \.self) { name in
+                                Text(Self.speakerLabel(name)).tag(name)
+                            }
+                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
                     }
                     if model.backend == .kokoro {
                         if let info = Self.kokoroVoiceInfo[model.speaker] {
@@ -656,38 +722,6 @@ struct StudioView: View {
         // Rebuild the whole pane on model change so the controls (and any retained
         // disclosure/field state) always match the selected model.
         .id(model.backend)
-
-        // ── ACT zone (no label per spec) ─────────────────────────────────────
-        Divider().overlay(Color.white.opacity(0.06))
-        HStack(spacing: 10) {
-            Button("Generate") { Task { await model.generate(takes: 1) } }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(model.isGenerating)
-                .accessibilityIdentifier("generate")
-                .help("Synthesize this line (⌘↩)")
-            Button("Generate A/B") { Task { await model.generate(takes: 2) } }
-                .disabled(model.isGenerating)
-                .help("Two takes to compare")
-            if model.isGenerating { ProgressView().controlSize(.small) }
-            Spacer()
-        }
-
-        if let error = model.generationError {
-            Text(error).foregroundStyle(.red).font(.callout)
-                .accessibilityIdentifier("generation-error")
-        }
-
-        // ── LISTEN / TAKES zone ──────────────────────────────────────────────
-        if !model.variants.isEmpty {
-            Divider().overlay(Color.white.opacity(0.06))
-            zoneLabel("TAKES")
-        }
-        VStack(spacing: 10) {
-            ForEach(model.variants) { variant in
-                variantCard(variant)
-            }
-        }
-        .id("variants-anchor")
     }
 
     /// Popover list for the voice picker: avatar + name per row, with a

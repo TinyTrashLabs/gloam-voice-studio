@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var historyVisible = false
     @State private var modelPickerOpen = false
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @AppStorage("didShowOnboarding") private var didShowOnboarding = false
 
     private var section: StudioSection {
         StudioSection(rawValue: sectionRaw) ?? .studio
@@ -18,38 +19,54 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
-        HStack(spacing: 0) {
+        // Standard split view: native sidebar material, collapse button, and a
+        // user-draggable divider replace the old fixed-width hand-rolled HStack.
+        NavigationSplitView {
             VoiceSidebarView()
-                .frame(width: 248)
-                .background(Brand.ink2.opacity(0.6))
-                .background(WindowGlass(material: .sidebar))
-            Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
-            Group {
-                switch section {
-                case .studio: StudioView()
-                case .createVoice: CreateVoiceView()
-                case .chat: ChatView()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 340)
+                // Tint only — the split view supplies the sidebar's own glass.
+                .background(Brand.ink2.opacity(0.45))
+        } detail: {
+            ZStack(alignment: .trailing) {
+                Group {
+                    switch section {
+                    case .studio: StudioView()
+                    case .createVoice: CreateVoiceView()
+                    case .chat: ChatView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Brand.ink.opacity(0.82))
+                .background(WindowGlass())
+                if historyVisible {
+                    // Floating drawer: overlays the bench (no squeeze), elevated
+                    // surface + leading shadow so it reads as sliding on top.
+                    HistoryView()
+                        .frame(width: 340)
+                        .background(Brand.ink2.opacity(0.6))
+                        .background(.ultraThinMaterial)
+                        .shadow(color: .black.opacity(0.4), radius: 14, x: -8, y: 0)
+                        .transition(.move(edge: .trailing))
                 }
             }
-            .frame(maxWidth: .infinity)
-            .background(Brand.ink.opacity(0.82))
-            .background(WindowGlass())
-            if historyVisible {
-                // Floating drawer: elevated surface + leading shadow so it reads
-                // as sliding over the bench rather than mirroring the library.
-                HistoryView()
-                    .frame(minWidth: 260, idealWidth: 360, maxWidth: 360)
-                    .layoutPriority(-1)
-                    .background(Brand.ink2.opacity(0.6))
-                    .background(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.4), radius: 14, x: -8, y: 0)
-                    .transition(.move(edge: .trailing))
-            }
+            .animation(.easeInOut(duration: 0.15), value: historyVisible)
         }
-        .animation(.easeInOut(duration: 0.15), value: historyVisible)
         .toolbar { mainToolbar }
         .sheet(isPresented: .constant(!model.didAcceptCloneConsent)) {
             ConsentSheet()
+        }
+        // First-launch onboarding: fires once, after consent, only when NO
+        // engine is on disk yet — the app otherwise assumes its author is
+        // driving. Never in UI tests (fake providers, no downloads).
+        .sheet(isPresented: Binding(
+            get: {
+                model.didAcceptCloneConsent && !didShowOnboarding && !UITestMode.isActive
+                    && BackendID.allCases.allSatisfy {
+                        model.downloads.state(for: $0) == .notDownloaded
+                    }
+            },
+            set: { if !$0 { didShowOnboarding = true } })) {
+            OnboardingSheet(dismiss: { didShowOnboarding = true })
         }
         .sheet(isPresented: Binding(
             get: { model.downloadPrompt != nil },
@@ -73,6 +90,28 @@ struct ContentView: View {
     // the items share one capsule (acceptable fallback).
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
+        // Section switcher — the standard toolbar-level scope control (was a
+        // custom segmented picker buried in the sidebar header). ⌘1/2/3 via
+        // the View menu (SectionCommands).
+        ToolbarItem(placement: .navigation) {
+            Picker("Section", selection: Binding(
+                get: { section },
+                set: { newSection in
+                    sectionRaw = newSection.rawValue
+                    // Tapping "Create Voice" itself means a fresh create — leave
+                    // any in-progress Edit only when opened from a voice.
+                    if newSection == .createVoice { model.editingVoiceSlug = nil }
+                })) {
+                Text("Studio").tag(StudioSection.studio)
+                Text("Create Voice").tag(StudioSection.createVoice)
+                Text("Chat").tag(StudioSection.chat)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("studio-section-picker")
+            .help("Switch between the studio, the voice foundry, and voice chat (⌘1/⌘2/⌘3)")
+        }
+
         // 0. Global download progress — appears only while a model is downloading,
         //    so a background fetch is always visible no matter which screen you're on.
         if let dl = model.downloads.activeDownload {
@@ -486,6 +525,46 @@ struct DownloadPromptSheet: View {
         }
         .padding(22)
         .frame(width: 440)
+    }
+}
+
+/// One-screen welcome for a fresh install: what the app does, plus a starter
+/// engine download so the first Generate isn't a dead end.
+struct OnboardingSheet: View {
+    @Environment(AppModel.self) private var model
+    let dismiss: () -> Void
+
+    private var starterSize: String {
+        ByteCountFormatter.string(
+            fromByteCount: model.downloads.approxBytes(for: .qwen06B), countStyle: .file)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            BrandLockup()
+            Text("Welcome to Gloam Voice Studio").font(.title2.bold())
+            Text("""
+            Clone, design, and direct voices — entirely on this Mac. To speak, \
+            the studio needs a voice engine on disk. qwen3-0.6b (\(starterSize)) \
+            is a good starter: it clones from a short recording and handles ten \
+            languages. You can add or switch engines any time in Settings → Backends.
+            """)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Not Now") { dismiss() }
+                Button("Download Starter Engine") {
+                    model.backend = .qwen06B
+                    model.downloads.download(.qwen06B)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("onboarding-download")
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
     }
 }
 

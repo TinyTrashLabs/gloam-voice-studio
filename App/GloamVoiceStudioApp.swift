@@ -34,6 +34,11 @@ struct GloamVoiceStudioApp: App {
                     NotificationCenter.default.post(name: .gloamMigrate, object: nil)
                 }
             }
+            // View → section switching, mirroring the toolbar scope control.
+            CommandGroup(before: .toolbar) {
+                SectionMenuButtons()
+                Divider()
+            }
             CommandGroup(replacing: .help) {
                 DocsMenuButton()
                 Link("Documentation on GitHub",
@@ -54,6 +59,20 @@ struct GloamVoiceStudioApp: App {
         Settings {
             SettingsView().environment(model)
         }
+    }
+}
+
+/// View-menu items for the three main sections (⌘1/⌘2/⌘3). Writes the same
+/// AppStorage key the toolbar picker reads, so the two stay in lockstep.
+private struct SectionMenuButtons: View {
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    var body: some View {
+        Button("Studio") { sectionRaw = StudioSection.studio.rawValue }
+            .keyboardShortcut("1", modifiers: .command)
+        Button("Create Voice") { sectionRaw = StudioSection.createVoice.rawValue }
+            .keyboardShortcut("2", modifiers: .command)
+        Button("Chat") { sectionRaw = StudioSection.chat.rawValue }
+            .keyboardShortcut("3", modifiers: .command)
     }
 }
 

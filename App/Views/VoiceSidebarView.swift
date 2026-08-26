@@ -33,28 +33,8 @@ struct VoiceSidebarView: View {
                 .padding(.bottom, 12)
             Divider().overlay(Color.white.opacity(0.06))
 
-            // Section switch: Studio (speak with reusable voices), Create Voice
-            // (the Foundry — mint a new voice with qwen3-design), Chat (persona
-            // chat through a local LLM). Sidebar stays put.
-            Picker("Section", selection: Binding(
-                get: { StudioSection(rawValue: sectionRaw) ?? .studio },
-                set: { newSection in
-                    sectionRaw = newSection.rawValue
-                    // Tapping "Create Voice" itself means a fresh create — leave any
-                    // in-progress Edit only when opened explicitly from a voice.
-                    if newSection == .createVoice { model.editingVoiceSlug = nil }
-                })) {
-                Text("Studio").tag(StudioSection.studio)
-                Text("Create Voice").tag(StudioSection.createVoice)
-                Text("Chat").tag(StudioSection.chat)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .accessibilityIdentifier("studio-section-picker")
-            .help("Switch between the studio, the voice foundry, and voice chat")
-
+            // Section switching moved to the window toolbar (ContentView's
+            // mainToolbar) — the standard scope-control spot, with ⌘1/⌘2/⌘3.
             HStack(alignment: .center) {
                 Text("VOICES")
                     .font(.system(size: 13, weight: .heavy))
@@ -91,9 +71,30 @@ struct VoiceSidebarView: View {
 
             List(selection: $model.selectedVoiceSlug) {
                 if voiceList.isEmpty {
-                    Text("No voices yet — click + to record or drop a clip.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    // First-run empty state: say what a voice IS and offer all
+                    // three ways in, instead of a one-liner pointing at "+".
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No voices yet")
+                            .font(.callout.weight(.semibold))
+                        Text("A voice is a reusable identity — record a clip, import a .gvoice pack, or grab a free one.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            model.editingVoiceSlug = nil
+                            model.createVoiceSource = .record
+                            sectionRaw = StudioSection.createVoice.rawValue
+                        } label: {
+                            Label("Record a voice", systemImage: "mic")
+                        }
+                        Button { catalogPresented = true } label: {
+                            Label("Browse free voices", systemImage: "person.crop.circle.badge.plus")
+                        }
+                        Button { importerPresented = true } label: {
+                            Label("Import .gvoice", systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("voices-empty-state")
                 }
                 ForEach(groupedVoices(voiceList), id: \.base.slug) { group in
                     voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
@@ -188,13 +189,11 @@ struct VoiceSidebarView: View {
                     Text(voice.name).font(isVariant ? .callout : .body)
                         .foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
                     if !renderable && !isVariant {
+                        // Minimal indicator — the full engine list lives in the
+                        // tooltip, keeping the row quiet (dim name + one glyph).
                         let supported = BackendID.allCases.filter { caps.supports($0) }.map(\.rawValue)
-                        Text(supported.isEmpty ? "no assets"
-                             : supported.prefix(2).joined(separator: " · ")
-                               + (supported.count > 2 ? " +\(supported.count - 2)" : ""))
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.white.opacity(0.06)))
+                        Image(systemName: "speaker.slash")
+                            .font(.system(size: 9))
                             .foregroundStyle(Brand.fgFaint)
                             .help(supported.isEmpty
                                   ? "\(voice.name)'s pack has no renderable assets."
