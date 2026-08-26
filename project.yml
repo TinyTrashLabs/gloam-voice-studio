@@ -27,6 +27,14 @@ targets:
         product: StudioKit
       - package: GloamVoiceStudioPackage
         product: SpeechKit
+      - framework: App/Vendor/sherpa-onnx/libsherpa-onnx-c-api.dylib
+        embed: true
+        codeSign: true
+        link: false
+      - framework: App/Vendor/sherpa-onnx/libonnxruntime.1.27.0.dylib
+        embed: true
+        codeSign: true
+        link: false
     entitlements:
       path: App/GloamVoiceStudio.entitlements
       properties:

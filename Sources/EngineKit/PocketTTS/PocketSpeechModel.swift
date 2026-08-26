@@ -48,6 +48,16 @@ public enum PocketTTS {
     /// @loader_path, so its bundled libonnxruntime resolves from the same dir).
     public static let libraryFile = "libsherpa-onnx-c-api.dylib"
 
+    /// The dylib shipped inside the app bundle (Contents/Frameworks), signed
+    /// with the app. Nil outside an app context (spike CLI, tests) — those
+    /// fall back to the copy scripts/fetch-pocket-tts.sh drops in the model dir.
+    public static var bundledLibraryURL: URL? {
+        guard let url = Bundle.main.privateFrameworksURL?
+            .appendingPathComponent(libraryFile),
+            FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
     /// Model members by role, in preference order — the sherpa release tarballs
     /// name quantized graphs `<role>.int8.onnx`, fp32 ones `<role>.onnx`, and
     /// not every role is quantized in every bundle (int8-2026-01-26 ships a
@@ -75,7 +85,8 @@ public enum PocketTTS {
     /// without it nothing runs); nil when the directory is complete.
     public static func missingModelFile(in dir: URL) -> String? {
         for (role, _) in roles where resolve(role: role, in: dir) == nil { return role }
-        if !FileManager.default.fileExists(atPath: dir.appendingPathComponent(libraryFile).path) {
+        if bundledLibraryURL == nil,
+            !FileManager.default.fileExists(atPath: dir.appendingPathComponent(libraryFile).path) {
             return libraryFile
         }
         return nil
@@ -124,7 +135,7 @@ public final class PocketEngine {
         if let missing = PocketTTS.missingModelFile(in: modelDir) {
             throw PocketTTS.SynthError.modelsMissing(missing)
         }
-        let libPath = modelDir.appendingPathComponent(PocketTTS.libraryFile).path
+        let libPath = (PocketTTS.bundledLibraryURL ?? modelDir.appendingPathComponent(PocketTTS.libraryFile)).path
         guard let lib = dlopen(libPath, RTLD_NOW | RTLD_LOCAL) else {
             // Most likely cause on macOS: an invalid code signature (the
             // upstream tarball's libonnxruntime ships with one — dyld SIGKILLs
