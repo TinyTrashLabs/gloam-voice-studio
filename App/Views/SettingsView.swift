@@ -205,8 +205,37 @@ struct ServerSettings: View {
             Section("Server") {
                 Toggle("Enable local API server", isOn: $model.serverEnabled)
                     .accessibilityIdentifier("server-toggle")
-                TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
-                    .help("Applies immediately — the server rebinds on change")
+                // An obvious, bordered box (the borderless form field read as
+                // a static label), with the applied address echoed below — the
+                // URL updating IS the save confirmation.
+                HStack {
+                    Text("Port")
+                    Spacer()
+                    TextField("Port", value: $model.serverPort,
+                              format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .labelsHidden()
+                        .help("Press Return to apply — the server rebinds and the "
+                              + "address below updates")
+                        .onChange(of: model.serverPort) {
+                            let clamped = min(max(model.serverPort, 1024), 65_535)
+                            if clamped != model.serverPort { model.serverPort = clamped }
+                        }
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "circle.fill").font(.system(size: 7))
+                        .foregroundStyle(model.serverEnabled ? Color.green : Color.secondary)
+                    Text(model.serverEnabled
+                         ? "Serving at http://127.0.0.1:\(model.serverPort)"
+                           + (model.serverLANEnabled ? " — and to this network" : "")
+                         : "Server off")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .contentTransition(.identity)
+                }
+                .accessibilityIdentifier("server-status-line")
                 Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
                     .accessibilityIdentifier("server-lan-toggle")
                 if model.serverLANEnabled {
