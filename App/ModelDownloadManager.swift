@@ -34,8 +34,9 @@ final class ModelDownloadManager {
         // tinytrashlabs/supertonic-3-mlx is ~382MB on HF; measured download
         // 400,154,382 bytes.
         .supertonic: 400_000_000,
-        // sherpa-onnx int8 export + dylibs; measured on-disk 212MB + ~48MB libs.
-        .pocketTTS: 260_000_000,
+        // sherpa-onnx int8 export weights only — the dylib is bundled inside
+        // the app (Task 1), not downloaded here.
+        .pocketTTS: 210_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
@@ -135,14 +136,6 @@ final class ModelDownloadManager {
 
     func download(_ backend: BackendID) {
         if case .downloading = states[backend] { return }   // already in flight
-        if backend == .pocketTTS {
-            // No HF repo to snapshot — the runnable artifacts are GitHub release
-            // tarballs (model + sherpa-onnx dylib, which also needs an ad-hoc
-            // re-sign). Until that's ported in-app, fetching is a script step.
-            states[backend] = .failed(
-                "No in-app download yet — run scripts/fetch-pocket-tts.sh --install-app")
-            return
-        }
         do { try preflight(backend) } catch {
             states[backend] = .failed(error.localizedDescription)
             return

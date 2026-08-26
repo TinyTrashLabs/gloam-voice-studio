@@ -57,7 +57,7 @@ struct BackendsSettings: View {
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro, .supertonic, .luxTTS]
+         .kokoro, .supertonic, .luxTTS, .pocketTTS]
 
     var body: some View {
         @Bindable var model = model
