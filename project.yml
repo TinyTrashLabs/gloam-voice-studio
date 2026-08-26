@@ -49,6 +49,7 @@ targets:
         CFBundleDisplayName: Gloam Voice Studio
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
         NSMicrophoneUsageDescription: >-
           Gloam records short reference clips so you can clone voices you have
@@ -70,7 +71,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "5"
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "6.0"
