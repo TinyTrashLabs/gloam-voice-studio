@@ -567,6 +567,20 @@ struct RAMChip: View {
         .help(ramHelp)
         .accessibilityIdentifier("ram-chip")
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(ramAccessibilityLabel)
+    }
+
+    /// Mirrors the chip's own rendering rules (loaded voice model, loaded chat
+    /// LLM, app memory) so VoiceOver hears exactly what's on screen — falls
+    /// back to "No model loaded" when neither is resident, matching the chip
+    /// showing just the memorychip glyph + GB figure in that state.
+    private var ramAccessibilityLabel: String {
+        var parts: [String] = []
+        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) voice model loaded") }
+        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) chat model loaded") }
+        if parts.isEmpty { parts.append("No model loaded") }
+        parts.append(String(format: "%.1f gigabytes of app memory", model.memGB))
+        return parts.joined(separator: ", ")
     }
 
     private var ramHelp: String {
