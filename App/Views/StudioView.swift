@@ -47,7 +47,7 @@ struct StudioView: View {
                 Button {
                     inspectorVisible.toggle()
                 } label: {
-                    Image(systemName: "sidebar.trailing")
+                    Label("Engine Controls", systemImage: "sidebar.trailing")
                         .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
                 }
                 .help("Toggle the engine controls inspector")

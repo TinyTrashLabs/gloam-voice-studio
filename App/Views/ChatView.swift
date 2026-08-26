@@ -65,7 +65,7 @@ struct ChatView: View {
                         Button {
                             inspectorVisible.toggle()
                         } label: {
-                            Image(systemName: "sidebar.trailing")
+                            Label("Chat Inspector", systemImage: "sidebar.trailing")
                                 .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
                         }
                         .help("Toggle the chat inspector")

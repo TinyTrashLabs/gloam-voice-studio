@@ -169,10 +169,12 @@ struct ContentView: View {
 
         // 4+5. History toggle + settings gear share one pill (icon cluster).
         ToolbarItemGroup(placement: .automatic) {
+            // Label (not bare Image) so the overflow menu (») at narrow widths
+            // shows a readable title next to the icon, not an unlabeled glyph.
             Button {
                 historyVisible.toggle()
             } label: {
-                Image(systemName: "clock.arrow.circlepath")
+                Label("History", systemImage: "clock.arrow.circlepath")
                     .foregroundStyle(historyVisible ? Brand.accent : Brand.fgDim)
             }
             .accessibilityIdentifier("open-history")
@@ -180,7 +182,7 @@ struct ContentView: View {
             .keyboardShortcut("y", modifiers: .command)
 
             SettingsLink {
-                Image(systemName: "gearshape")
+                Label("Settings", systemImage: "gearshape")
             }
             .accessibilityIdentifier("open-settings")
         }
