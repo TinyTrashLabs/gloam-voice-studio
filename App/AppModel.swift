@@ -241,7 +241,12 @@ final class AppModel {
         didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
     }
     var serverPort: Int {
-        didSet { UserDefaults.standard.set(serverPort, forKey: "serverPort") }
+        didSet {
+            UserDefaults.standard.set(serverPort, forKey: "serverPort")
+            // Rebind live — the Settings field used to be disabled while the
+            // server ran ("needs a restart"), which read as not changeable.
+            scheduleServerSync()
+        }
     }
     /// Bind 0.0.0.0 instead of loopback so other devices on the network can
     /// reach the API + MCP. Off by default; there is no auth, so the Settings

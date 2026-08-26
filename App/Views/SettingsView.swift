@@ -202,19 +202,21 @@ struct ServerSettings: View {
     var body: some View {
         @Bindable var model = model
         Form {
-            Toggle("Enable local API server", isOn: $model.serverEnabled)
-                .accessibilityIdentifier("server-toggle")
-            TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
-                .disabled(model.serverEnabled)
-            Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
-                .accessibilityIdentifier("server-lan-toggle")
-            if model.serverLANEnabled {
-                Text("⚠️ No authentication — anyone on this network can use your voices, "
-                     + "the chat LLM, and the microphone listen tool. Reachable at "
-                     + "http://\(ProcessInfo.processInfo.hostName):\(model.serverPort)")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+            Section("Server") {
+                Toggle("Enable local API server", isOn: $model.serverEnabled)
+                    .accessibilityIdentifier("server-toggle")
+                TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
+                    .help("Applies immediately — the server rebinds on change")
+                Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
+                    .accessibilityIdentifier("server-lan-toggle")
+                if model.serverLANEnabled {
+                    Text("⚠️ No authentication — anyone on this network can use your voices, "
+                         + "the chat LLM, and the microphone listen tool. Reachable at "
+                         + "http://\(ProcessInfo.processInfo.hostName):\(model.serverPort)")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             }
             Section {
                 // Live settings — not disabled while the server runs, unlike
