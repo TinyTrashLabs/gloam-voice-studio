@@ -531,6 +531,76 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    // MARK: - Bearer token auth (Settings → API server → LAN)
+
+    func testLANTokenRequiredWhenConfigured() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("auth-required"),
+                                   defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
+                                   authToken: { "sekrit" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .unauthorized)
+            }
+        }
+    }
+
+    func testLANTokenAcceptedWhenPresented() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("auth-accepted"),
+                                   defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
+                                   authToken: { "sekrit" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     headers: [.authorization: "Bearer sekrit"],
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertNotEqual(resp.status, .unauthorized)
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+    }
+
+    func testHealthExemptFromToken() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("auth-health"),
+                                   defaultBackend: .qwen17B,
+                                   authToken: { "sekrit" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/health", method: .get) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+    }
+
+    func testNoTokenMeansOpen() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("auth-open"),
+                                   defaultBackend: .qwen17B,
+                                   defaultVoice: { "cruz" },
+                                   authToken: { nil })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertNotEqual(resp.status, .unauthorized)
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+    }
+
     func testBusyReturns503() async throws {
         final class SlowModel: SpeechModel, @unchecked Sendable {
             let sampleRate = 24000

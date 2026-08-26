@@ -239,12 +239,27 @@ struct ServerSettings: View {
                 Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
                     .accessibilityIdentifier("server-lan-toggle")
                 if model.serverLANEnabled {
-                    Text("⚠️ No authentication — anyone on this network can use your voices, "
-                         + "the chat LLM, and the microphone listen tool. Reachable at "
+                    Text("⚠️ Anyone on this network with this token can use your voices, "
+                         + "the chat model, and the microphone listen tool. Reachable at "
                          + "http://\(ProcessInfo.processInfo.hostName):\(model.serverPort)")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    HStack {
+                        Text(verbatim: model.serverAuthToken)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("server-auth-token")
+                        Spacer()
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.serverAuthToken, forType: .string)
+                        }
+                        .accessibilityIdentifier("copy-server-auth-token")
+                        .help("Copy the bearer token")
+                    }
+                    Text("Other devices must send this token as a Bearer authorization header.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section {

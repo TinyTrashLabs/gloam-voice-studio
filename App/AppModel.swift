@@ -254,8 +254,20 @@ final class AppModel {
     var serverLANEnabled: Bool {
         didSet {
             UserDefaults.standard.set(serverLANEnabled, forKey: "serverLANEnabled")
+            if serverLANEnabled && serverAuthToken.isEmpty {
+                serverAuthToken = UUID().uuidString
+            }
             scheduleServerSync()
         }
+    }
+    /// Bearer token required of every request while `serverLANEnabled` is on
+    /// (generated once, the first time LAN mode is turned on, and reused
+    /// after that — flipping LAN off and on again does not rotate it).
+    /// Read live off UserDefaults by the server's `authToken` closure, same
+    /// idiom as `serverDefaultVoice`, gated to nil while LAN is off so
+    /// loopback-only mode stays no-auth.
+    var serverAuthToken: String {
+        didSet { UserDefaults.standard.set(serverAuthToken, forKey: "serverAuthToken") }
     }
     /// Slug of the library voice that answers `/v1/audio/speech` requests
     /// which don't name a `voice` ("" = none — the raw backend voice, today's
@@ -467,6 +479,7 @@ final class AppModel {
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         serverLANEnabled = defaults.bool(forKey: "serverLANEnabled")
+        serverAuthToken = defaults.string(forKey: "serverAuthToken") ?? ""
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
@@ -1061,6 +1074,16 @@ final class AppModel {
             // effect on the next request without rebuilding the server.
             defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
             defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" },
+            // Only require a token while LAN mode is actually on — loopback-only
+            // stays no-auth. Live read so flipping the toggle applies without a
+            // server restart (the toggle already reschedules a sync on its own,
+            // but a stale server between the flip and the sync completing must
+            // not accept unauthenticated LAN traffic either).
+            authToken: {
+                UserDefaults.standard.bool(forKey: "serverLANEnabled")
+                    ? UserDefaults.standard.string(forKey: "serverAuthToken")
+                    : nil
+            },
             // Native SpeechKit STT, wired to the same engine the RECORD
             // button uses. Closures hop to the main actor on demand.
             transcribe: { [speech] wav, hint in

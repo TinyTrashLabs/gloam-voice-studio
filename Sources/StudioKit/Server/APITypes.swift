@@ -171,6 +171,12 @@ public struct APIDependencies: Sendable {
     /// Live-read like `defaultVoice` so the Settings picker applies to the
     /// next request with no server restart.
     public let defaultModel: @Sendable () -> String
+    /// Bearer token required on every route except `/health` when non-nil
+    /// (nil = no auth, today's loopback-only behavior). A closure, not a
+    /// captured value — same live-read idiom as `defaultVoice` — so the app
+    /// only starts requiring the token once LAN mode is actually on, with no
+    /// server restart.
+    public let authToken: @Sendable () -> String?
     /// Transcribe a WAV to text (native SpeechKit engine, supplied by the app).
     /// Given: WAV bytes + optional BCP-47 language hint. Defaults to unavailable.
     public let transcribe: @Sendable (_ wav: Data, _ languageHint: String?) async throws -> String
@@ -186,6 +192,7 @@ public struct APIDependencies: Sendable {
                 gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
                 defaultVoice: @escaping @Sendable () -> String = { "" },
                 defaultModel: @escaping @Sendable () -> String = { "" },
+                authToken: @escaping @Sendable () -> String? = { nil },
                 transcribe: @escaping @Sendable (Data, String?) async throws -> String
                     = { _, _ in throw STTUnavailable() },
                 listen: @escaping @Sendable (Double, Double, String?) async throws -> String
@@ -198,6 +205,7 @@ public struct APIDependencies: Sendable {
         self.gate = gate
         self.defaultVoice = defaultVoice
         self.defaultModel = defaultModel
+        self.authToken = authToken
         self.transcribe = transcribe
         self.listen = listen
     }
