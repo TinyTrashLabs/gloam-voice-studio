@@ -86,15 +86,6 @@ struct StudioView: View {
         [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
          .supertonic, .luxTTS, .pocketTTS]
 
-    /// Best engine for `caps` on this Mac: a baked rendition first, else the
-    /// first cloning engine the pack's source unlocks.
-    private func bestBackend(for caps: VoiceCapabilities) -> BackendID? {
-        let usable = Self.packBarBackendOrder.filter {
-            caps.supports($0) && model.hasSufficientRAM(for: $0)
-        }
-        return usable.first { caps.engines.contains($0.rawValue) } ?? usable.first
-    }
-
     private func packChip(_ label: String, icon: String? = nil, active: Bool) -> some View {
         HStack(spacing: 4) {
             if let icon { Image(systemName: icon).font(.system(size: 8)) }
@@ -141,18 +132,32 @@ struct StudioView: View {
                     Spacer(minLength: 0)
                 }
                 if !renderable {
+                    // Every engine that can speak this voice, not one arbitrary
+                    // pick: a clone ref unlocks the whole cloning roster, so a
+                    // single suggestion would undersell the pack. Baked
+                    // renditions sort first and say so.
+                    let targets = Self.packBarBackendOrder
+                        .filter { caps.supports($0) && model.hasSufficientRAM(for: $0) }
+                        .sorted { caps.engines.contains($0.rawValue) && !caps.engines.contains($1.rawValue) }
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
                         Text("\(model.backend.rawValue) can't render this voice")
                             .font(.caption).foregroundStyle(Brand.fgDim)
-                        if let target = bestBackend(for: caps) {
-                            Button("Switch to \(target.rawValue)") {
-                                model.backend = target
-                                if model.downloads.state(for: target) == .ready {
-                                    Task { await model.loadModel(target) }
+                        if !targets.isEmpty {
+                            Menu("Switch engine") {
+                                ForEach(targets, id: \.self) { target in
+                                    Button(caps.engines.contains(target.rawValue)
+                                           ? "\(target.rawValue) — baked rendition"
+                                           : target.rawValue) {
+                                        model.backend = target
+                                        if model.downloads.state(for: target) == .ready {
+                                            Task { await model.loadModel(target) }
+                                        }
+                                    }
                                 }
                             }
+                            .menuStyle(.borderlessButton).fixedSize()
                             .font(.caption)
                             .accessibilityIdentifier("pack-bar-switch")
                         }
