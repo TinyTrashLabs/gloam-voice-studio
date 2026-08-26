@@ -167,15 +167,19 @@ struct ContentView: View {
 
         // 3. API server indicator — clicking selects the API Server tab first
         //    (via shared AppStorage) so Settings opens there, not on whatever
-        //    tab was last viewed.
-        ToolbarItem(placement: .automatic) {
-            SettingsLink { apiIndicatorLabel }
-                .buttonStyle(.plain)
-                .help(apiIndicatorHelp)
-                .accessibilityIdentifier("api-indicator")
-                .simultaneousGesture(TapGesture().onEnded {
-                    UserDefaults.standard.set(SettingsTab.api.rawValue, forKey: "settingsTab")
-                })
+        //    tab was last viewed. Hidden until the server has ever been turned
+        //    on — a user who never touches it shouldn't see a permanent
+        //    "API off" chip for a developer feature they don't use.
+        if model.serverEverEnabled {
+            ToolbarItem(placement: .automatic) {
+                SettingsLink { apiIndicatorLabel }
+                    .buttonStyle(.plain)
+                    .help(apiIndicatorHelp)
+                    .accessibilityIdentifier("api-indicator")
+                    .simultaneousGesture(TapGesture().onEnded {
+                        UserDefaults.standard.set(SettingsTab.api.rawValue, forKey: "settingsTab")
+                    })
+            }
         }
 
         if #available(macOS 26, *) { ToolbarSpacer(.fixed) }

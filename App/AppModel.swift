@@ -115,8 +115,16 @@ final class AppModel {
     var serverEnabled: Bool {
         didSet {
             UserDefaults.standard.set(serverEnabled, forKey: "serverEnabled")
+            if serverEnabled { serverEverEnabled = true }
             scheduleServerSync()
         }
+    }
+    /// True once the user has turned the API server on at least once — persisted
+    /// separately from `serverEnabled` (which is written unconditionally on every
+    /// launch as it restores from defaults) so the toolbar chip can stay hidden
+    /// for anyone who has never touched the server.
+    var serverEverEnabled: Bool {
+        didSet { UserDefaults.standard.set(serverEverEnabled, forKey: "serverEverEnabled") }
     }
     /// nil once the server is off or actually bound; set when the last start
     /// attempt failed (e.g. the port was already in use) so Settings and the
@@ -506,7 +514,9 @@ final class AppModel {
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
         serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
-        serverEnabled = defaults.bool(forKey: "serverEnabled")
+        let enabled = defaults.bool(forKey: "serverEnabled")
+        serverEnabled = enabled
+        serverEverEnabled = defaults.bool(forKey: "serverEverEnabled") || enabled
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         // Per-backend license acks; migrate the old Fish-only bool so existing
         // users aren't re-prompted for a license they already acknowledged.

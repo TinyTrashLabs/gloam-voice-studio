@@ -6,7 +6,7 @@ import SwiftUI
 /// Stable tab identifiers so other UI (e.g. the toolbar API chip) can deep-link
 /// to a specific Settings tab via the shared "settingsTab" AppStorage key.
 enum SettingsTab: String {
-    case backends, speech, api, console, storage, about
+    case backends, speech, api, storage, about
 }
 
 struct SettingsView: View {
@@ -20,8 +20,6 @@ struct SettingsView: View {
                 .tag(SettingsTab.speech.rawValue)
             ServerSettings().tabItem { Label("API Server", systemImage: "network") }
                 .tag(SettingsTab.api.rawValue)
-            ConsoleSettings().tabItem { Label("Console", systemImage: "terminal") }
-                .tag(SettingsTab.console.rawValue)
             StorageSettings().tabItem { Label("Storage", systemImage: "internaldrive") }
                 .tag(SettingsTab.storage.rawValue)
             AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
@@ -203,6 +201,8 @@ struct ServerSettings: View {
         @Bindable var model = model
         Form {
             Section("Server") {
+                Text("Optional: let other apps and AI agents on this Mac use your voices.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Enable local API server", isOn: $model.serverEnabled)
                     .accessibilityIdentifier("server-toggle")
                 // An obvious, bordered box (the borderless form field read as
@@ -314,38 +314,48 @@ struct ServerSettings: View {
                     llmRow(llm)
                 }
             }
-            Section("MCP (agents)") {
-                Text("An MCP server is mounted at /mcp whenever the API server is on — "
-                     + "Claude Code, Cursor, and other MCP agents can browse your voices, "
-                     + "speak in them, and transcribe audio.")
-                    .font(.caption).foregroundStyle(.secondary)
-                let addCommand = "claude mcp add --transport http gloam "
-                    + "http://127.0.0.1:\(model.serverPort)/mcp"
-                HStack {
-                    Text(verbatim: addCommand)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                    Spacer()
-                    Button("Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(addCommand, forType: .string)
+            Section {
+                DisclosureGroup("For developers") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("An MCP server is mounted at /mcp whenever the API server is on — "
+                             + "Claude Code, Cursor, and other MCP agents can browse your voices, "
+                             + "speak in them, and transcribe audio.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        let addCommand = "claude mcp add --transport http gloam "
+                            + "http://127.0.0.1:\(model.serverPort)/mcp"
+                        HStack {
+                            Text(verbatim: addCommand)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(addCommand, forType: .string)
+                            }
+                            .accessibilityIdentifier("copy-mcp-command")
+                            .help("Copy the Claude Code connect command")
+                        }
+                        Button("MCP docs — tools & other clients") {
+                            docsPage = DocsWindow.Page.mcp.rawValue
+                            openWindow(id: "docs")
+                        }
+                        .buttonStyle(.link).font(.caption)
+                        Text(model.serverLANEnabled
+                             ? "Bound to all interfaces (0.0.0.0) — OpenAI-compatible. Try:"
+                             : "Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
                     }
-                    .accessibilityIdentifier("copy-mcp-command")
-                    .help("Copy the Claude Code connect command")
+                    .padding(.top, 4)
                 }
-                Button("MCP docs — tools & other clients") {
-                    docsPage = DocsWindow.Page.mcp.rawValue
-                    openWindow(id: "docs")
-                }
-                .buttonStyle(.link).font(.caption)
             }
             Section {
-                Text(model.serverLANEnabled
-                     ? "Bound to all interfaces (0.0.0.0) — OpenAI-compatible. Try:"
-                     : "Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
-                Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
+                DisclosureGroup("Request log") {
+                    ConsoleLog()
+                        .padding(.top, 4)
+                }
             }
         }
         .formStyle(.grouped)
@@ -425,9 +435,9 @@ struct ServerSettings: View {
 
 }
 
-/// API request console — its own tab so the API Server form stays a settings
-/// form and the log gets room to breathe.
-struct ConsoleSettings: View {
+/// API request log — folded under the API Server tab's "Request log" disclosure
+/// so the developer-facing surface stays out of the way until opened.
+struct ConsoleLog: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -435,18 +445,16 @@ struct ConsoleSettings: View {
             HStack {
                 Text(model.serverEnabled
                      ? "Requests to http://127.0.0.1:\(model.serverPort)"
-                     : "API server is off — enable it in the API Server tab.")
+                     : "API server is off.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Clear") { model.apiLog.clear() }
                     .disabled(model.apiLog.entries.isEmpty)
             }
             if model.apiLog.entries.isEmpty {
-                Spacer()
                 Text("No requests yet.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
-                Spacer()
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
@@ -458,10 +466,9 @@ struct ConsoleSettings: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 240)
             }
         }
-        .padding(12)
-        .frame(minHeight: 320)
     }
 
     private func consoleLine(_ e: APILogEntry) -> String {
