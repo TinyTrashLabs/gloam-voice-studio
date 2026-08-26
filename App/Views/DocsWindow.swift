@@ -57,14 +57,32 @@ struct DocsWindow: View {
 private struct MarkdownWebView: NSViewRepresentable {
     let markdown: String
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> WKWebView {
         let view = WKWebView()
-        view.setValue(false, forKey: "drawsBackground")   // let the CSS own it
+        view.navigationDelegate = context.coordinator
         view.loadHTMLString(MarkdownLite.html(from: markdown), baseURL: nil)
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {}
+
+    /// Sends external http(s) links to the default browser instead of
+    /// navigating the docs webview itself (which has no back button).
+    /// Everything else — the initial loadHTMLString, in-page anchor jumps,
+    /// and about:blank — stays in the webview.
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if let url = action.request.url, ["http", "https"].contains(url.scheme ?? "") {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+    }
 }
 
 /// The subset of markdown our docs use — headers, bold/italic/code, links,
