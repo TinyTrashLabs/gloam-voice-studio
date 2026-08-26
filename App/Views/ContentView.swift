@@ -10,6 +10,7 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var historyVisible = false
     @State private var modelPickerOpen = false
+    @State private var llmPickerOpen = false
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
     @AppStorage("didShowOnboarding") private var didShowOnboarding = false
 
@@ -143,6 +144,18 @@ struct ContentView: View {
                     model.downloads.refresh()
                     await model.refreshEngineStatus()
                 }
+        }
+
+        // 2a. Chat-LLM chooser — the LLM is served on the same OpenAI-compatible
+        //     server as the voice engines, so it gets the same first-class picker:
+        //     see what's selected/resident, switch, load/unload. Mirrors the
+        //     voice-model chip (Button + popover for identical chrome).
+        ToolbarItem(placement: .automatic) {
+            Button { llmPickerOpen.toggle() } label: { llmStatusChip }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("llm-picker")
+                .help("Pick chat LLM · load/unload")
+                .popover(isPresented: $llmPickerOpen, arrowEdge: .bottom) { llmPickerList }
         }
 
         // 2b. Resident model + app RAM — always visible so you can see and unload
@@ -291,6 +304,118 @@ struct ContentView: View {
         // Make the WHOLE chip tappable — without this the Button only registers on
         // the opaque name text, so clicking the chevron/spacing did nothing.
         .contentShape(Rectangle())
+    }
+
+    /// Status-dot color for a chat LLM, same scheme as the voice backends.
+    private func llmStatusDot(for llm: LLMBackendID) -> Color {
+        switch model.downloads.state(for: llm) {
+        case .ready where model.loadedLLM == llm: return .green
+        case .ready: return Brand.fgFaint
+        case .downloading: return .yellow
+        case .notDownloaded: return .orange
+        case .failed: return .red
+        }
+    }
+
+    private func llmStateText(_ llm: LLMBackendID) -> String {
+        switch model.downloads.state(for: llm) {
+        case .ready where model.loadedLLM == llm: return "loaded"
+        case .ready: return "not loaded"
+        case .downloading(let f): return "downloading \(Int(f * 100))%"
+        case .notDownloaded: return "not downloaded"
+        case .failed: return "failed"
+        }
+    }
+
+    /// The LLM chip: brain glyph + status dot + current chat LLM + chevron.
+    @ViewBuilder
+    private var llmStatusChip: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
+            dot(llmStatusDot(for: model.chatLLM))
+            Text(model.chatLLM.rawValue)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Brand.fgFaint)
+        }
+        .font(.caption)
+        .foregroundStyle(Brand.fgDim)
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+
+    /// Popover for the LLM chooser: one row per chat LLM (dot + name + state +
+    /// checkmark on the selection), a Download button where the model isn't on
+    /// disk yet (selection alone never starts a multi-GB fetch), then Unload.
+    @ViewBuilder
+    private var llmPickerList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(LLMBackendID.allCases, id: \.self) { llm in
+                let ramOK = model.hasSufficientRAM(for: llm)
+                let state = model.downloads.state(for: llm)
+                Button {
+                    model.chatLLM = llm
+                    if state == .ready {
+                        Task { try? await model.ensureLLMReady(llm) }
+                    }
+                    llmPickerOpen = false
+                } label: {
+                    HStack(spacing: 8) {
+                        dot(llmStatusDot(for: llm))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(llm.rawValue).foregroundStyle(Brand.fg)
+                            Text(llmStateText(llm) + " · ≈ "
+                                 + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
+                                                             countStyle: .file))
+                                .font(.caption2).foregroundStyle(Brand.fgDim)
+                        }
+                        Spacer(minLength: 12)
+                        if state == .notDownloaded, ramOK {
+                            Button("Download") { model.downloads.download(llm) }
+                                .font(.caption)
+                        }
+                        if model.chatLLM == llm {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Brand.accent)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(model.chatLLM == llm ? Color.white.opacity(0.06) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!ramOK)
+                .help(ramOK ? "" : "This Mac doesn't have enough RAM for \(llm.rawValue) — \(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes)).")
+            }
+            Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
+            if let loaded = model.loadedLLM {
+                Button {
+                    Task { await model.unloadChatLLM() }
+                    llmPickerOpen = false
+                } label: {
+                    Text("Unload \(loaded.rawValue)")
+                        .foregroundStyle(Brand.fgDim)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("No LLM resident — loads on the first chat reply")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+            }
+        }
+        .padding(8)
+        .frame(width: 280)
+        .background(Brand.ink2.opacity(0.5))
+        .task { await model.refreshEngineStatus() }
     }
 
     /// Load/Unload for the Foundry's qwen3-design — residency only (never sets the
