@@ -409,15 +409,29 @@ struct RAMChip: View {
                 Text(loaded.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
                     .lineLimit(1).fixedSize()
             }
+            // Resident chat LLM — it's served on the same OpenAI-compatible
+            // server as the voice engines, so it gets equal billing up here.
+            if let llm = model.loadedLLM {
+                Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
+                Text(llm.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
+                    .lineLimit(1).fixedSize()
+            }
             Text(String(format: "%.1f GB", model.memGB))
                 .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
         }
         .padding(.horizontal, 9).padding(.vertical, 2)
-        .help(model.loadedBackend != nil
-              ? "\(model.loadedBackend!.rawValue) resident · "
-                + String(format: "%.2f GB", model.memGB) + " app memory — load/unload in the model picker"
-              : String(format: "%.2f GB", model.memGB) + " app memory · no model resident")
+        .help(ramHelp)
         .accessibilityIdentifier("ram-chip")
+    }
+
+    private var ramHelp: String {
+        var parts: [String] = []
+        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) (voice) resident") }
+        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) resident") }
+        if parts.isEmpty { parts.append("no model resident") }
+        parts.append(String(format: "%.2f GB app memory", model.memGB))
+        return parts.joined(separator: " · ")
+            + " — voice models load/unload in the model picker, the LLM in the chat inspector"
     }
 }
 
