@@ -30,9 +30,11 @@ struct GloamVoiceStudioApp: App {
             CommandGroup(after: .newItem) {
                 Divider()
                 TranscribeMenuButton()
+                #if DEBUG
                 Button("Migrate from gloam-voice-engine…") {
                     NotificationCenter.default.post(name: .gloamMigrate, object: nil)
                 }
+                #endif
             }
             // View → section switching, mirroring the toolbar scope control.
             CommandGroup(before: .toolbar) {

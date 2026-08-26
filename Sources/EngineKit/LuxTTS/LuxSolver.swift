@@ -158,6 +158,7 @@ public class EulerSolver {
                 paddingMask: paddingMask,
                 guidanceScale: guidanceScale
             )
+            #if DEBUG
             if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
                 eval(v)
                 if step == 0 {
@@ -173,6 +174,7 @@ public class EulerSolver {
                     "DEBUG step=\(step) tCur=\(tCur) v.shape=\(v.shape) v.mean=\(mean) v.std=\(sqrt(variance)) v.absmax=\(vArr.map { abs($0) }.max() ?? 0)\n"
                         .utf8))
             }
+            #endif
 
             let x1Pred = x + v * (1.0 - tCur)
             let x0Pred = x - v * tCur

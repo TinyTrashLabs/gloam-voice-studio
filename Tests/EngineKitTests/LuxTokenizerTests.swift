@@ -100,25 +100,10 @@ final class LuxTokenizerTests: XCTestCase {
         XCTAssertEqual(try tok.textToTokenIDs("12345"), [])
     }
 
-    // MARK: end-to-end with espeak-ng (skipped when no binary is installed)
-
-    func testEndToEndAgainstPiperPhonemizeReference() throws {
-        guard let phonemizer = try? EspeakProcessPhonemizer() else {
-            throw XCTSkip("espeak-ng not installed (brew install espeak-ng)")
-        }
-        let tok = try makeTokenizer(phonemizer: phonemizer)
-
-        // piper_phonemize 1.4.7 reference output for
-        // "Hello world, mister king; five years."
-        let expected = ["h", "ə", "l", "ˈ", "o", "ʊ", " ", "w", "ˈ", "ɜ", "ː", "l",
-                        "d", ",", " ", "m", "ˈ", "ɪ", "s", "t", "ɚ", " ", "k", "ˈ",
-                        "ɪ", "ŋ", ";", " ", "f", "ˈ", "a", "ɪ", "v", " ", "j", "ˈ",
-                        "ɪ", "ɹ", "z", "."]
-        let tokens = try tok.textToTokens("Hello world, mister king; five years.")
-        XCTAssertEqual(tokens, expected)
-
-        let ids = try tok.textToTokenIDs("Hello world, mister king; five years.")
-        XCTAssertEqual(ids, tok.tokensToTokenIDs(expected))
-        XCTAssertEqual(ids.count, expected.count)  // nothing in this string is OOV
-    }
+    // MARK: end-to-end with espeak-ng
+    //
+    // `EspeakProcessPhonemizer` moved to Sources/spike/EspeakProcessPhonemizer.swift
+    // (it must not compile into EngineKit — see LuxTokenizer.swift's header), so
+    // this reference check now lives in the dev-only `spike lux-phonemes` CLI
+    // rather than as an XCTest here.
 }

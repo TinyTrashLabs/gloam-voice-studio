@@ -298,6 +298,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             )
             eval(output.features)
 
+            #if DEBUG
             if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
                 func dump(_ arr: MLXArray, _ path: String) {
                     let flat = arr.reshaped([-1]).asArray(Float.self)
@@ -310,6 +311,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
                 dump(prompt.features, "/tmp/lux_prompt_features.f32")
                 dump(output.features, "/tmp/lux_output_features.f32")
             }
+            #endif
 
             // Undo feat_scale before the vocoder, mirroring the reference
             // `pred_features / 0.1` in modeling_utils.generate.

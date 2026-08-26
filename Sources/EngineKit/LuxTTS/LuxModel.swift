@@ -398,6 +398,7 @@ public final class ZipVoiceDistill: Module, LuxFlowMatchingModel {
 
         let x0 = noise ?? MLXRandom.normal([batchSize, numFrames, featDim])
 
+        #if DEBUG
         if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
             func dump(_ arr: MLXArray, _ path: String) {
                 // MLX.eval: lazy-graph materialization, not code evaluation.
@@ -415,6 +416,7 @@ public final class ZipVoiceDistill: Module, LuxFlowMatchingModel {
             FileHandle.standardError.write(Foundation.Data(
                 "DEBUG tokens=\(tokens)\nDEBUG promptTokens=\(promptTokens)\nDEBUG totalLens=\(totalLens) promptFeaturesLens=\(promptFeaturesLens)\n".utf8))
         }
+        #endif
 
         let x1 = solver.sample(
             x: x0,
@@ -428,6 +430,7 @@ public final class ZipVoiceDistill: Module, LuxFlowMatchingModel {
             tShift: tShift
         )
 
+        #if DEBUG
         if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
             func dump(_ arr: MLXArray, _ path: String) {
                 let flat = arr.reshaped([-1]).asArray(Float.self)
@@ -441,6 +444,7 @@ public final class ZipVoiceDistill: Module, LuxFlowMatchingModel {
             dump(x1[0, 0 ..< promptLen0], "/tmp/lux_x1_prompt_region.f32")
             dump(promptFeatures[0, 0 ..< promptLen0], "/tmp/lux_input_prompt_features.f32")
         }
+        #endif
 
         let withoutPromptLens = zip(totalLens, promptFeaturesLens).map(-)
         let maxPromptLen = promptFeaturesLens.max() ?? 0

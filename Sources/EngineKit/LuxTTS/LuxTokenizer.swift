@@ -30,13 +30,14 @@
 //     "," ";" ":" followed by a space token, "." "?" "!" ending a sentence with
 //     no trailing space, "…" swallowed, NFD decomposition, one token per
 //     Unicode scalar, "(en)" language-switch flags stripped).
-//   * `EspeakProcessPhonemizer`: out-of-process phonemization via an espeak-ng
-//     executable (Homebrew /opt/homebrew/bin/espeak-ng by default, or a binary
-//     bundled with the app + ESPEAK_DATA_PATH). Verified 11/12 fixture strings
-//     produce token-for-token identical output to piper_phonemize; the one
-//     mismatch is voice-data drift between Homebrew espeak-ng 1.52.0 and the
-//     rhasspy espeak-ng fork bundled inside piper_phonemize (e.g. "four" =
-//     fˈoːɹ in the fork vs fˈɔːɹ in 1.52.0). Both spellings are in-vocab.
+//   * `EspeakProcessPhonemizer` (Sources/spike/EspeakProcessPhonemizer.swift):
+//     out-of-process phonemization via an espeak-ng executable (Homebrew
+//     /opt/homebrew/bin/espeak-ng by default, or a binary bundled with the
+//     app + ESPEAK_DATA_PATH). Verified 11/12 fixture strings produce
+//     token-for-token identical output to piper_phonemize; the one mismatch
+//     is voice-data drift between Homebrew espeak-ng 1.52.0 and the rhasspy
+//     espeak-ng fork bundled inside piper_phonemize (e.g. "four" = fˈoːɹ in
+//     the fork vs fˈɔːɹ in 1.52.0). Both spellings are in-vocab.
 // STUBBED / NOT PORTED:
 //   * Chinese (zh) and <pinyin> segments: the Python path needs jieba +
 //     pypinyin + cn2an. Unsupported here — those segments yield no tokens and
@@ -45,9 +46,10 @@
 //     RESOLVED: the shipping default is `MisakiPhonemizer` (see
 //     MisakiPhonemizer.swift) — an in-process, MIT-licensed G2P reusing
 //     MLXAudioTTS's misaki port, with its output remapped to the espeak IPA
-//     conventions this vocab expects. `EspeakProcessPhonemizer` below is kept
-//     for dev-machine parity testing only (`spike lux-phonemes`); it cannot
-//     run inside the sandboxed .app and must not ship as the default.
+//     conventions this vocab expects. `EspeakProcessPhonemizer` is kept in
+//     Sources/spike for dev-machine parity testing only (`spike
+//     lux-phonemes`); it cannot run inside the sandboxed .app and must not
+//     ship as the default.
 // ──────────────────────────────────────────────────────────────────────────────
 
 import Foundation
@@ -84,13 +86,13 @@ public protocol PhonemizerProviding: Sendable {
 ///   * "…" ends a clause but emits no token (matches observed piper behavior)
 ///   * output is NFD-decomposed and split into single Unicode scalars
 ///   * espeak "(en)"-style language-switch flags are stripped
-enum PiperClauseAssembler {
+public enum PiperClauseAssembler {
     static let terminators: Set<Character> = [".", "?", "!", ",", ";", ":", "…"]
 
     private static let languageSwitchFlag = try! NSRegularExpression(
         pattern: "\\([a-z]{2,3}(?:-[a-z]+)?\\)")
 
-    static func assemble(
+    public static func assemble(
         _ text: String,
         clauseIPA: (String) throws -> String
     ) throws -> [String] {
@@ -155,98 +157,15 @@ enum PiperClauseAssembler {
 }
 
 // MARK: - Out-of-process espeak-ng phonemizer
-
-// macOS only. `Process` does not exist on iOS (you cannot spawn a child process
-// from a sandboxed iOS app), so building this for iOS fails with
-// "cannot find 'Process' in scope" — which broke the aidj iOS app, since its
-// App target has a local SwiftPM dependency on EngineKit and this package
-// declares .iOS(.v17) support. Guarding rather than deleting: the only caller is
-// the macOS-only `spike` dev CLI, and LuxTTS's real phonemizer on both platforms
-// is `MisakiPhonemizer` (espeak-ng is GPL-3.0 and undistributable via the App
-// Store anyway — see MisakiPhonemizer.swift's header).
-#if os(macOS)
-
-/// Runs an `espeak-ng` executable per clause (`espeak-ng -q --ipa -v en-us`).
-/// Default lookup order: an explicit URL passed in, then Homebrew paths.
-/// For a bundled binary, pass `dataDirectory` pointing at espeak-ng-data and
-/// it is exported as ESPEAK_DATA_PATH.
-///
-/// This is the dev-machine / direct-distribution implementation. See the file
-/// header for the vendored-library plan (`EspeakLibraryPhonemizer`).
-public struct EspeakProcessPhonemizer: PhonemizerProviding {
-    public let executableURL: URL
-    public let voice: String
-    public let dataDirectory: URL?
-
-    public static let defaultSearchPaths = [
-        "/opt/homebrew/bin/espeak-ng",
-        "/opt/homebrew/bin/espeak",
-        "/usr/local/bin/espeak-ng",
-        "/usr/local/bin/espeak",
-    ]
-
-    public init(executableURL: URL, voice: String = "en-us", dataDirectory: URL? = nil) {
-        self.executableURL = executableURL
-        self.voice = voice
-        self.dataDirectory = dataDirectory
-    }
-
-    /// Finds espeak-ng on well-known paths; throws if none exists.
-    public init(voice: String = "en-us") throws {
-        guard let path = Self.defaultSearchPaths.first(
-            where: { FileManager.default.isExecutableFile(atPath: $0) })
-        else {
-            throw LuxTokenizerError.phonemizerUnavailable(
-                "espeak-ng executable not found (looked in \(Self.defaultSearchPaths)). "
-                + "Install with `brew install espeak-ng` or bundle a binary and use "
-                + "init(executableURL:voice:dataDirectory:).")
-        }
-        self.init(executableURL: URL(fileURLWithPath: path), voice: voice)
-    }
-
-    public func phonemize(_ normalizedEnglishText: String) throws -> [String] {
-        try PiperClauseAssembler.assemble(normalizedEnglishText) { clause in
-            try runEspeak(clause)
-        }
-    }
-
-    private func runEspeak(_ clause: String) throws -> String {
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = ["-q", "--ipa", "-v", voice, "--", clause]
-        if let dataDirectory {
-            var env = ProcessInfo.processInfo.environment
-            env["ESPEAK_DATA_PATH"] = dataDirectory.path
-            process.environment = env
-        }
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            throw LuxTokenizerError.phonemizerUnavailable(
-                "failed to launch \(executableURL.path): \(error)")
-        }
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let output = String(data: data, encoding: .utf8)
-        else {
-            throw LuxTokenizerError.phonemizationFailed(
-                "espeak-ng exited with status \(process.terminationStatus) for clause: \(clause)")
-        }
-        // espeak prints one line per internal clause; join with a single space
-        // (piper inserts a space token between clause chunks inside a sentence).
-        return output
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-}
-
-#endif  // os(macOS) — EspeakProcessPhonemizer
+//
+// `EspeakProcessPhonemizer` (out-of-process phonemization via a Homebrew
+// `espeak-ng` binary, spawned with `Process`) has moved to
+// Sources/spike/EspeakProcessPhonemizer.swift: `Process`-spawning code that
+// shells out to an external binary must not compile into EngineKit (App
+// Store static analysis flags it), and the only caller is the dev-only
+// `spike` CLI (`spike lux-phonemes`). LuxTTS's real phonemizer on both
+// platforms is `MisakiPhonemizer` (espeak-ng is GPL-3.0 and undistributable
+// via the App Store anyway — see MisakiPhonemizer.swift's header).
 
 // MARK: - English text normalizer (port of EnglishTextNormalizer)
 
