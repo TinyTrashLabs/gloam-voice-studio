@@ -250,12 +250,10 @@ final class SmokeTests: XCTestCase {
         playButton.click()
 
         // ── Step 6: Open history and assert the line appears ──────────────────────
-        // firstMatch: a crowded toolbar exposes overflowed items twice in the
-        // AX tree (toolbar + overflow menu), so a plain query is ambiguous.
-        let historyButton = app.buttons["open-history"].firstMatch
-        XCTAssertTrue(historyButton.waitForExistence(timeout: 5),
-                      "open-history button should be in the studio toolbar")
-        historyButton.click()
+        // ⌘Y, not a button click: at test window sizes the toolbar collapses
+        // the history button into the » overflow menu, where it's absent from
+        // the AX tree until the menu opens. The shortcut is overflow-proof.
+        app.typeKey("y", modifierFlags: .command)
 
         // history-list may surface as an outline, table, or list depending on macOS.
         // Try outline first, then table, then fall through to a direct text search.
@@ -351,7 +349,10 @@ final class SmokeTests: XCTestCase {
 
         // chatAutoSpeak defaults on — the reply's audio should already be
         // saved as a take (auto-save from Task 4) without any click.
-        let menuButton = app.menuButtons["chat-audio-menu"].firstMatch
+        // Type-agnostic query: the borderless Menu's AX type drifts across
+        // macOS releases (menuButton → popUpButton), so match by identifier.
+        let menuButton = app.descendants(matching: .any)
+            .matching(identifier: "chat-audio-menu").firstMatch
         XCTAssertTrue(menuButton.waitForExistence(timeout: 10),
                       "audio menu should appear on the assistant bubble")
         menuButton.click()
@@ -404,7 +405,10 @@ final class SmokeTests: XCTestCase {
         chatSegment.click()
 
         // Turn "Speak replies" off in the inspector before sending.
-        let speakToggle = app.checkBoxes["Speak replies"].firstMatch
+        // .switch-styled Toggles register as switches, not checkBoxes; match
+        // by identifier across both so a style change can't break the test.
+        let speakToggle = app.descendants(matching: .any)
+            .matching(identifier: "Speak replies").firstMatch
         XCTAssertTrue(speakToggle.waitForExistence(timeout: 5),
                       "Speak replies toggle should be visible in the chat inspector")
         speakToggle.click()
@@ -419,7 +423,10 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(reply.waitForExistence(timeout: 10))
 
         // Nothing was synthesized — the audio menu shouldn't offer any takes yet.
-        let menuButton = app.menuButtons["chat-audio-menu"].firstMatch
+        // Type-agnostic query: the borderless Menu's AX type drifts across
+        // macOS releases (menuButton → popUpButton), so match by identifier.
+        let menuButton = app.descendants(matching: .any)
+            .matching(identifier: "chat-audio-menu").firstMatch
         XCTAssertTrue(menuButton.waitForExistence(timeout: 5))
         menuButton.click()
         XCTAssertFalse(app.menuItems["chatterbox-turbo"].waitForExistence(timeout: 2),
