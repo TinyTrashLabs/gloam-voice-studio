@@ -12,7 +12,9 @@ targets:
     type: application
     platform: macOS
     sources:
-      - App
+      - path: App
+        excludes:
+          - "Vendor/**"
       # Docs ship in the bundle so Help → Gloam Documentation works offline.
       - path: docs
         buildPhase: resources
