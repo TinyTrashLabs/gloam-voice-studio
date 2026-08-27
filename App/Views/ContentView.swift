@@ -10,7 +10,9 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var historyVisible = false
     @State private var modelPickerOpen = false
+    @State private var llmPickerOpen = false
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @AppStorage("didShowOnboarding") private var didShowOnboarding = false
 
     private var section: StudioSection {
         StudioSection(rawValue: sectionRaw) ?? .studio
@@ -18,36 +20,54 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
-        HStack(spacing: 0) {
+        // Standard split view: native sidebar material, collapse button, and a
+        // user-draggable divider replace the old fixed-width hand-rolled HStack.
+        NavigationSplitView {
             VoiceSidebarView()
-                .frame(width: 248)
-                .background(Brand.ink2)
-            Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
-            Group {
-                switch section {
-                case .studio: StudioView()
-                case .createVoice: CreateVoiceView()
-                case .chat: ChatView()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 340)
+                // Tint only — the split view supplies the sidebar's own glass.
+                .background(Brand.ink2.opacity(0.45))
+        } detail: {
+            ZStack(alignment: .trailing) {
+                Group {
+                    switch section {
+                    case .studio: StudioView()
+                    case .createVoice: CreateVoiceView()
+                    case .chat: ChatView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Brand.ink.opacity(0.82))
+                .background(WindowGlass())
+                if historyVisible {
+                    // Floating drawer: overlays the bench (no squeeze), elevated
+                    // surface + leading shadow so it reads as sliding on top.
+                    HistoryView()
+                        .frame(width: 340)
+                        .background(Brand.ink2.opacity(0.6))
+                        .background(.ultraThinMaterial)
+                        .shadow(color: .black.opacity(0.4), radius: 14, x: -8, y: 0)
+                        .transition(.move(edge: .trailing))
                 }
             }
-            .frame(maxWidth: .infinity)
-            .background(Brand.ink)
-            if historyVisible {
-                // Floating drawer: elevated surface + leading shadow so it reads
-                // as sliding over the bench rather than mirroring the library.
-                HistoryView()
-                    .frame(minWidth: 260, idealWidth: 360, maxWidth: 360)
-                    .layoutPriority(-1)
-                    .background(Brand.ink2.opacity(0.6))
-                    .background(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.4), radius: 14, x: -8, y: 0)
-                    .transition(.move(edge: .trailing))
-            }
+            .animation(.easeInOut(duration: 0.15), value: historyVisible)
         }
-        .animation(.easeInOut(duration: 0.15), value: historyVisible)
         .toolbar { mainToolbar }
         .sheet(isPresented: .constant(!model.didAcceptCloneConsent)) {
             ConsentSheet()
+        }
+        // First-launch onboarding: fires once, after consent, only when NO
+        // engine is on disk yet — the app otherwise assumes its author is
+        // driving. Never in UI tests (fake providers, no downloads).
+        .sheet(isPresented: Binding(
+            get: {
+                model.didAcceptCloneConsent && !didShowOnboarding && !UITestMode.isActive
+                    && BackendID.allCases.allSatisfy {
+                        model.downloads.state(for: $0) == .notDownloaded
+                    }
+            },
+            set: { if !$0 { didShowOnboarding = true } })) {
+            OnboardingSheet(dismiss: { didShowOnboarding = true })
         }
         .sheet(isPresented: Binding(
             get: { model.downloadPrompt != nil },
@@ -71,6 +91,28 @@ struct ContentView: View {
     // the items share one capsule (acceptable fallback).
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
+        // Section switcher — the standard toolbar-level scope control (was a
+        // custom segmented picker buried in the sidebar header). ⌘1/2/3 via
+        // the View menu (SectionCommands).
+        ToolbarItem(placement: .navigation) {
+            Picker("Section", selection: Binding(
+                get: { section },
+                set: { newSection in
+                    sectionRaw = newSection.rawValue
+                    // Tapping "Create Voice" itself means a fresh create — leave
+                    // any in-progress Edit only when opened from a voice.
+                    if newSection == .createVoice { model.editingVoiceSlug = nil }
+                })) {
+                Text("Studio").tag(StudioSection.studio)
+                Text("Create Voice").tag(StudioSection.createVoice)
+                Text("Chat").tag(StudioSection.chat)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("studio-section-picker")
+            .help("Switch between the studio, the voice foundry, and voice chat (⌘1/⌘2/⌘3)")
+        }
+
         // 0. Global download progress — appears only while a model is downloading,
         //    so a background fetch is always visible no matter which screen you're on.
         if let dl = model.downloads.activeDownload {
@@ -104,6 +146,18 @@ struct ContentView: View {
                 }
         }
 
+        // 2a. Chat-LLM chooser — the LLM is served on the same OpenAI-compatible
+        //     server as the voice engines, so it gets the same first-class picker:
+        //     see what's selected/resident, switch, load/unload. Mirrors the
+        //     voice-model chip (Button + popover for identical chrome).
+        ToolbarItem(placement: .automatic) {
+            Button { llmPickerOpen.toggle() } label: { llmStatusChip }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("llm-picker")
+                .help("Pick chat LLM · load/unload")
+                .popover(isPresented: $llmPickerOpen, arrowEdge: .bottom) { llmPickerList }
+        }
+
         // 2b. Resident model + app RAM — always visible so you can see and unload
         //     whatever is loaded, including qwen3-design (the Foundry loads it, but it
         //     isn't in the picker). This is the RAM-management surface on the top bar.
@@ -113,25 +167,31 @@ struct ContentView: View {
 
         // 3. API server indicator — clicking selects the API Server tab first
         //    (via shared AppStorage) so Settings opens there, not on whatever
-        //    tab was last viewed.
-        ToolbarItem(placement: .automatic) {
-            SettingsLink { apiIndicatorLabel }
-                .buttonStyle(.plain)
-                .help(apiIndicatorHelp)
-                .accessibilityIdentifier("api-indicator")
-                .simultaneousGesture(TapGesture().onEnded {
-                    UserDefaults.standard.set(SettingsTab.api.rawValue, forKey: "settingsTab")
-                })
+        //    tab was last viewed. Hidden until the server has ever been turned
+        //    on — a user who never touches it shouldn't see a permanent
+        //    "API off" chip for a developer feature they don't use.
+        if model.serverEverEnabled {
+            ToolbarItem(placement: .automatic) {
+                SettingsLink { apiIndicatorLabel }
+                    .buttonStyle(.plain)
+                    .help(apiIndicatorHelp)
+                    .accessibilityIdentifier("api-indicator")
+                    .simultaneousGesture(TapGesture().onEnded {
+                        UserDefaults.standard.set(SettingsTab.api.rawValue, forKey: "settingsTab")
+                    })
+            }
         }
 
         if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
 
         // 4+5. History toggle + settings gear share one pill (icon cluster).
         ToolbarItemGroup(placement: .automatic) {
+            // Label (not bare Image) so the overflow menu (») at narrow widths
+            // shows a readable title next to the icon, not an unlabeled glyph.
             Button {
                 historyVisible.toggle()
             } label: {
-                Image(systemName: "clock.arrow.circlepath")
+                Label("History", systemImage: "clock.arrow.circlepath")
                     .foregroundStyle(historyVisible ? Brand.accent : Brand.fgDim)
             }
             .accessibilityIdentifier("open-history")
@@ -139,7 +199,7 @@ struct ContentView: View {
             .keyboardShortcut("y", modifiers: .command)
 
             SettingsLink {
-                Image(systemName: "gearshape")
+                Label("Settings", systemImage: "gearshape")
             }
             .accessibilityIdentifier("open-settings")
         }
@@ -198,6 +258,7 @@ struct ContentView: View {
     /// 7pt status dot — the single source of truth for every status dot.
     private func dot(_ color: Color) -> some View {
         Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(color)
+            .accessibilityHidden(true)
     }
 
     /// API server chip: green dot + full loopback address when running, dim dot
@@ -205,10 +266,11 @@ struct ContentView: View {
     /// chrome. Clicking opens the API Server settings tab.
     @ViewBuilder
     private var apiIndicatorLabel: some View {
-        let on = model.serverEnabled
+        let on = model.serverEnabled && model.serverError == nil
         HStack(spacing: 5) {
-            dot(on ? .green : Brand.fgFaint)
-            Text(verbatim: on ? "127.0.0.1:\(model.serverPort)" : "API off")
+            dot(model.serverError != nil ? .red : on ? .green : Brand.fgFaint)
+            Text(verbatim: model.serverError != nil ? "API error"
+                 : on ? "127.0.0.1:\(model.serverPort)" : "API off")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Brand.fgDim)
                 .lineLimit(1)
@@ -218,12 +280,19 @@ struct ContentView: View {
         // edge (otherwise it hugs the curve and reads as bleeding over).
         .padding(.horizontal, 9)
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(model.serverError != nil ? "API server error"
+            : on ? "API server running at 127.0.0.1 port \(model.serverPort)" : "API server off")
     }
 
     private var apiIndicatorHelp: String {
-        model.serverEnabled
-            ? "API server at http://127.0.0.1:\(model.serverPort) — open settings"
-            : "API server off — open settings to enable"
+        if let serverError = model.serverError {
+            return "Couldn't start on port \(model.serverPort): \(serverError). Open settings"
+        }
+        return model.serverEnabled
+            ? "API server at http://127.0.0.1:\(model.serverPort) — OpenAI-compatible, "
+              + "MCP for agents at /mcp. Open settings"
+            : "API server off — open settings to enable (OpenAI-compatible API + MCP)"
     }
 
     /// The toolbar chip: status dot + current backend name + chevron. No custom
@@ -248,6 +317,122 @@ struct ContentView: View {
         // Make the WHOLE chip tappable — without this the Button only registers on
         // the opaque name text, so clicking the chevron/spacing did nothing.
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.backend.rawValue) model, \(modelStateText(model.backend))")
+    }
+
+    /// Status-dot color for a chat LLM, same scheme as the voice backends.
+    private func llmStatusDot(for llm: LLMBackendID) -> Color {
+        switch model.downloads.state(for: llm) {
+        case .ready where model.loadedLLM == llm: return .green
+        case .ready: return Brand.fgFaint
+        case .downloading: return .yellow
+        case .notDownloaded: return .orange
+        case .failed: return .red
+        }
+    }
+
+    private func llmStateText(_ llm: LLMBackendID) -> String {
+        switch model.downloads.state(for: llm) {
+        case .ready where model.loadedLLM == llm: return "loaded"
+        case .ready: return "not loaded"
+        case .downloading(let f): return "downloading \(Int(f * 100))%"
+        case .notDownloaded: return "not downloaded"
+        case .failed: return "failed"
+        }
+    }
+
+    /// The LLM chip: brain glyph + status dot + current chat LLM + chevron.
+    @ViewBuilder
+    private var llmStatusChip: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
+            dot(llmStatusDot(for: model.chatLLM))
+            Text(model.chatLLM.rawValue)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Brand.fgFaint)
+        }
+        .font(.caption)
+        .foregroundStyle(Brand.fgDim)
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(model.chatLLM.rawValue) chat model, \(llmStateText(model.chatLLM))")
+    }
+
+    /// Popover for the LLM chooser: one row per chat LLM (dot + name + state +
+    /// checkmark on the selection), a Download button where the model isn't on
+    /// disk yet (selection alone never starts a multi-GB fetch), then Unload.
+    @ViewBuilder
+    private var llmPickerList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(LLMBackendID.allCases, id: \.self) { llm in
+                let ramOK = model.hasSufficientRAM(for: llm)
+                let state = model.downloads.state(for: llm)
+                Button {
+                    model.chatLLM = llm
+                    if state == .ready {
+                        Task { try? await model.ensureLLMReady(llm) }
+                    }
+                    llmPickerOpen = false
+                } label: {
+                    HStack(spacing: 8) {
+                        dot(llmStatusDot(for: llm))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(llm.rawValue).foregroundStyle(Brand.fg)
+                            Text(llmStateText(llm) + " · ≈ "
+                                 + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
+                                                             countStyle: .file))
+                                .font(.caption2).foregroundStyle(Brand.fgDim)
+                        }
+                        Spacer(minLength: 12)
+                        if state == .notDownloaded, ramOK {
+                            Button("Download") { model.downloads.download(llm) }
+                                .font(.caption)
+                        }
+                        if model.chatLLM == llm {
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Brand.accent)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(model.chatLLM == llm ? Color.white.opacity(0.06) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!ramOK)
+                .help(ramOK ? "" : "This Mac doesn't have enough RAM for \(llm.rawValue) — \(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes)).")
+            }
+            Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
+            if let loaded = model.loadedLLM {
+                Button {
+                    Task { await model.unloadChatLLM() }
+                    llmPickerOpen = false
+                } label: {
+                    Text("Unload \(loaded.rawValue)")
+                        .foregroundStyle(Brand.fgDim)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("No chat model loaded — loads on the first reply")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+            }
+        }
+        .padding(8)
+        .frame(width: 280)
+        .background(Brand.ink2.opacity(0.5))
+        .task { await model.refreshEngineStatus() }
     }
 
     /// Load/Unload for the Foundry's qwen3-design — residency only (never sets the
@@ -346,7 +531,9 @@ struct ContentView: View {
         }
         .padding(8)
         .frame(width: 260)
-        .background(Brand.ink2)
+        // Translucent over the popover's native glass chrome rather than
+        // opaque ink — keeps the tint, lets the system material show.
+        .background(Brand.ink2.opacity(0.5))
     }
 }
 
@@ -366,15 +553,44 @@ struct RAMChip: View {
                 Text(loaded.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
                     .lineLimit(1).fixedSize()
             }
+            // Resident chat LLM — it's served on the same OpenAI-compatible
+            // server as the voice engines, so it gets equal billing up here.
+            if let llm = model.loadedLLM {
+                Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
+                Text(llm.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
+                    .lineLimit(1).fixedSize()
+            }
             Text(String(format: "%.1f GB", model.memGB))
                 .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
         }
         .padding(.horizontal, 9).padding(.vertical, 2)
-        .help(model.loadedBackend != nil
-              ? "\(model.loadedBackend!.rawValue) resident · "
-                + String(format: "%.2f GB", model.memGB) + " app memory — load/unload in the model picker"
-              : String(format: "%.2f GB", model.memGB) + " app memory · no model resident")
+        .help(ramHelp)
         .accessibilityIdentifier("ram-chip")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(ramAccessibilityLabel)
+    }
+
+    /// Mirrors the chip's own rendering rules (loaded voice model, loaded chat
+    /// LLM, app memory) so VoiceOver hears exactly what's on screen — falls
+    /// back to "No model loaded" when neither is resident, matching the chip
+    /// showing just the memorychip glyph + GB figure in that state.
+    private var ramAccessibilityLabel: String {
+        var parts: [String] = []
+        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) voice model loaded") }
+        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) chat model loaded") }
+        if parts.isEmpty { parts.append("No model loaded") }
+        parts.append(String(format: "%.1f gigabytes of app memory", model.memGB))
+        return parts.joined(separator: ", ")
+    }
+
+    private var ramHelp: String {
+        var parts: [String] = []
+        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) (voice) loaded") }
+        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) loaded") }
+        if parts.isEmpty { parts.append("no model loaded") }
+        parts.append(String(format: "%.2f GB app memory", model.memGB))
+        return parts.joined(separator: " · ")
+            + " — voice models load/unload in the model picker, the LLM in the chat inspector"
     }
 }
 
@@ -388,7 +604,7 @@ struct ModelManagerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Models — one resident at a time")
+            Text("Models — one loaded at a time")
                 .font(.headline)
             ForEach(backends, id: \.self) { row($0) }
             Divider()
@@ -413,6 +629,7 @@ struct ModelManagerView: View {
                 .fill(isLoaded ? .green
                       : downloadState == .ready ? Brand.fgFaint : .orange)
                 .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(backend.rawValue)
                 Text(caption(downloadState, isLoaded: isLoaded))
@@ -442,7 +659,7 @@ struct ModelManagerView: View {
     private func caption(_ state: ModelDownloadManager.State,
                          isLoaded: Bool) -> String {
         switch state {
-        case .ready: isLoaded ? "resident in memory" : "on disk, not loaded"
+        case .ready: isLoaded ? "loaded in memory" : "on disk, not loaded"
         case .downloading: "downloading"
         case .notDownloaded: "not downloaded"
         case .failed(let message): message
@@ -482,6 +699,46 @@ struct DownloadPromptSheet: View {
         }
         .padding(22)
         .frame(width: 440)
+    }
+}
+
+/// One-screen welcome for a fresh install: what the app does, plus a starter
+/// engine download so the first Generate isn't a dead end.
+struct OnboardingSheet: View {
+    @Environment(AppModel.self) private var model
+    let dismiss: () -> Void
+
+    private var starterSize: String {
+        ByteCountFormatter.string(
+            fromByteCount: model.downloads.approxBytes(for: .kokoro), countStyle: .file)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            BrandLockup()
+            Text("Welcome to Gloam Voice Studio").font(.title2.bold())
+            Text("""
+            Clone, design, and direct voices — entirely on this Mac. To speak, \
+            the studio needs a voice model on disk. kokoro (\(starterSize)) is a \
+            good starter: it ships 54 ready-to-speak voices, no license to accept \
+            and no recording to clone. You can add or switch models any time in \
+            Settings → Models.
+            """)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Not Now") { dismiss() }
+                Button("Download Starter Model") {
+                    model.downloadStarterEngine()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("onboarding-download")
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
     }
 }
 

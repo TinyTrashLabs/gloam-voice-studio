@@ -25,8 +25,8 @@ Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights ar
 - **A/B Variants** — Generate two takes side-by-side; compare waveforms and playback.
 - **History** — Browse all generated takes with metadata (backend, voice, emotion, RTF). Play or delete entries. Reuse any entry to repopulate the studio editor.
 - **Model Downloads** — Download weights in-app with progress indication. Automatic preflight storage check.
-- **Local API Server** — Optional OpenAI-compatible HTTP server (loopback-only, port 8790 by default) for programmatic access.
-- **Sandbox** — Minimal entitlements; data lives in Application Support and Caches directories.
+- **Local API Server** — Optional OpenAI-compatible HTTP + MCP server (off by default; loopback-only, port 8790 by default, when enabled). A separate "Allow other devices on this network" opt-in binds all interfaces instead and requires a bearer token on every request.
+- **Sandbox** — Minimal entitlements; data lives entirely in the Application Support directory.
 - **Speech-to-text, fully on-device** — reference clips auto-transcribe when you
   record or drop them, every editor has a dictate button, and File → Transcribe
   Audio… (⇧⌘T) converts any audio file to text. Apple's built-in recognizer by
@@ -119,7 +119,7 @@ All app data is stored in the macOS sandbox container:
 
 - `~/Library/Application Support/Gloam Voice Studio/Voices/` — Voice library (one folder per voice, containing `meta.json` and `ref.wav`).
 - `~/Library/Application Support/Gloam Voice Studio/History/` — Generated audio clips and metadata.
-- `~/Library/Caches/Models/` — Downloaded ML weights (chatterbox, chatterbox-turbo, fish-s2-pro folders).
+- `~/Library/Application Support/Gloam Voice Studio/Models/` — Downloaded ML weights (chatterbox, chatterbox-turbo, fish-s2-pro, and other backend folders).
 
 No data is uploaded or synced to external services.
 
@@ -131,6 +131,10 @@ Model weights are licensed separately:
 - **Chatterbox & Chatterbox-Turbo:** MIT
 - **Qwen3-TTS:** [Apache-2.0](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) (commercial use permitted)
 - **Fish S2-Pro:** [Fish Audio Research License](https://huggingface.co/fishaudio/fish-speech-1.5) (personal/research use; commercial use requires a license from business@fish.audio)
+- **Kokoro:** [Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M) (commercial use permitted)
+- **SuperTonic:** [BigScience Open RAIL-M](https://huggingface.co/Supertone/supertonic-3) — permissive on IP, but carries use-based restrictions (no impersonation/deepfakes without consent, no harassment or disinformation, and more); the app requires an explicit in-app acknowledgement before downloading. See [`docs/supertonic-licensing.md`](docs/supertonic-licensing.md).
+- **pocket-tts (Kyutai Pocket TTS):** weights are CC-BY-4.0; the bundled sherpa-onnx runtime library that runs them (`App/Vendor/sherpa-onnx/`) is Apache-2.0 and ships inside the app bundle — see [`App/Vendor/sherpa-onnx/README.md`](App/Vendor/sherpa-onnx/README.md).
+- **LuxTTS:** not currently downloadable in-app (requires pre-converted local weights).
 
 ## Contributing
 

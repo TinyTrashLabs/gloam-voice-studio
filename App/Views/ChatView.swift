@@ -17,6 +17,7 @@ struct ChatView: View {
     /// the already-sent text back into the cleared draft.
     @State private var dictation = DictationController()
     @State private var exportDoc: DataDocument?
+    @AppStorage("chatInspectorVisible") private var inspectorVisible = true
 
     /// Pin the transcript to its end on the NEXT runloop pass, after layout
     /// has absorbed whatever change triggered this.
@@ -39,17 +40,37 @@ struct ChatView: View {
         @Bindable var chat = model.chat
         Group {
             if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+                // Fixed side panes + one flexible middle column. NOT an
+                // HSplitView: split panes keep their sizes when the window
+                // shrinks, overflow the window, and NavigationSplitView then
+                // slides the sidebar off the left edge. Fixed widths guarantee
+                // the layout fits at every window size ≥ the 960pt minimum
+                // (200 + 240 + 300 + sidebar 220 = 960).
                 HStack(spacing: 0) {
                     conversationColumn
-                        .frame(width: 190)
+                        .frame(width: 200)
                         .background(Brand.ink2.opacity(0.5))
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
+                    Divider().overlay(Color.white.opacity(0.06))
                     transcriptColumn(voice: meta)
-                        .frame(maxWidth: .infinity)
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
-                    ChatInspectorView()
-                        .frame(width: 280)
-                        .background(Brand.ink2.opacity(0.5))
+                        .frame(minWidth: 240, maxWidth: .infinity)
+                    if inspectorVisible {
+                        Divider().overlay(Color.white.opacity(0.06))
+                        ChatInspectorView()
+                            .frame(width: 300)
+                            .background(Brand.ink2.opacity(0.5))
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            inspectorVisible.toggle()
+                        } label: {
+                            Label("Chat Inspector", systemImage: "sidebar.trailing")
+                                .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
+                        }
+                        .help("Toggle the chat inspector")
+                        .accessibilityIdentifier("chat-inspector-toggle")
+                    }
                 }
             } else {
                 emptyState
@@ -67,8 +88,18 @@ struct ChatView: View {
         VStack(spacing: 10) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 34)).foregroundStyle(Brand.fgFaint)
-            Text("Pick a voice in the sidebar to start chatting.")
-                .foregroundStyle(Brand.fgDim)
+            if model.voices.list().isEmpty {
+                // No voices anywhere yet — the sidebar's empty state would say
+                // the same thing off to the left where it's easy to miss, so
+                // offer the same three ways in right where the user is looking.
+                Text("No voices yet")
+                    .foregroundStyle(Brand.fgDim)
+                VoiceEmptyStateActions()
+                    .frame(maxWidth: 280)
+            } else {
+                Text("Pick a voice in the sidebar to start chatting.")
+                    .foregroundStyle(Brand.fgDim)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -86,6 +117,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
                 .accessibilityIdentifier("chat-new-conversation")
+                .accessibilityLabel("New Chat")
                 .help("New chat")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
@@ -224,6 +256,7 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Remove attachment")
+                    .accessibilityLabel("Remove Clip")
                     Spacer()
                 }
                 .padding(.horizontal, 12).padding(.top, 8)
@@ -283,6 +316,8 @@ struct ChatView: View {
                         .help(isPending ? "Synthesizing…"
                               : (isSpeakingThis ? "Speaking…" : "Speak this reply"))
                         .accessibilityIdentifier("chat-speak")
+                        .accessibilityLabel(isPending ? "Synthesizing"
+                              : (isSpeakingThis ? "Speaking" : "Speak This Reply"))
                         Menu {
                             chatAudioMenu(for: message)
                         } label: {
@@ -292,6 +327,7 @@ struct ChatView: View {
                         .foregroundStyle(Brand.fgFaint)
                         .help("Takes, regenerate, export")
                         .accessibilityIdentifier("chat-audio-menu")
+                        .accessibilityLabel("Takes, Regenerate, Export")
                     }
                 }
                 if let attachments = message.attachments, !attachments.isEmpty {
@@ -369,7 +405,7 @@ struct ChatView: View {
             Divider()
         }
         Menu("Regenerate with…") {
-            ForEach(BackendID.allCases, id: \.self) { backend in
+            ForEach(ChatInspectorView.chatVoiceBackends, id: \.self) { backend in
                 let ramOK = model.hasSufficientRAM(for: backend)
                 Button(ramOK ? backend.rawValue
                        : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))") {
@@ -417,6 +453,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-attach-image")
+                .accessibilityLabel("Attach Image")
                 .help("Attach an image for the model to look at")
                 .fileImporter(isPresented: $imageImporterPresented,
                               allowedContentTypes: [.png, .jpeg, .heic, .image]) { result in
@@ -443,6 +480,7 @@ struct ChatView: View {
                     }
                 }
                 .accessibilityIdentifier("chat-activity")
+                .accessibilityHidden(true)
                 .padding(.bottom, 12)
                 Button { model.chat.stop() } label: {
                     Image(systemName: "stop.fill")
@@ -450,6 +488,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .padding(.bottom, 11)
                 .accessibilityIdentifier("chat-stop")
+                .accessibilityLabel("Stop")
                 .help("Stop generating / speaking")
             } else {
                 Button { sendFromComposer() } label: {
@@ -461,6 +500,7 @@ struct ChatView: View {
                 .disabled(chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .padding(.bottom, 9)
                 .accessibilityIdentifier("chat-send")
+                .accessibilityLabel("Send")
                 .keyboardShortcut(.return, modifiers: [])
                 .help("Send (⏎)")
             }
@@ -524,5 +564,6 @@ struct BouncingDots: View {
         }
         .frame(width: 24, height: 14)
         .onAppear { animating = true }
+        .accessibilityHidden(true)
     }
 }

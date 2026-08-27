@@ -96,7 +96,7 @@ struct RecorderView: View {
                 fileURL = url
                 startedAt = Date()
                 tick = Date()
-            } catch { self.error = "\(error)" }
+            } catch { self.error = error.localizedDescription }
         }
     }
 
@@ -146,7 +146,7 @@ struct RecorderView: View {
             dismiss()
         } catch {
             startedAt = nil
-            self.error = "\(error)"
+            self.error = error.localizedDescription
         }
     }
 }

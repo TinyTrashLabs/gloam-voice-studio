@@ -118,7 +118,7 @@ struct RecordEmotionVariantSheet: View {
                 fileURL = url
                 startedAt = Date()
                 tick = Date()
-            } catch { self.error = "\(error)" }
+            } catch { self.error = model.describeAny(error) }
         }
     }
 
@@ -132,7 +132,7 @@ struct RecordEmotionVariantSheet: View {
             let data = try Data(contentsOf: fileURL)
             try? FileManager.default.removeItem(at: fileURL)
             saveTake(data)
-        } catch { self.error = "\(error)" }
+        } catch { self.error = model.describeAny(error) }
     }
 
     private func cancel() {
@@ -157,6 +157,6 @@ struct RecordEmotionVariantSheet: View {
             model.voicesVersion += 1
             onSaved()
             dismiss()
-        } catch { self.error = "\(error)" }
+        } catch { self.error = model.describeAny(error) }
     }
 }

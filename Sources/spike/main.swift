@@ -248,7 +248,7 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
     }
     let port = sub.count > 1 ? (Int(sub[1]) ?? 8790) : 8790
 
-    let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Models")
         .appendingPathComponent(backend.diskFolder)
 

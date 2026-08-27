@@ -20,6 +20,9 @@ struct StudioView: View {
     @State private var saveDirectionName = ""
     @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
+    @AppStorage("studioInspectorVisible") private var inspectorVisible = true
+    @State private var transcribingSlug: String?
+    @State private var transcribeError: String?
 
     private var mode: StudioMode {
         StudioMode(rawValue: modeRaw) ?? .single
@@ -27,25 +30,32 @@ struct StudioView: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("Mode", selection: Binding(
-                get: { StudioMode(rawValue: modeRaw) ?? .single },
-                set: { modeRaw = $0.rawValue })) {
-                ForEach(StudioMode.allCases, id: \.self) {
-                    Text($0.rawValue).tag($0)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("studio-mode")
-            .help("Switch between single-line and script generation modes")
-
-            if mode == .script {
-                ScriptView()
-            } else {
-                singleModeStack
+        HStack(spacing: 0) {
+            mainColumn
+                .frame(minWidth: 320, maxWidth: .infinity)
+            // Fixed-width trailing pane, NOT an HSplitView/`.inspector` — both
+            // keep or render their size past the window edge when the window
+            // shrinks (the sidebar then slides off the left edge). A fixed
+            // 300pt pane + flexible main column fits every window size.
+            if inspectorVisible {
+                Divider().overlay(Color.white.opacity(0.06))
+                studioInspector
+                    .frame(width: 300)
+                    .background(Brand.ink2.opacity(0.5))
             }
         }
-        .padding(16)
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    inspectorVisible.toggle()
+                } label: {
+                    Label("Model Controls", systemImage: "sidebar.trailing")
+                        .foregroundStyle(inspectorVisible ? Brand.accent : Brand.fgDim)
+                }
+                .help("Toggle the model controls inspector")
+                .accessibilityIdentifier("studio-inspector-toggle")
+            }
+        }
         .fileExporter(isPresented: .init(get: { exportDoc != nil },
                                          set: { if !$0 { exportDoc = nil } }),
                       document: exportDoc, contentType: .wav,
@@ -72,6 +82,192 @@ struct StudioView: View {
         }
     }
 
+    /// Same curated order as the toolbar's model picker — used to pick the
+    /// best engine to offer when the current one can't render the voice.
+    private static let packBarBackendOrder: [BackendID] =
+        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
+         .supertonic, .luxTTS, .pocketTTS]
+
+    /// Auto-transcribe a voice's reference audio into `meta.refText` using the
+    /// same STT engine the RECORD flow uses — unlocking the transcript-
+    /// conditioned engines (qwen3-0.6b/1.7b, lux-tts) for this pack.
+    private func transcribeRef(_ slug: String) {
+        transcribingSlug = slug
+        transcribeError = nil
+        Task {
+            defer { transcribingSlug = nil }
+            do {
+                let (_, refURL) = try model.voices.get(slug)
+                let wav = try Data(contentsOf: refURL)
+                let transcriber = model.speech.makeTranscriber()
+                let hint = model.speech.effectiveLanguageHint
+                let text = try await transcriber.transcribe(wavData: wav, languageHint: hint)
+                    .text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    transcribeError = "Transcription came back empty — add it by hand in Edit."
+                    return
+                }
+                try model.voices.update(slug, refText: text)
+                model.voicesVersion += 1
+            } catch {
+                transcribeError = "Transcription failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func packChip(_ label: String, icon: String? = nil, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(size: 8)) }
+            if active {
+                Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(.green)
+            }
+            Text(label).font(.system(.caption2, design: .monospaced))
+        }
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Capsule().fill(Color.white.opacity(active ? 0.09 : 0.04)))
+        .overlay(Capsule().stroke(active ? Brand.accent.opacity(0.5) : Color.white.opacity(0.1),
+                                  lineWidth: 1))
+        .foregroundStyle(active ? Brand.fg : Brand.fgDim)
+    }
+
+    /// Manifest-driven pack summary for the selected voice: what assets the
+    /// pack holds (clone ref + baked engine renditions), which one the active
+    /// engine uses, and — on a mismatch — a plain-words warning with a
+    /// one-click switch to the pack's best engine. This is the greyed-out
+    /// sidebar row explained, where a new user is actually looking.
+    @ViewBuilder
+    private var voicePackBar: some View {
+        if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+            // Read voicesVersion so a saved transcript re-derives capabilities
+            // (and re-lights the engine chips) without reselecting the voice.
+            let _ = model.voicesVersion
+            let caps = model.voices.capabilities(slug)
+            let renderable = caps.supports(model.backend)
+            let cloneActive = renderable && !caps.engines.contains(model.backend.rawValue)
+            let cloneEngines = Self.packBarBackendOrder
+                .filter { $0.controls.voiceClone != .none }.map(\.rawValue)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    VoiceAvatarView(slug: slug, name: meta.name,
+                                    avatarURL: model.voices.avatarURL(slug), size: 20)
+                    Text(meta.name).font(.callout.weight(.semibold))
+                    Text("This voice includes:").font(.caption).foregroundStyle(Brand.fgFaint)
+                    if caps.hasSource {
+                        packChip("voice recording", icon: "mic", active: cloneActive)
+                            .help("Reference audio — any cloning engine can speak this voice: "
+                                  + cloneEngines.joined(separator: ", "))
+                        // A missing transcript silently halves the cloning
+                        // roster (qwen/lux condition on it) — say so, and fix
+                        // it in one click via the same STT the RECORD flow uses.
+                        if !caps.hasRefText {
+                            if transcribingSlug == slug {
+                                ProgressView().controlSize(.mini)
+                                Text("transcribing…").font(.caption2).foregroundStyle(Brand.fgFaint)
+                            } else {
+                                Text("transcript missing").font(.caption2).foregroundStyle(Brand.fgFaint)
+                                Button("Transcribe") { transcribeRef(slug) }
+                                    .font(.caption2).buttonStyle(.borderless)
+                                    .foregroundStyle(Brand.accent)
+                                    .help("Auto-transcribe the reference audio — unlocks the "
+                                          + "transcript-conditioned engines (qwen3, lux-tts)")
+                                    .accessibilityIdentifier("pack-bar-transcribe")
+                            }
+                        }
+                    }
+                    ForEach(caps.engines.sorted(), id: \.self) { engine in
+                        packChip(engine, active: engine == model.backend.rawValue)
+                            .help("Pre-rendered for \(engine) — speaks this voice with no recording needed")
+                    }
+                    Spacer(minLength: 0)
+                }
+                if !renderable {
+                    // Every engine that can speak this voice, not one arbitrary
+                    // pick: a clone ref unlocks the whole cloning roster, so a
+                    // single suggestion would undersell the pack. Baked
+                    // renditions sort first and say so.
+                    let targets = Self.packBarBackendOrder
+                        .filter { caps.supports($0) && model.hasSufficientRAM(for: $0) }
+                        .sorted { caps.engines.contains($0.rawValue) && !caps.engines.contains($1.rawValue) }
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                        Text("\(model.backend.rawValue) can't speak this voice yet")
+                            .font(.caption).foregroundStyle(Brand.fgDim)
+                        // Engines the pack would support if only the transcript
+                        // existed — shown disabled with the reason, so "why not
+                        // qwen?" answers itself.
+                        let transcriptLocked = Self.packBarBackendOrder.filter {
+                            !caps.supports($0) && caps.hasSource && $0.needsRefText
+                                && $0.controls.voiceClone != .none
+                                && model.hasSufficientRAM(for: $0)
+                        }
+                        if !targets.isEmpty || !transcriptLocked.isEmpty {
+                            Menu("Switch engine") {
+                                ForEach(targets, id: \.self) { target in
+                                    Button(caps.engines.contains(target.rawValue)
+                                           ? "\(target.rawValue) — pre-rendered"
+                                           : target.rawValue) {
+                                        model.backend = target
+                                        if model.downloads.state(for: target) == .ready {
+                                            Task { await model.loadModel(target) }
+                                        }
+                                    }
+                                }
+                                if !transcriptLocked.isEmpty {
+                                    Divider()
+                                    ForEach(transcriptLocked, id: \.self) { locked in
+                                        Button("\(locked.rawValue) needs a transcript of the recording") {}
+                                            .disabled(true)
+                                    }
+                                }
+                            }
+                            .menuStyle(.borderlessButton).fixedSize()
+                            .font(.caption)
+                            .accessibilityIdentifier("pack-bar-switch")
+                        }
+                    }
+                }
+                if let error = transcribeError {
+                    Text(error).font(.caption2).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(renderable ? 0.02 : 0.035)))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(renderable ? Color.white.opacity(0.05) : Color.orange.opacity(0.25),
+                        lineWidth: 1))
+            .accessibilityIdentifier("voice-pack-bar")
+        }
+    }
+
+    /// Center column: mode switch + write/act/takes.
+    @ViewBuilder
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            voicePackBar
+            Picker("Mode", selection: Binding(
+                get: { StudioMode(rawValue: modeRaw) ?? .single },
+                set: { modeRaw = $0.rawValue })) {
+                ForEach(StudioMode.allCases, id: \.self) {
+                    Text($0.rawValue).tag($0)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("studio-mode")
+            .help("Switch between single-line and script generation modes")
+
+            if mode == .script {
+                ScriptView()
+            } else {
+                singleModeStack
+            }
+        }
+        .padding(16)
+    }
+
     private func commitSaveDirection() {
         model.saveDirection(named: saveDirectionName)
         saveDirectionName = ""
@@ -84,7 +280,7 @@ struct StudioView: View {
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
-        ScrollViewReader { proxy in
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
@@ -92,14 +288,38 @@ struct StudioView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.never)
-            .onChange(of: model.variants.count) { _, count in
-                if count > 0 {
-                    withAnimation {
-                        proxy.scrollTo("variants-anchor", anchor: .top)
+            // TAKES shelf pinned to the bottom of the write column: new takes
+            // are always in view without scrolling past the bench.
+            if !model.variants.isEmpty {
+                Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 8)
+                zoneLabel("TAKES")
+                ScrollView {
+                    VStack(spacing: 10) {
+                        ForEach(model.variants) { variant in
+                            variantCard(variant)
+                        }
                     }
                 }
+                .frame(maxHeight: 240)
+                .padding(.top, 6)
             }
         }
+    }
+
+    /// Inspector content: everything about HOW the engine speaks (speaker,
+    /// direction, language, delivery, speed, advanced sampling) — the DIRECT
+    /// card that used to sit mid-column.
+    @ViewBuilder
+    private var studioInspector: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                zoneLabel("DIRECT")
+                directCard
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.never)
     }
 
     @ViewBuilder
@@ -157,7 +377,7 @@ struct StudioView: View {
                 HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
                 emotionPicker
                 Text("Switches to an acted “-emotion” voice variant when one exists — add them via "
-                     + "New Emotion Variant, or bake them in Create Voice.")
+                     + "New Emotion Variant, or generate them in Create Voice.")
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -192,7 +412,7 @@ struct StudioView: View {
         HStack(spacing: 6) {
             Text("Speed")
             Slider(value: $model.speed, in: 0.5...2.0, step: 0.05)
-                .frame(width: 140)
+                .frame(minWidth: 60, maxWidth: 160)
                 .help("Adjust speech rate (0.5x–2.0x)")
             Text(String(format: "%.2f×", model.speed))
                 .font(.system(.caption, design: .monospaced))
@@ -331,7 +551,8 @@ struct StudioView: View {
                             Slider(value: Binding(
                                 get: { Float(model.qwenTopK) },
                                 set: { model.qwenTopK = Int($0) }),
-                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                                in: Float(r.lowerBound)...Float(r.upperBound))
+                                .frame(minWidth: 60, maxWidth: 160)
                             Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
                         }
                         Text("How many options it considers each step. Lower = constrained; higher = varied.")
@@ -358,7 +579,8 @@ struct StudioView: View {
                             Slider(value: Binding(
                                 get: { Float(model.luxNumSteps) },
                                 set: { model.luxNumSteps = Int($0) }),
-                                in: Float(r.lowerBound)...Float(r.upperBound)).frame(width: 160)
+                                in: Float(r.lowerBound)...Float(r.upperBound))
+                                .frame(minWidth: 60, maxWidth: 160)
                             Text("\(model.luxNumSteps)").font(.system(.caption, design: .monospaced))
                         }
                         Text("Flow-matching sampling steps. 3–4 is the efficient sweet spot; higher "
@@ -411,7 +633,7 @@ struct StudioView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(label)
-                Slider(value: value, in: range).frame(width: 160)
+                Slider(value: value, in: range).frame(minWidth: 60, maxWidth: 160)
                 Text(String(format: "%.2f", value.wrappedValue))
                     .font(.system(.caption, design: .monospaced))
             }
@@ -513,9 +735,31 @@ struct StudioView: View {
             TagChipsView(text: $model.text, selection: $lineSelection)
         }
 
-        // ── DIRECT zone (inset card) ─────────────────────────────────────────
+        // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
-        zoneLabel("DIRECT")
+        HStack(spacing: 10) {
+            Button("Generate") { Task { await model.generate(takes: 1) } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model.isGenerating)
+                .accessibilityIdentifier("generate")
+                .help("Synthesize this line (⌘↩)")
+            Button("Generate A/B") { Task { await model.generate(takes: 2) } }
+                .disabled(model.isGenerating)
+                .help("Two takes to compare")
+            if model.isGenerating { ProgressView().controlSize(.small) }
+            Spacer()
+        }
+
+        if let error = model.generationError {
+            Text(error).foregroundStyle(.red).font(.callout)
+                .accessibilityIdentifier("generation-error")
+        }
+    }
+
+    /// The DIRECT card — engine-facing controls, rendered in the inspector.
+    @ViewBuilder
+    private var directCard: some View {
+        @Bindable var model = model
         let controls = model.backend.controls
         VStack(alignment: .leading, spacing: 10) {
             // Per-model explainer so the controls below make sense.
@@ -526,25 +770,25 @@ struct StudioView: View {
             // Speaker (CustomVoice / Kokoro)
             if !controls.presetSpeakers.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                        if model.backend == .kokoro {
-                            Picker("", selection: $model.speaker) {
-                                ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
-                                    Section(lang) {
-                                        ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
-                                            Text(Self.kokoroVoiceLabel(name)).tag(name)
-                                        }
+                    // Label above, picker full-width — the inspector column is
+                    // narrow and resizable, so no fixed 220pt row here.
+                    Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
+                    if model.backend == .kokoro {
+                        Picker("", selection: $model.speaker) {
+                            ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
+                                Section(lang) {
+                                    ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
+                                        Text(Self.kokoroVoiceLabel(name)).tag(name)
                                     }
                                 }
-                            }.labelsHidden().frame(width: 220)
-                        } else {
-                            Picker("", selection: $model.speaker) {
-                                ForEach(controls.presetSpeakers, id: \.self) { name in
-                                    Text(Self.speakerLabel(name)).tag(name)
-                                }
-                            }.labelsHidden().frame(width: 220)
-                        }
+                            }
+                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
+                    } else {
+                        Picker("", selection: $model.speaker) {
+                            ForEach(controls.presetSpeakers, id: \.self) { name in
+                                Text(Self.speakerLabel(name)).tag(name)
+                            }
+                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
                     }
                     if model.backend == .kokoro {
                         if let info = Self.kokoroVoiceInfo[model.speaker] {
@@ -634,7 +878,7 @@ struct StudioView: View {
                     Text("Language").font(.caption).foregroundStyle(Brand.fgDim)
                     Picker("", selection: $model.language) {
                         ForEach(Self.languages, id: \.0) { Text($0.1).tag($0.0) }
-                    }.labelsHidden().frame(width: 160)
+                    }.labelsHidden().frame(maxWidth: 160)
                         .help("Language of your text. Auto detects it.")
                 }
             }
@@ -656,38 +900,6 @@ struct StudioView: View {
         // Rebuild the whole pane on model change so the controls (and any retained
         // disclosure/field state) always match the selected model.
         .id(model.backend)
-
-        // ── ACT zone (no label per spec) ─────────────────────────────────────
-        Divider().overlay(Color.white.opacity(0.06))
-        HStack(spacing: 10) {
-            Button("Generate") { Task { await model.generate(takes: 1) } }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(model.isGenerating)
-                .accessibilityIdentifier("generate")
-                .help("Synthesize this line (⌘↩)")
-            Button("Generate A/B") { Task { await model.generate(takes: 2) } }
-                .disabled(model.isGenerating)
-                .help("Two takes to compare")
-            if model.isGenerating { ProgressView().controlSize(.small) }
-            Spacer()
-        }
-
-        if let error = model.generationError {
-            Text(error).foregroundStyle(.red).font(.callout)
-                .accessibilityIdentifier("generation-error")
-        }
-
-        // ── LISTEN / TAKES zone ──────────────────────────────────────────────
-        if !model.variants.isEmpty {
-            Divider().overlay(Color.white.opacity(0.06))
-            zoneLabel("TAKES")
-        }
-        VStack(spacing: 10) {
-            ForEach(model.variants) { variant in
-                variantCard(variant)
-            }
-        }
-        .id("variants-anchor")
     }
 
     /// Popover list for the voice picker: avatar + name per row, with a
@@ -716,7 +928,9 @@ struct StudioView: View {
         }
         .frame(width: 240)
         .frame(maxHeight: 360)
-        .background(Brand.ink2)
+        // Translucent over the popover's native glass chrome rather than
+        // opaque ink — keeps the tint, lets the system material show.
+        .background(Brand.ink2.opacity(0.5))
     }
 
     /// One VOICE-popover row. A base voice with acted variants shows a disclosure
@@ -726,6 +940,10 @@ struct StudioView: View {
     @ViewBuilder
     private func voicePickerRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
         let selected = model.selectedVoiceSlug == voice.slug
+        // This popover picks the voice the CURRENT backend will speak with, so
+        // (unlike the sidebar, where selection also means editing) rows the
+        // backend can't render are disabled outright.
+        let renderable = model.voices.capabilities(voice.slug).supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -743,6 +961,7 @@ struct StudioView: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(pickerExpandedBases.contains(voice.slug) ? "Collapse Variants" : "Expand Variants")
             } else {
                 Color.clear.frame(width: 12)
             }
@@ -756,7 +975,12 @@ struct StudioView: View {
                         name: voice.name,
                         avatarURL: model.voices.avatarURL(voice.slug),
                         size: isVariant ? 18 : 22)
-                    Text(voice.name).foregroundStyle(Brand.fg)
+                    Text(voice.name).foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
+                    if !renderable {
+                        Text("can't speak this voice")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Brand.fgFaint)
+                    }
                     if variantCount > 0 {
                         Text("\(variantCount)")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -779,6 +1003,9 @@ struct StudioView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(!renderable)
+            .help(renderable ? "" :
+                  "\(voice.name) has no assets \(model.backend.rawValue) can render.")
         }
     }
 

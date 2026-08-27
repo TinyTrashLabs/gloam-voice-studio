@@ -395,7 +395,7 @@ public enum Bakeoff {
     // MARK: Model directory resolution
 
     static func modelDir(for backend: LLMBackendID) -> URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Models")
             .appendingPathComponent(backend.diskFolder)
     }

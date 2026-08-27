@@ -26,8 +26,13 @@ struct HeadlessVoiceStudioApp: App {
                 : "NOT authorized — launch the GUI once to grant Speech Recognition, or listen/transcribe will error"
             FileHandle.standardError.write(Data("[studio] --serve: STT \(sttStatus)\n".utf8))
             await model.startHeadlessServer(port: port)
-            FileHandle.standardError.write(Data(
-                "[studio] --serve: listening on 127.0.0.1:\(port)\n".utf8))
+            if let serverError = await model.serverError {
+                FileHandle.standardError.write(Data(
+                    "[studio] --serve: FAILED to bind 127.0.0.1:\(port): \(serverError)\n".utf8))
+            } else {
+                FileHandle.standardError.write(Data(
+                    "[studio] --serve: listening on 127.0.0.1:\(port)\n".utf8))
+            }
         }
         Self.installShutdownHandlers(model: model)
     }

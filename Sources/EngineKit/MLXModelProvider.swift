@@ -10,8 +10,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     /// Maps a backend to a local model directory (a path whose config.json
     /// exists), or nil to fall back to the HuggingFace repo id (which makes
     /// mlx-audio-swift download to its own cache). The app injects a resolver
-    /// pointing at its managed Caches/Models directory so downloads always go
-    /// through the in-app download manager.
+    /// pointing at its managed Application Support/Models directory so
+    /// downloads always go through the in-app download manager.
     private let modelPathResolver: (@Sendable (BackendID) -> String?)?
 
     public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
@@ -36,9 +36,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "LuxTTS requires pre-converted local weights (no HF auto-download "
-                        + "path yet) — run convert_weights.py and populate the resolver's "
-                        + "Caches/Models directory for \(BackendID.luxTTS.rawValue).")
+                    message: "lux-tts weights are not installed — this model is not "
+                        + "downloadable in-app.")
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
@@ -51,9 +50,8 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "Pocket TTS requires a local sherpa-onnx model directory — run "
-                        + "scripts/fetch-pocket-tts.sh and populate the resolver's "
-                        + "Caches/Models directory for \(BackendID.pocketTTS.rawValue).")
+                    message: "Pocket TTS model not downloaded — download it in "
+                        + "Settings → Models.")
             }
             return try PocketSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
@@ -155,7 +153,10 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 audio = try await model.generate(
                     text: request.text,
                     voice: backend.isQwen ? request.instruct
-                        : backend == .kokoro || backend == .supertonic ? request.speaker
+                        // Supertonic: an absolute style-file path renders that
+                        // baked voice (fork PR #7); a bare name stays a preset.
+                        : backend == .supertonic ? (request.styleURL?.path ?? request.speaker)
+                        : backend == .kokoro ? request.speaker
                         : nil,
                     refAudio: refAudio,
                     refText: request.refText,

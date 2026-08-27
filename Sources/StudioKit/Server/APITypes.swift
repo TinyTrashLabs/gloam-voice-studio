@@ -56,7 +56,37 @@ struct HealthResponse: Codable, ResponseEncodable {
     let loadedBackends: [String]
 }
 
-struct VoicesResponse: Codable, ResponseEncodable { let voices: [VoiceMeta] }
+/// One /voices row: the stored meta plus what the pack can render, so external
+/// clients (the gloam.fm DJ) can pick a voice the target engine supports.
+/// Encodes meta's own keys flat with `hasSource`/`engines` alongside — purely
+/// additive over the previous [VoiceMeta] payload.
+struct APIVoice: Codable, ResponseEncodable {
+    let meta: VoiceMeta
+    let hasSource: Bool
+    let engines: [String]
+
+    init(meta: VoiceMeta, capabilities: VoiceCapabilities) {
+        self.meta = meta
+        self.hasSource = capabilities.hasSource
+        self.engines = capabilities.engines.sorted()
+    }
+
+    enum ExtraKeys: String, CodingKey { case hasSource, engines }
+    func encode(to encoder: Encoder) throws {
+        try meta.encode(to: encoder)
+        var c = encoder.container(keyedBy: ExtraKeys.self)
+        try c.encode(hasSource, forKey: .hasSource)
+        try c.encode(engines, forKey: .engines)
+    }
+    init(from decoder: Decoder) throws {
+        meta = try VoiceMeta(from: decoder)
+        let c = try decoder.container(keyedBy: ExtraKeys.self)
+        hasSource = try c.decodeIfPresent(Bool.self, forKey: .hasSource) ?? false
+        engines = try c.decodeIfPresent([String].self, forKey: .engines) ?? []
+    }
+}
+
+struct VoicesResponse: Codable, ResponseEncodable { let voices: [APIVoice] }
 struct OkResponse: Codable, ResponseEncodable { let ok: Bool }
 
 struct VoiceCreateRequest: Codable {
@@ -141,6 +171,12 @@ public struct APIDependencies: Sendable {
     /// Live-read like `defaultVoice` so the Settings picker applies to the
     /// next request with no server restart.
     public let defaultModel: @Sendable () -> String
+    /// Bearer token required on every route except `/health` when non-nil
+    /// (nil = no auth, today's loopback-only behavior). A closure, not a
+    /// captured value — same live-read idiom as `defaultVoice` — so the app
+    /// only starts requiring the token once LAN mode is actually on, with no
+    /// server restart.
+    public let authToken: @Sendable () -> String?
     /// Transcribe a WAV to text (native SpeechKit engine, supplied by the app).
     /// Given: WAV bytes + optional BCP-47 language hint. Defaults to unavailable.
     public let transcribe: @Sendable (_ wav: Data, _ languageHint: String?) async throws -> String
@@ -156,6 +192,7 @@ public struct APIDependencies: Sendable {
                 gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
                 defaultVoice: @escaping @Sendable () -> String = { "" },
                 defaultModel: @escaping @Sendable () -> String = { "" },
+                authToken: @escaping @Sendable () -> String? = { nil },
                 transcribe: @escaping @Sendable (Data, String?) async throws -> String
                     = { _, _ in throw STTUnavailable() },
                 listen: @escaping @Sendable (Double, Double, String?) async throws -> String
@@ -168,6 +205,7 @@ public struct APIDependencies: Sendable {
         self.gate = gate
         self.defaultVoice = defaultVoice
         self.defaultModel = defaultModel
+        self.authToken = authToken
         self.transcribe = transcribe
         self.listen = listen
     }

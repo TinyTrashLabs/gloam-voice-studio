@@ -20,6 +20,7 @@ struct VoiceSidebarView: View {
     @State private var hoveredSlug: String?
     @State private var catalogPresented = false
     @State private var pendingDeleteSlug: String?
+    @State private var searchText = ""
 
     var body: some View {
         @Bindable var model = model
@@ -33,28 +34,8 @@ struct VoiceSidebarView: View {
                 .padding(.bottom, 12)
             Divider().overlay(Color.white.opacity(0.06))
 
-            // Section switch: Studio (speak with reusable voices), Create Voice
-            // (the Foundry — mint a new voice with qwen3-design), Chat (persona
-            // chat through a local LLM). Sidebar stays put.
-            Picker("Section", selection: Binding(
-                get: { StudioSection(rawValue: sectionRaw) ?? .studio },
-                set: { newSection in
-                    sectionRaw = newSection.rawValue
-                    // Tapping "Create Voice" itself means a fresh create — leave any
-                    // in-progress Edit only when opened explicitly from a voice.
-                    if newSection == .createVoice { model.editingVoiceSlug = nil }
-                })) {
-                Text("Studio").tag(StudioSection.studio)
-                Text("Create Voice").tag(StudioSection.createVoice)
-                Text("Chat").tag(StudioSection.chat)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .accessibilityIdentifier("studio-section-picker")
-            .help("Switch between the studio, the voice foundry, and voice chat")
-
+            // Section switching moved to the window toolbar (ContentView's
+            // mainToolbar) — the standard scope-control spot, with ⌘1/⌘2/⌘3.
             HStack(alignment: .center) {
                 Text("VOICES")
                     .font(.system(size: 13, weight: .heavy))
@@ -72,16 +53,19 @@ struct VoiceSidebarView: View {
                 }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("new-voice")
+                .accessibilityLabel("New Voice")
                 .help("Create a new voice from a recording or audio file")
                 Button { importerPresented = true } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Import Voice Pack")
                 .help("Import .gvoice voice packs")
                 Button { catalogPresented = true } label: {
                     Image(systemName: "person.crop.circle.badge.plus")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Browse Voice Catalog")
                 .help("Browse free downloadable voices")
                 .accessibilityIdentifier("browse-catalog")
             }
@@ -91,13 +75,30 @@ struct VoiceSidebarView: View {
 
             List(selection: $model.selectedVoiceSlug) {
                 if voiceList.isEmpty {
-                    Text("No voices yet — click + to record or drop a clip.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    // First-run empty state: say what a voice IS and offer all
+                    // three ways in, instead of a one-liner pointing at "+".
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No voices yet")
+                            .font(.callout.weight(.semibold))
+                        Text("A voice is a reusable identity — record a clip, import a .gvoice pack, or grab a free one.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VoiceEmptyStateActions()
+                    }
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("voices-empty-state")
                 }
-                ForEach(groupedVoices(voiceList), id: \.base.slug) { group in
+                let groups = filteredGroups
+                if groups.isEmpty && !voiceList.isEmpty && !searchText.isEmpty {
+                    Text("No voices match “\(searchText)”")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.vertical, 6)
+                }
+                ForEach(groups, id: \.base.slug) { group in
                     voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
-                    if expandedBases.contains(group.base.slug) {
+                    // While searching, matched groups show their variants without
+                    // needing a chevron click — the match may BE a variant.
+                    if expandedBases.contains(group.base.slug) || !searchText.isEmpty {
                         ForEach(group.variants, id: \.slug) { variant in
                             voiceRow(variant, isVariant: true, variantCount: 0)
                         }
@@ -105,6 +106,7 @@ struct VoiceSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .searchable(text: $searchText, placement: .sidebar, prompt: "Search voices")
             .scrollContentBackground(.hidden)
             .fileImporter(isPresented: $importerPresented,
                           allowedContentTypes: [.gvoice, .zip],
@@ -161,6 +163,12 @@ struct VoiceSidebarView: View {
     private func voiceRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
         let isPlaying = refPlayer.playingID == voice.slug
         let showControls = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
+        // Engine-matched enablement: derived from the voice's pack contents
+        // (source audio and/or engines/<id>/ renditions). Unrenderable rows
+        // stay selectable (editing, persona) but dim and say what they DO work
+        // on, so a supertonic-only pack isn't mistaken for broken.
+        let caps = model.voices.capabilities(voice.slug)
+        let renderable = caps.supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -171,6 +179,7 @@ struct VoiceSidebarView: View {
                         .frame(width: 12)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(expandedBases.contains(voice.slug) ? "Collapse Variants" : "Expand Variants")
             } else {
                 Color.clear.frame(width: 12)
             }
@@ -180,6 +189,18 @@ struct VoiceSidebarView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(voice.name).font(isVariant ? .callout : .body)
+                        .foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
+                    if !renderable && !isVariant {
+                        // Minimal indicator — the full engine list lives in the
+                        // tooltip, keeping the row quiet (dim name + one glyph).
+                        let supported = BackendID.allCases.filter { caps.supports($0) }.map(\.rawValue)
+                        Image(systemName: "speaker.slash")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Brand.fgFaint)
+                            .help(supported.isEmpty
+                                  ? "\(voice.name)'s pack has no renderable assets."
+                                  : "\(voice.name) has no assets \(model.backend.rawValue) can render — it works on: \(supported.joined(separator: ", ")).")
+                    }
                     if variantCount > 0 {
                         Text("\(variantCount)")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -211,6 +232,7 @@ struct VoiceSidebarView: View {
                 .buttonStyle(.borderless)
                 .help(isPlaying ? "Stop preview" : "Play sample")
                 .accessibilityIdentifier("play-voice")
+                .accessibilityLabel("Preview Voice")
             }
             if showControls && !isVariant {
                 Button { openEdit(voice.slug) } label: {
@@ -219,12 +241,14 @@ struct VoiceSidebarView: View {
                 .buttonStyle(.borderless).foregroundStyle(Brand.fgDim)
                 .help("Edit this voice (name, reference, emotion variants)")
                 .accessibilityIdentifier("edit-voice")
+                .accessibilityLabel("Edit Voice")
             }
             Menu { voiceActions(voice) } label: {
                 Image(systemName: "ellipsis").foregroundStyle(Brand.fgDim)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .help("More actions").accessibilityIdentifier("voice-menu")
+            .accessibilityLabel("More Actions")
         }
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -256,7 +280,7 @@ struct VoiceSidebarView: View {
     @ViewBuilder
     private func voiceActions(_ voice: VoiceMeta) -> some View {
         Button("Edit…") { openEdit(voice.slug) }
-            .help("Edit this voice (name, reference, bake variants)")
+            .help("Edit this voice (name, recording, emotion versions)")
         Button(refPlayer.playingID == voice.slug ? "Stop Sample" : "Play Sample") {
             previewRef(voice)
         }
@@ -273,11 +297,24 @@ struct VoiceSidebarView: View {
         return model.voices.list()
     }
 
+    /// Groups surviving the search filter: a group stays when its base or any
+    /// variant matches by name or slug (case-insensitive substring).
+    private var filteredGroups: [(base: VoiceMeta, variants: [VoiceMeta])] {
+        let groups = groupedVoices(voiceList)
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return groups }
+        func matches(_ v: VoiceMeta) -> Bool {
+            v.name.localizedCaseInsensitiveContains(query)
+                || v.slug.localizedCaseInsensitiveContains(query)
+        }
+        return groups.filter { matches($0.base) || $0.variants.contains(where: matches) }
+    }
+
     private func export(_ slug: String) {
         do {
             exportDoc = DataDocument(data: try GVoice.export(slug, from: model.voices))
             exportName = slug
-        } catch { actionError = "\(error)" }
+        } catch { actionError = model.describeAny(error) }
     }
 
     private func delete(_ slug: String) {
@@ -285,7 +322,7 @@ struct VoiceSidebarView: View {
             try model.voices.delete(slug)
             if model.selectedVoiceSlug == slug { model.selectedVoiceSlug = nil }
             model.voicesVersion += 1
-        } catch { actionError = "\(error)" }
+        } catch { actionError = model.describeAny(error) }
     }
 
     private func importPacks(_ result: Result<[URL], Error>) {
@@ -295,7 +332,7 @@ struct VoiceSidebarView: View {
             guard url.startAccessingSecurityScopedResource() else { continue }
             defer { url.stopAccessingSecurityScopedResource() }
             do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
-            catch { failures.append("\(url.lastPathComponent): \(error)") }
+            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
@@ -333,8 +370,63 @@ struct VoiceSidebarView: View {
                 let refWav = try Data(contentsOf: refURL)
                 _ = try model.voices.save(name: name, refWav: refWav, refText: refText)
             } catch {
-                failures.append("\(subdir.lastPathComponent): \(error)")
+                failures.append("\(subdir.lastPathComponent): \(model.describeAny(error))")
             }
+        }
+        model.voicesVersion += 1
+        if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
+    }
+}
+
+/// The three ways to get a first voice — record, browse the free catalog, or
+/// import a .gvoice pack. Shown by the sidebar's own empty state and reused
+/// by Chat's empty state so a voiceless container isn't a dead end there too.
+struct VoiceEmptyStateActions: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @State private var catalogPresented = false
+    @State private var importerPresented = false
+    @State private var actionError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                model.editingVoiceSlug = nil
+                model.createVoiceSource = .record
+                sectionRaw = StudioSection.createVoice.rawValue
+            } label: {
+                Label("Record a voice", systemImage: "mic")
+            }
+            Button { catalogPresented = true } label: {
+                Label("Browse free voices", systemImage: "person.crop.circle.badge.plus")
+            }
+            Button { importerPresented = true } label: {
+                Label("Import .gvoice", systemImage: "square.and.arrow.down")
+            }
+        }
+        .fileImporter(isPresented: $importerPresented,
+                      allowedContentTypes: [.gvoice, .zip],
+                      allowsMultipleSelection: true) { result in
+            importPacks(result)
+        }
+        .sheet(isPresented: $catalogPresented) {
+            VoiceCatalogView()
+                .environment(model)
+        }
+        .alert("Voice Library", isPresented: .init(get: { actionError != nil },
+                                                    set: { if !$0 { actionError = nil } })) {
+            Button("OK") { actionError = nil }
+        } message: { Text(actionError ?? "") }
+    }
+
+    private func importPacks(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        var failures: [String] = []
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+            do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
+            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
         }
         model.voicesVersion += 1
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
@@ -368,5 +460,6 @@ struct EqualizerBars: View {
         }
         .frame(width: 14, height: 14)
         .onAppear { animating = true }
+        .accessibilityHidden(true)
     }
 }

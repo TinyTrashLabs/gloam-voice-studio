@@ -115,9 +115,22 @@ final class AppModel {
     var serverEnabled: Bool {
         didSet {
             UserDefaults.standard.set(serverEnabled, forKey: "serverEnabled")
+            if serverEnabled { serverEverEnabled = true }
             scheduleServerSync()
         }
     }
+    /// True once the user has turned the API server on at least once — persisted
+    /// separately from `serverEnabled` (which is written unconditionally on every
+    /// launch as it restores from defaults) so the toolbar chip can stay hidden
+    /// for anyone who has never touched the server.
+    var serverEverEnabled: Bool {
+        didSet { UserDefaults.standard.set(serverEverEnabled, forKey: "serverEverEnabled") }
+    }
+    /// nil once the server is off or actually bound; set when the last start
+    /// attempt failed (e.g. the port was already in use) so Settings and the
+    /// toolbar chip can show the truth instead of a green "Serving at…" for
+    /// a server that never bound. Transient — not persisted.
+    var serverError: String?
     /// LLM used by the chat tab (and as the API server's default LLM).
     var chatLLM: LLMBackendID {
         didSet {
@@ -241,7 +254,33 @@ final class AppModel {
         didSet { UserDefaults.standard.set(chatAutoSpeak, forKey: "chatAutoSpeak") }
     }
     var serverPort: Int {
-        didSet { UserDefaults.standard.set(serverPort, forKey: "serverPort") }
+        didSet {
+            UserDefaults.standard.set(serverPort, forKey: "serverPort")
+            // Rebind live — the Settings field used to be disabled while the
+            // server ran ("needs a restart"), which read as not changeable.
+            scheduleServerSync()
+        }
+    }
+    /// Bind 0.0.0.0 instead of loopback so other devices on the network can
+    /// reach the API + MCP. Off by default; there is no auth, so the Settings
+    /// toggle carries the warning. Needs a rebind → server sync.
+    var serverLANEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(serverLANEnabled, forKey: "serverLANEnabled")
+            if serverLANEnabled && serverAuthToken.isEmpty {
+                serverAuthToken = UUID().uuidString
+            }
+            scheduleServerSync()
+        }
+    }
+    /// Bearer token required of every request while `serverLANEnabled` is on
+    /// (generated once, the first time LAN mode is turned on, and reused
+    /// after that — flipping LAN off and on again does not rotate it).
+    /// Read live off UserDefaults by the server's `authToken` closure, same
+    /// idiom as `serverDefaultVoice`, gated to nil while LAN is off so
+    /// loopback-only mode stays no-auth.
+    var serverAuthToken: String {
+        didSet { UserDefaults.standard.set(serverAuthToken, forKey: "serverAuthToken") }
     }
     /// Slug of the library voice that answers `/v1/audio/speech` requests
     /// which don't name a `voice` ("" = none — the raw backend voice, today's
@@ -256,6 +295,16 @@ final class AppModel {
     /// `serverDefaultVoice` — applies on the next request, no restart.
     var serverDefaultModel: String {
         didSet { UserDefaults.standard.set(serverDefaultModel, forKey: "serverDefaultModel") }
+    }
+    /// Raw `LLMBackendID` that answers `/v1/chat/completions` requests which
+    /// don't name a `model` ("" = follow the Chat tab's model). Unlike the
+    /// voice/model defaults above, `defaultLLM` is snapshotted into the deps
+    /// at server build time, so changing it triggers a server sync.
+    var serverDefaultLLM: String {
+        didSet {
+            UserDefaults.standard.set(serverDefaultLLM, forKey: "serverDefaultLLM")
+            scheduleServerSync()
+        }
     }
     var didAcceptCloneConsent: Bool {
         didSet { UserDefaults.standard.set(didAcceptCloneConsent, forKey: "didAcceptCloneConsent") }
@@ -352,6 +401,7 @@ final class AppModel {
     enum PendingSynthesisAction: Equatable {
         case studioGenerate
         case chatRegenerate(conversationID: String, messageID: String, backend: BackendID)
+        case foundryGenerate
     }
     var pendingSynthesisAction: PendingSynthesisAction?
 
@@ -438,13 +488,36 @@ final class AppModel {
         deviceCapabilities = EngineCapabilities.current()
         // qwen3-design is Creation-only now (it lives in the Voice Foundry, not the
         // Studio picker) — redirect a persisted design backend to a real clone model.
+        // Fresh install defaults to kokoro — the only backend that needs
+        // neither a license ack nor a cloned/uploaded voice (its 54 preset
+        // voicepacks ship in the weights), so onboarding's one download
+        // reaches a working Generate with no further decisions.
         let loadedBackend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
-            ?? .fishS2Pro
+            ?? .kokoro
         backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
+        let lanEnabled = defaults.bool(forKey: "serverLANEnabled")
+        var authToken = defaults.string(forKey: "serverAuthToken") ?? ""
+        // Self-heal: an install that turned LAN mode on before this branch
+        // (commit e20df91a) has serverLANEnabled == true with no persisted
+        // token. `didSet` does not fire for assignments inside `init`, so
+        // without this the live authToken closure reads nil forever and the
+        // LAN-bound server stays silently open. Computed via locals (not
+        // `self.serverLANEnabled`/`self.serverAuthToken` reads) because
+        // `@Observable` property access requires `self` to be fully
+        // initialized first — reading them mid-init is a compile error.
+        if lanEnabled && authToken.isEmpty {
+            authToken = UUID().uuidString
+            defaults.set(authToken, forKey: "serverAuthToken")
+        }
+        serverLANEnabled = lanEnabled
+        serverAuthToken = authToken
         serverDefaultVoice = defaults.string(forKey: "serverDefaultVoice") ?? ""
         serverDefaultModel = defaults.string(forKey: "serverDefaultModel") ?? ""
-        serverEnabled = defaults.bool(forKey: "serverEnabled")
+        serverDefaultLLM = defaults.string(forKey: "serverDefaultLLM") ?? ""
+        let enabled = defaults.bool(forKey: "serverEnabled")
+        serverEnabled = enabled
+        serverEverEnabled = defaults.bool(forKey: "serverEverEnabled") || enabled
         didAcceptCloneConsent = uiTest || defaults.bool(forKey: "didAcceptCloneConsent")
         // Per-backend license acks; migrate the old Fish-only bool so existing
         // users aren't re-prompted for a license they already acknowledged.
@@ -571,7 +644,7 @@ final class AppModel {
                 generationError = describe(error)
                 return
             } catch {
-                generationError = "\(error)"
+                generationError = error.localizedDescription
                 return
             }
         }
@@ -625,6 +698,63 @@ final class AppModel {
         pendingSynthesisAction = nil
     }
 
+    /// Onboarding's "Download Starter Engine": switches to kokoro (the
+    /// zero-gate backend — no license ack, no cloned voice needed), starts
+    /// the download, and on completion installs one bundled CC0 catalog
+    /// voice + prefills the WRITE text so Generate is a single remaining
+    /// click. Reuses the same download-completion poll `confirmDownload
+    /// FromPrompt` uses, since `ModelDownloadManager` exposes no completion
+    /// callback/publisher — only pollable state.
+    func downloadStarterEngine() {
+        backend = .kokoro
+        downloads.download(.kokoro)
+        Task {
+            while true {
+                try? await Task.sleep(for: .milliseconds(400))
+                switch downloads.state(for: .kokoro) {
+                case .ready:
+                    installOnboardingVoice()
+                    return
+                case .failed, .notDownloaded:
+                    return   // user cancelled or the download failed
+                case .downloading:
+                    continue
+                }
+            }
+        }
+    }
+
+    /// Installs the bundled "Ava" catalog voice (ships in-bundle, no
+    /// network) so a fresh library isn't empty, and prefills the WRITE
+    /// field if the user hasn't typed anything yet.
+    private func installOnboardingVoice() {
+        if voices.list().isEmpty,
+           let url = Bundle.main.url(forResource: "catalog", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let catalog = try? JSONDecoder().decode([CatalogVoice].self, from: data),
+           let starter = catalog.first(where: { $0.id == "jl-ava" }) {
+            let manager = VoiceCatalogManager()
+            manager.install(starter, into: voices, transcriber: speech.makeTranscriber())
+            // install() is fire-and-forget (spawns its own Task); poll its
+            // published state so the sidebar refresh (voicesVersion) lands
+            // only once the bundled clips are actually on disk.
+            Task {
+                while true {
+                    switch manager.state(for: starter, installedSlugs: Set(voices.list().map(\.slug))) {
+                    case .installed, .failed:
+                        voicesVersion += 1
+                        return
+                    default:
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+            }
+        }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = "Welcome to Gloam Voice Studio. This line was generated on this Mac."
+        }
+    }
+
     /// Dispatches whatever action was waiting on a download/license prompt
     /// that just cleared for `pending`. `.studioGenerate` preserves the
     /// pre-existing staleness guard (only resumes if Studio's picker still
@@ -640,6 +770,8 @@ final class AppModel {
         case .chatRegenerate(let conversationID, let messageID, let backend):
             Task { await self.chat.resumeRegenerate(
                 conversationID: conversationID, messageID: messageID, backend: backend) }
+        case .foundryGenerate:
+            Task { await self.generateFoundryCandidate() }
         case nil:
             break
         }
@@ -758,26 +890,38 @@ final class AppModel {
         let engine = engineOverride ?? self.engine
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
-                message: "Download the \(backend.rawValue) model in Settings first.")
+                message: "Download the \(backend.rawValue) model in Settings → Models first.")
         }
         if backend.spec.needsLicenseAck && !didAck(backend) {
             throw AppGenerationError(
-                message: "Acknowledge the \(backend.rawValue) license in Settings first.")
+                message: "Acknowledge the \(backend.rawValue) license in Settings → Models first.")
         }
         var refPath: String?
         var refText: String?
         var resolvedVoice: String?
+        // Baked engine rendition (e.g. a pack's supertonic style tensors):
+        // when the selected voice carries assets for THIS backend, they render
+        // the voice instead of a house preset. Emotion-variant slug first;
+        // renditionStyleURL itself falls back variant → base.
+        let styleURL: URL? = voiceSlug.flatMap { slug in
+            let variant = emotion != .neutral ? "\(slug)-\(emotion.rawValue)" : nil
+            return variant.flatMap { voices.renditionStyleURL($0, engine: backend.rawValue) }
+                ?? voices.renditionStyleURL(slug, engine: backend.rawValue)
+        }
         // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
         // the BASE voice — so resolve to the base clip, not an acted `-emotion`
         // variant (that path is for the variant-clip backends).
         let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
         if let slug = voiceSlug {
-            guard let found = try? voices.resolve(slug, emotion: resolveEmotion) else {
+            if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
+                refPath = found.refURL.path
+                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+                resolvedVoice = found.meta.slug
+            } else if styleURL == nil {
+                // A rendition-only pack (no ref.wav) is fine when this backend
+                // has a baked style to render; otherwise the voice is unusable.
                 throw AppGenerationError(message: "Voice '\(slug)' is missing.")
             }
-            refPath = found.refURL.path
-            refText = found.meta.refText.isEmpty ? nil : found.meta.refText
-            resolvedVoice = found.meta.slug
         }
         if backend.spec.needsRefAudio && refPath == nil {
             throw AppGenerationError(
@@ -791,7 +935,15 @@ final class AppModel {
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
             instruct: controls.instruct != .none ? instruct : nil,
-            speaker: controls.presetSpeakers.isEmpty ? nil : speaker,
+            // The stored `speaker` tracks the STUDIO backend's preset set; when a
+            // different preset backend renders (e.g. Kokoro as the chat voice
+            // engine while the Studio runs Chatterbox) that name isn't in this
+            // backend's set — fall back to its best-first preset instead of
+            // failing, mirroring the API route's fallback.
+            speaker: controls.presetSpeakers.isEmpty ? nil
+                : (controls.presetSpeakers.contains(speaker) ? speaker
+                   : controls.presetSpeakers.first),
+            styleURL: styleURL,
             language: controls.language ? language : nil,
             topP: controls.knobs.topP != nil ? qwenTopP : nil,
             topK: controls.knobs.topK != nil ? qwenTopK : nil,
@@ -814,10 +966,15 @@ final class AppModel {
             sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
         if recordHistory {
-            _ = try? history.save(
-                pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
-                text: text, backend: backend.rawValue, voice: resolvedVoice,
-                emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+            do {
+                try history.save(
+                    pcm: PCM16.data(from: result.samples), sampleRate: result.sampleRate,
+                    text: text, backend: backend.rawValue, voice: resolvedVoice,
+                    emotion: emotion.rawValue, wallMs: Int(result.wallSeconds * 1000))
+            } catch {
+                AppLog.history.error(
+                    "history save failed: \(String(describing: error), privacy: .public)")
+            }
         }
         return result
     }
@@ -834,18 +991,13 @@ final class AppModel {
         guard !instruct.isEmpty else { foundryError = "Describe the voice first."; return }
         let line = foundryAuditionLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { foundryError = "Add an audition line for the voice to speak."; return }
-        switch downloads.state(for: designBackend) {
-        case .ready: break
-        case .notDownloaded:
-            downloads.download(designBackend)
-            foundryError = "Downloading qwen3-design… press Generate again once it's ready "
-                + "(progress is in the toolbar)."
-            return
-        case .downloading:
-            foundryError = "qwen3-design is still downloading — try again once it's ready."
-            return
-        case .failed(let message):
-            foundryError = "qwen3-design download failed: \(message)"
+        // Model not on disk yet (or still downloading, or a prior attempt
+        // failed) → offer to download it, same as Studio's `generate()`. The
+        // sheet's confirm starts a background download and generates once
+        // it's ready — no red error for what's just an unfinished download.
+        if downloads.state(for: designBackend) != .ready {
+            pendingSynthesisAction = .foundryGenerate
+            downloadPrompt = designBackend
             return
         }
         foundryGenerating = true
@@ -908,12 +1060,12 @@ final class AppModel {
             foundryError = "Base voice '\(baseSlug)' is missing."; return
         }
         if baker.spec.needsLicenseAck && !didAck(baker) {
-            foundryError = "Baking with \(baker.rawValue) needs its license — acknowledge it in Settings first."
+            foundryError = "Generating with \(baker.rawValue) needs its license — acknowledge it in Settings → Models first."
             return
         }
         guard downloads.state(for: baker) == .ready else {
             if case .notDownloaded = downloads.state(for: baker) { downloads.download(baker) }
-            foundryError = "Downloading \(baker.rawValue) to bake with — try again once it's ready."
+            foundryError = "Downloading \(baker.rawValue) to generate with — try again once it's ready."
             return
         }
         foundryBaking = true
@@ -942,7 +1094,7 @@ final class AppModel {
                                   name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text)
                 await refreshEngineStatus()   // model resident now — update the RAM chip
             } catch {
-                foundryError = "Bake failed for \(expr.label): \(describeAny(error))"
+                foundryError = "Generation failed for \(expr.label): \(describeAny(error))"
                 break
             }
         }
@@ -959,9 +1111,9 @@ final class AppModel {
     private func describe(_ error: EngineError) -> String {
         switch error {
         case .licenseAckRequired:
-            return "Acknowledge the Fish license in Settings first."
+            return "Acknowledge the Fish license in Settings → Models first."
         case .refAudioRequired:
-            return "This backend needs a reference voice."
+            return "This model needs a reference voice."
         case .generationFailed(_, let message):
             return "Generation failed: \(message)"
         case .invalidSpeed(let s):
@@ -971,7 +1123,7 @@ final class AppModel {
         case .speakerRequired:
             return "Pick a preset speaker for this model."
         case .languageProviderUnavailable:
-            return "This model's language provider isn't loaded yet."
+            return "The model is still loading — try again in a moment."
         case .referenceTooLong(_, let seconds, let maxSeconds):
             return String(
                 format: "This voice's reference clip is %.0fs and could not be trimmed "
@@ -993,17 +1145,38 @@ final class AppModel {
         }
     }
 
+    /// The LLM `/v1/chat/completions` falls back to when a request names no
+    /// model: the explicit Settings pick if it's on disk, else the Chat tab's
+    /// model if it's on disk, else nil (the route 503s with a clear message).
+    func resolvedServerDefaultLLM() -> LLMBackendID? {
+        if let explicit = LLMBackendID(rawValue: serverDefaultLLM),
+           downloads.state(for: explicit) == .ready {
+            return explicit
+        }
+        return downloads.state(for: chatLLM) == .ready ? chatLLM : nil
+    }
+
     /// Deps are immutable — rebuilt fresh by every caller so defaultLLM/
     /// defaultBackend stay current at start time.
     private func makeDependencies() -> APIDependencies {
         APIDependencies(
             engine: engine, voices: voices, defaultBackend: backend,
-            defaultLLM: downloads.state(for: chatLLM) == .ready ? chatLLM : nil,
+            defaultLLM: resolvedServerDefaultLLM(),
             log: apiLog,
             // Live reads (not captured values): the Settings pickers take
             // effect on the next request without rebuilding the server.
             defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
             defaultModel: { UserDefaults.standard.string(forKey: "serverDefaultModel") ?? "" },
+            // Only require a token while LAN mode is actually on — loopback-only
+            // stays no-auth. Live read so flipping the toggle applies without a
+            // server restart (the toggle already reschedules a sync on its own,
+            // but a stale server between the flip and the sync completing must
+            // not accept unauthenticated LAN traffic either).
+            authToken: {
+                UserDefaults.standard.bool(forKey: "serverLANEnabled")
+                    ? UserDefaults.standard.string(forKey: "serverAuthToken")
+                    : nil
+            },
             // Native SpeechKit STT, wired to the same engine the RECORD
             // button uses. Closures hop to the main actor on demand.
             transcribe: { [speech] wav, hint in
@@ -1022,11 +1195,20 @@ final class AppModel {
         if serverEnabled {
             await server?.stop()
             server = nil
-            server = LocalAPIServer(deps: makeDependencies())
-            try? await server?.start(port: serverPort)
+            let newServer = LocalAPIServer(deps: makeDependencies())
+            do {
+                try await newServer.start(port: serverPort,
+                                          host: serverLANEnabled ? "0.0.0.0" : "127.0.0.1")
+                server = newServer
+                serverError = nil
+            } catch {
+                server = nil
+                serverError = error.localizedDescription
+            }
         } else {
             await server?.stop()
             server = nil
+            serverError = nil
         }
     }
 
@@ -1035,8 +1217,15 @@ final class AppModel {
     /// settings entirely so a one-off headless `--port` never leaks into the
     /// next normal GUI launch.
     func startHeadlessServer(port: Int) async {
-        server = LocalAPIServer(deps: makeDependencies())
-        try? await server?.start(port: port)
+        let newServer = LocalAPIServer(deps: makeDependencies())
+        do {
+            try await newServer.start(port: port)
+            server = newServer
+            serverError = nil
+        } catch {
+            server = nil
+            serverError = error.localizedDescription
+        }
     }
 
     /// Stops the server for a clean process exit (SIGINT/SIGTERM in `--serve`).

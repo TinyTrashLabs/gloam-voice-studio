@@ -1,7 +1,13 @@
 # HTTP API Reference
 
 Enable the server in **Settings → API Server**. It binds to
-`http://127.0.0.1:8790` (port configurable), loopback only, no authentication.
+`http://127.0.0.1:8790` (port configurable), loopback by default, no
+authentication. **Allow other devices on this network** in the same settings
+pane rebinds to `0.0.0.0` so other machines can reach the API and MCP, and
+requires a bearer token: every route except `/health` needs an
+`Authorization: Bearer <token>` header carrying the token shown in Settings
+(generated once, the first time LAN mode is turned on), or the request gets
+`401 {"error": "unauthorized"}`. Loopback-only mode stays unauthenticated.
 Errors are FastAPI-shaped: `{"detail": "<message>"}` with an appropriate
 status. One generation runs at a time; excess requests queue (up to 3) and
 then get `503 server busy`.

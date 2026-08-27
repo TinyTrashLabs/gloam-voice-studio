@@ -25,9 +25,12 @@ let package = Package(
         // co-resident audio playback (gloam-dj #297; A/B'd 3/3 crackle → 3/3
         // clean). Tunable via qwenDecodeChunkTokens/qwenDecodePaceMs defaults
         // or MLX_AUDIO_QWEN_DECODE_* env; explicit paceMs=0 disables.
+        // Bumped 2026-08-25 to the custom-style-path merge (our #7): supertonic
+        // accepts an absolute {style_ttl, style_dp} .json path as `voice`, so
+        // .gvoice packs' baked supertonic renditions actually drive synthesis.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "e06c739479fabc2d8f44272c3e4dae59c91310cf"),
+            revision: "a987e6a517bcf29f474692967919df6c289c551d"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

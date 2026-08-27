@@ -145,7 +145,7 @@ struct CreateVoiceView: View {
     }
 
     private var designStateText: String {
-        if model.loadedBackend == .qwenDesign { return "resident" }
+        if model.loadedBackend == .qwenDesign { return "loaded" }
         switch model.downloads.state(for: .qwenDesign) {
         case .ready: return "on disk, not loaded"
         case .downloading(let f): return "downloading \(Int(f * 100))%"
@@ -275,8 +275,8 @@ struct CreateVoiceView: View {
 
     @ViewBuilder private func editContent(_ slug: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            header(title: "Edit Voice", subtitle: "Rename, refine the reference, and bake acted "
-                   + "emotion variants of this voice — the whole app uses them.")
+            header(title: "Edit Voice", subtitle: "Rename, refine the reference, and generate acted "
+                   + "emotion versions of this voice — the whole app uses them.")
             Spacer()
             docsHelpButton
             Button("Done") { model.editingVoiceSlug = nil }
@@ -304,8 +304,11 @@ struct CreateVoiceView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Button("Upload Photo…") { avatarImporter = true }
                     if model.voices.avatarURL(slug) != nil {
-                        Button("Remove") { try? model.voices.removeAvatar(slug); avatarVersion += 1 }
-                            .foregroundStyle(.red)
+                        Button("Remove") {
+                            do { try model.voices.removeAvatar(slug); avatarVersion += 1 }
+                            catch { editError = model.describeAny(error) }
+                        }
+                        .foregroundStyle(.red)
                     }
                 }.font(.caption)
             }
@@ -320,7 +323,8 @@ struct CreateVoiceView: View {
             defer { url.stopAccessingSecurityScopedResource() }
             guard let raw = try? Data(contentsOf: url),
                   let png = AvatarProcessor.makeAvatarPNG(from: raw) else { return }
-            try? model.voices.saveAvatar(slug, pngData: png); avatarVersion += 1
+            do { try model.voices.saveAvatar(slug, pngData: png); avatarVersion += 1 }
+            catch { editError = model.describeAny(error) }
         }
     }
 
@@ -418,11 +422,11 @@ struct CreateVoiceView: View {
                        ? "  · fish emotion markers (distinct)"
                        : "  · chatterbox intensity (fallback)")
                     .font(.caption2).foregroundStyle(Brand.fgFaint))
-            Text("Each is a `<voice>-<expression>` clip the whole app and API can use."
+            Text("Each becomes a voice-expression clip the whole app and API can use."
                  + (note ? " (These belong to the voice you last saved.)" : ""))
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if existing.isEmpty {
-                Text("No variants baked yet — add one below.")
+                Text("No emotion versions yet — add one below.")
                     .font(.caption).foregroundStyle(Brand.fgFaint)
             } else {
                 VStack(spacing: 0) {
@@ -433,15 +437,15 @@ struct CreateVoiceView: View {
                 }
             }
             if !unbaked.isEmpty {
-                Text("Bake a take").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
+                Text("Generate an emotion version").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
                 FlowLayout(spacing: 6) {
                     ForEach(unbaked, id: \.self) { expr in addVariantChip(expr, targetSlug: targetSlug) }
                 }
             }
             if !unrecorded.isEmpty {
-                Text("Record a take").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
-                Text("Read a guided script in character — the only way to get emotional "
-                     + "range on chatterbox-turbo (no emotion knob; the reference clip carries it).")
+                Text("Record an emotion version").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
+                Text("Fish gives distinct emotions (best quality); Chatterbox adjusts intensity "
+                     + "only (lighter fallback).")
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
                 FlowLayout(spacing: 6) {
@@ -492,6 +496,7 @@ struct CreateVoiceView: View {
             } label: { Image(systemName: "trash") }
                 .font(.caption).buttonStyle(.bordered)
                 .accessibilityIdentifier("variant-delete-\(suffix)")
+                .accessibilityLabel("Delete Variant")
         }
         .padding(.vertical, 6)
         .accessibilityIdentifier("variant-row-\(suffix)")
@@ -552,6 +557,7 @@ struct CreateVoiceView: View {
         .foregroundStyle(Brand.fgDim)
         .help("Open documentation")
         .accessibilityIdentifier("create-voice-docs-help")
+        .accessibilityLabel("Open Documentation")
     }
 
     private func errorText(_ text: String) -> some View {
@@ -600,6 +606,7 @@ private struct FoundryCandidateRow: View {
                     .buttonStyle(.plain).foregroundStyle(Brand.fgDim)
                     .help("Show the prompt that made this candidate")
                     .accessibilityIdentifier("foundry-info-toggle")
+                    .accessibilityLabel("Candidate Details")
                     Button("Save as Voice…", action: onSave)
                         .buttonStyle(.borderedProminent).accessibilityIdentifier("foundry-save")
                 }

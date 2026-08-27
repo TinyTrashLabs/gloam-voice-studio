@@ -47,8 +47,10 @@ struct VoiceEditorForm: View {
                             .accessibilityIdentifier("avatar-upload")
                         if let slug = editingSlug, model.voices.avatarURL(slug) != nil {
                             Button("Remove") {
-                                try? model.voices.removeAvatar(slug)
-                                avatarVersion += 1
+                                do {
+                                    try model.voices.removeAvatar(slug)
+                                    avatarVersion += 1
+                                } catch { self.error = model.describeAny(error) }
                             }
                             .foregroundStyle(.red)
                             .accessibilityIdentifier("avatar-remove")
@@ -97,6 +99,7 @@ struct VoiceEditorForm: View {
                                 }
                                 .buttonStyle(.plain)
                                 .help("Remove this clip")
+                                .accessibilityLabel("Remove Clip")
                             }
                         }
                         if refClips.count > 1 {
@@ -156,8 +159,10 @@ struct VoiceEditorForm: View {
             defer { url.stopAccessingSecurityScopedResource() }
             guard let raw = try? Data(contentsOf: url),
                   let png = AvatarProcessor.makeAvatarPNG(from: raw) else { return }
-            try? model.voices.saveAvatar(slug, pngData: png)
-            avatarVersion += 1
+            do {
+                try model.voices.saveAvatar(slug, pngData: png)
+                avatarVersion += 1
+            } catch { self.error = model.describeAny(error) }
         }
     }
 
@@ -209,7 +214,7 @@ struct VoiceEditorForm: View {
                         let data = try Data(contentsOf: url)
                         error = nil
                         addClip(data, label: url.lastPathComponent)
-                    } catch { self.error = "\(error)" }
+                    } catch { self.error = model.describeAny(error) }
                 }
             }
         }
@@ -245,7 +250,7 @@ struct VoiceEditorForm: View {
             }
         } catch StudioError.voiceExists(let slug) {
             error = "A voice named '\(slug)' already exists."
-        } catch { self.error = "\(error)" }
+        } catch { self.error = model.describeAny(error) }
     }
 }
 

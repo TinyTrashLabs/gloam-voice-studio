@@ -34,10 +34,17 @@ public enum APIRouter {
         // `.oneOf` is exact-match, so `*.gloam.fm` subdomains aren't covered.
         router.add(middleware: CORSMiddleware(
             allowOrigin: .oneOf("https://gloam.fm", "https://gloam-app.pages.dev"),
-            allowHeaders: [.contentType],
+            allowHeaders: [.contentType, .authorization],
             allowMethods: [.get, .post, .patch, .delete, .options]))
 
         router.add(middleware: APILogMiddleware(log: deps.log))
+
+        // Bearer-token auth for the LAN-exposed server. `authToken()` is a live
+        // read (nil while loopback-only, non-nil once the app turns LAN mode
+        // on) — same closure idiom as `defaultVoice`. Every route requires it
+        // except `/health`, which stays open so a LAN health check needs no
+        // credential.
+        router.add(middleware: APIAuthMiddleware(authToken: deps.authToken))
 
         // MCP: agents (Claude Code, Cursor, …) get list_voices + speak at /mcp.
         MCPRoute.add(to: router, deps: deps)
@@ -54,7 +61,9 @@ public enum APIRouter {
         }
 
         router.get("voices") { _, _ in
-            VoicesResponse(voices: deps.voices.list())
+            VoicesResponse(voices: deps.voices.list().map {
+                APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug))
+            })
         }
 
         router.post("voices") { request, context in
@@ -253,6 +262,16 @@ public enum APIRouter {
             var usedVariant = false
             let defaultVoice = deps.defaultVoice()
             let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            // Baked engine rendition: a pack carrying assets for THIS backend
+            // (e.g. Billie Frost's engines/supertonic/style.json) renders that
+            // voice instead of a house preset. Variant rendition first, then
+            // the voice's own (renditionStyleURL also walks variantOf → base).
+            let styleURL: URL? = effectiveVoice.flatMap { voice in
+                let emo = req.emotion?.lowercased()
+                let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
+                return variant.flatMap { deps.voices.renditionStyleURL($0, engine: backend.rawValue) }
+                    ?? deps.voices.renditionStyleURL(voice, engine: backend.rawValue)
+            }
             // Preset-speaker backends (kokoro/supertonic/qwen-custom) and
             // instruct-only ones (qwen-design) have `voiceClone == .none`: their
             // `voice` field is not a library slug at all, so an unknown one keeps
@@ -323,7 +342,8 @@ public enum APIRouter {
                                     temperatureOverride: req.temperature,
                                     exaggerationOverride: req.exaggeration,
                                     exaggerationCeiling: req.exaggeration_ceiling,
-                                    instruct: req.instruct, speaker: effectiveSpeaker, language: req.language,
+                                    instruct: req.instruct, speaker: effectiveSpeaker,
+                                    styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                         }
                     }.value
@@ -400,6 +420,30 @@ public enum APIRouter {
                 throw APIError(status: .badRequest, detail: message)
             }
         }
+    }
+}
+
+/// Requires `Authorization: Bearer <token>` on every route except `/health`
+/// when `authToken()` is non-nil (LAN mode). Loopback-only mode leaves
+/// `authToken` at its `{ nil }` default, so nothing changes there. Full-string
+/// `==` only — no prefix matching.
+struct APIAuthMiddleware<Context: RequestContext>: RouterMiddleware {
+    let authToken: @Sendable () -> String?
+    func handle(_ request: Request, context: Context,
+                next: (Request, Context) async throws -> Response) async throws -> Response {
+        guard let token = authToken(), request.uri.path != "/health" else {
+            return try await next(request, context)
+        }
+        guard let header = request.headers[.authorization],
+              header == "Bearer \(token)" else {
+            let body = try JSONEncoder().encode(["error": "unauthorized"])
+            var headers = HTTPFields()
+            headers[.contentType] = "application/json"
+            headers[.contentLength] = String(body.count)
+            return Response(status: .unauthorized, headers: headers,
+                            body: .init(byteBuffer: ByteBuffer(data: body)))
+        }
+        return try await next(request, context)
     }
 }
 

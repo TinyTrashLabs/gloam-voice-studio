@@ -373,12 +373,13 @@ extension BackendID {
                         minRAMBytes: 8_000_000_000)
         case .pocketTTS:
             // "kyutai/pocket-tts" is the upstream source of truth (PyTorch,
-            // CC-BY-4.0) but NOT what runs here: the runnable artifacts are the
-            // sherpa-onnx export tarball + the sherpa-onnx dylib, both GitHub
-            // releases, fetched by scripts/fetch-pocket-tts.sh into a local
-            // model dir (~250MB int8). No HF-snapshot download path — like
-            // LuxTTS, the provider requires a resolver-supplied local dir.
-            BackendSpec(modelRepo: "kyutai/pocket-tts",
+            // CC-BY-4.0) but NOT what runs here: the runnable artifacts are a
+            // sherpa-onnx int8 export, mirrored to this public HF repo so the
+            // standard HF-snapshot downloader (like every other backend) can
+            // fetch the weights (~210MB int8). The sherpa-onnx dylib itself is
+            // bundled inside the app (see PocketTTS.bundledLibraryURL), not
+            // downloaded here.
+            BackendSpec(modelRepo: "csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 2_000_000_000)

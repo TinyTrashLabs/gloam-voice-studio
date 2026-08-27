@@ -14,7 +14,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            BackendsSettings().tabItem { Label("Backends", systemImage: "cpu") }
+            BackendsSettings().tabItem { Label("Models", systemImage: "cpu") }
                 .tag(SettingsTab.backends.rawValue)
             SpeechSettings().tabItem { Label("Speech", systemImage: "waveform.and.mic") }
                 .tag(SettingsTab.speech.rawValue)
@@ -27,6 +27,12 @@ struct SettingsView: View {
         }
         .frame(width: 560)
         .padding(20)
+        .onAppear {
+            // Migrate the removed "console" tab tag (dropped when the API
+            // console was folded into the API Server tab) so a stale
+            // persisted value doesn't select a nonexistent tab.
+            if tab == "console" { tab = SettingsTab.api.rawValue }
+        }
     }
 }
 
@@ -55,7 +61,7 @@ struct BackendsSettings: View {
 
     private let backends: [BackendID] =
         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro, .supertonic, .luxTTS]
+         .kokoro, .supertonic, .luxTTS, .pocketTTS]
 
     var body: some View {
         @Bindable var model = model
@@ -69,12 +75,12 @@ struct BackendsSettings: View {
                         .disabled(!model.hasSufficientRAM(for: backend))
                 }
             }
-            Section("Models") {
+            Section("Downloads") {
                 ForEach(backends, id: \.self) { backend in
                     backendRow(backend)
                 }
                 Toggle("Keep models loaded under memory pressure", isOn: $model.keepModelsResident)
-                    .help("Stay resident through memory-pressure warnings so chat and "
+                    .help("Stay loaded through memory-pressure warnings so chat and "
                           + "voice replies never cold-start; models are still released "
                           + "when pressure turns critical. Turn off to free memory eagerly.")
             }
@@ -194,14 +200,86 @@ struct LicenseSheet: View {
 
 struct ServerSettings: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage("docsPage") private var docsPage = DocsWindow.Page.guide.rawValue
 
     var body: some View {
         @Bindable var model = model
         Form {
-            Toggle("Enable local API server", isOn: $model.serverEnabled)
-                .accessibilityIdentifier("server-toggle")
-            TextField("Port", value: $model.serverPort, format: .number.grouping(.never))
-                .disabled(model.serverEnabled)
+            Section("Server") {
+                Text("Optional: let other apps and AI agents on this Mac use your voices.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Enable local API server", isOn: $model.serverEnabled)
+                    .accessibilityIdentifier("server-toggle")
+                // An obvious, bordered box (the borderless form field read as
+                // a static label), with the applied address echoed below — the
+                // URL updating IS the save confirmation.
+                HStack {
+                    Text("Port")
+                    Spacer()
+                    TextField("Port", value: $model.serverPort,
+                              format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                        .labelsHidden()
+                        .help("Press Return to apply — the server rebinds and the "
+                              + "address below updates")
+                        .onChange(of: model.serverPort) {
+                            let clamped = min(max(model.serverPort, 1024), 65_535)
+                            if clamped != model.serverPort { model.serverPort = clamped }
+                        }
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: "circle.fill").font(.system(size: 7))
+                        .foregroundStyle(model.serverError != nil ? Color.red
+                                         : model.serverEnabled ? Color.green : Color.secondary)
+                        .accessibilityHidden(true)
+                    Text(model.serverError.map {
+                            "Couldn't start on port \(model.serverPort): \($0)"
+                         } ?? (model.serverEnabled
+                         ? "Serving at http://127.0.0.1:\(model.serverPort)"
+                           + (model.serverLANEnabled ? " — and to this network" : "")
+                         : "Server off"))
+                        .font(.caption)
+                        .foregroundStyle(model.serverError != nil ? Color.red : Color.secondary)
+                        .contentTransition(.identity)
+                }
+                .accessibilityIdentifier("server-status-line")
+                .accessibilityElement(children: .combine)
+                Toggle("Allow other devices on this network", isOn: $model.serverLANEnabled)
+                    .accessibilityIdentifier("server-lan-toggle")
+                if model.serverLANEnabled {
+                    Text("⚠️ Anyone on this network with this token can use your voices, "
+                         + "the chat model, and the microphone listen tool. Reachable at "
+                         + "http://\(ProcessInfo.processInfo.hostName):\(model.serverPort)")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    // Defense in depth: AppModel.init self-heals an empty token
+                    // whenever LAN mode is already on, so this should be
+                    // unreachable — but never render a blank Copy target.
+                    if !model.serverAuthToken.isEmpty {
+                        HStack {
+                            Text(verbatim: model.serverAuthToken)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("server-auth-token")
+                            Spacer()
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(model.serverAuthToken, forType: .string)
+                            }
+                            .accessibilityIdentifier("copy-server-auth-token")
+                            .accessibilityLabel("Copy Server Token")
+                            .help("Copy the bearer token")
+                        }
+                    }
+                    Text("Other devices must send this token as a Bearer authorization header.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 // Live settings — not disabled while the server runs, unlike
                 // Port: the router reads them fresh on every request, so
@@ -218,7 +296,7 @@ struct ServerSettings: View {
                 }
                 .accessibilityIdentifier("server-default-model-picker")
                 Picker("Default voice", selection: $model.serverDefaultVoice) {
-                    Text("Backend voice (no reference)").tag("")
+                    Text("Model's built-in voice").tag("")
                     ForEach(defaultVoiceLibrary, id: \.slug) { voice in
                         Text(voice.name).tag(voice.slug)
                     }
@@ -227,32 +305,127 @@ struct ServerSettings: View {
                 Text("Answer API requests that don't name a model or voice.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section {
-                Text("Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
-                Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            Section("Request console") {
-                if model.apiLog.entries.isEmpty {
-                    Text("No requests yet.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Button("Clear") { model.apiLog.clear() }
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(model.apiLog.entries) { e in
-                                Text(consoleLine(e))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(e.status >= 400 ? .orange : Brand.fgDim)
-                                    .textSelection(.enabled)
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+            Section("Chat models (LLM)") {
+                Picker("Default chat model", selection: $model.serverDefaultLLM) {
+                    Text("Follow Chat tab (\(model.chatLLM.rawValue))").tag("")
+                    ForEach(LLMBackendID.allCases, id: \.rawValue) { llm in
+                        Text(model.hasSufficientRAM(for: llm)
+                             ? llm.rawValue
+                             : "\(llm.rawValue) (\(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes)))")
+                            .tag(llm.rawValue)
+                            .disabled(!model.hasSufficientRAM(for: llm))
                     }
-                    .frame(height: 180)
+                }
+                .accessibilityIdentifier("server-default-llm-picker")
+                Text("Answers /v1/chat/completions requests that don't name a model. Requests can also name any downloaded model directly.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(LLMBackendID.allCases, id: \.self) { llm in
+                    llmRow(llm)
+                }
+            }
+            Section {
+                DisclosureGroup("For developers") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("An MCP server is mounted at /mcp whenever the API server is on — "
+                             + "Claude Code, Cursor, and other MCP agents can browse your voices, "
+                             + "speak in them, and transcribe audio.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        let addCommand = "claude mcp add --transport http gloam "
+                            + "http://127.0.0.1:\(model.serverPort)/mcp"
+                        HStack {
+                            Text(verbatim: addCommand)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(addCommand, forType: .string)
+                            }
+                            .accessibilityIdentifier("copy-mcp-command")
+                            .accessibilityLabel("Copy MCP Connect Command")
+                            .help("Copy the Claude Code connect command")
+                        }
+                        Button("MCP docs — tools & other clients") {
+                            docsPage = DocsWindow.Page.mcp.rawValue
+                            openWindow(id: "docs")
+                        }
+                        .buttonStyle(.link).font(.caption)
+                        Text(model.serverLANEnabled
+                             ? "Bound to all interfaces (0.0.0.0) — OpenAI-compatible. Try:"
+                             : "Loopback only (127.0.0.1) — OpenAI-compatible. Try:")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(verbatim: "curl -s http://127.0.0.1:\(model.serverPort)/health")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            Section {
+                DisclosureGroup("Request log") {
+                    ConsoleLog()
+                        .padding(.top, 4)
                 }
             }
         }
         .formStyle(.grouped)
+        .onAppear { model.downloads.refresh() }
+        .task { await model.refreshEngineStatus() }
+    }
+
+    /// Download/loaded state row for one chat LLM — mirrors the Backends tab's
+    /// model rows so the API-server tab is a complete picture of what
+    /// /v1/chat/completions can serve.
+    @ViewBuilder
+    private func llmRow(_ llm: LLMBackendID) -> some View {
+        let state = model.downloads.state(for: llm)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(llm.rawValue)
+                Text("≈ " + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
+                                                      countStyle: .file))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !model.hasSufficientRAM(for: llm) {
+                Text(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes).capitalized)
+                    .foregroundStyle(.red)
+                    .help("This Mac's RAM is below what \(llm.rawValue) needs to run safely.")
+                if state != .notDownloaded {
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                }
+            } else {
+                switch state {
+                case .notDownloaded:
+                    Button("Download") { model.downloads.download(llm) }
+                        .help("Download this model to your Mac")
+                case .downloading(let fraction):
+                    ProgressView(value: fraction).frame(width: 120)
+                    Text(String(format: "%.0f%%", fraction * 100))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { model.downloads.cancelDownload(llm) }
+                        .help("Cancel the download")
+                case .ready:
+                    if model.loadedLLM == llm {
+                        Text("Loaded").foregroundStyle(.green)
+                            .help("Resident in memory — answering requests with no load delay")
+                        Button("Unload") { Task { await model.unloadChatLLM() } }
+                            .help("Release this model from memory")
+                    } else {
+                        Text("On disk").foregroundStyle(.secondary)
+                            .help("Downloaded — loads into memory on the first request")
+                    }
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                case .failed(let message):
+                    Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
+                    Button("Retry") { model.downloads.download(llm) }
+                        .help("Retry the download")
+                }
+            }
+        }
     }
 
     /// Same curated order as `ModelSettings.backends`. qwen3-design is offered
@@ -268,6 +441,44 @@ struct ServerSettings: View {
     private var defaultVoiceLibrary: [VoiceMeta] {
         _ = model.voicesVersion
         return model.voices.list()
+    }
+
+}
+
+/// API request log — folded under the API Server tab's "Request log" disclosure
+/// so the developer-facing surface stays out of the way until opened.
+struct ConsoleLog: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(model.serverEnabled
+                     ? "Requests to http://127.0.0.1:\(model.serverPort)"
+                     : "API server is off.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { model.apiLog.clear() }
+                    .disabled(model.apiLog.entries.isEmpty)
+            }
+            if model.apiLog.entries.isEmpty {
+                Text("No requests yet.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(model.apiLog.entries) { e in
+                            Text(consoleLine(e))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(e.status >= 400 ? .orange : Brand.fgDim)
+                                .textSelection(.enabled)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+            }
+        }
     }
 
     private func consoleLine(_ e: APILogEntry) -> String {

@@ -29,6 +29,7 @@ struct DictationButton: View {
             }
             .help(controller.isActive ? "Stop dictation" : "Dictate")
             .accessibilityIdentifier("dictate")
+            .accessibilityLabel(controller.isActive ? "Stop Dictation" : "Dictate")
             if controller.isProcessing {
                 ProgressView().controlSize(.mini)
                     .help("Transcribing…")
