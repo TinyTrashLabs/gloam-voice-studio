@@ -549,7 +549,9 @@ struct RAMChip: View {
         // model. Shows the resident model + app RAM at a glance.
         HStack(spacing: 5) {
             Image(systemName: "memorychip").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
-            if let loaded = model.loadedBackend {
+            // The resident TTS model lives in either the main engine or the
+            // parallel chat-speech engine (TTSResidencyPolicy keeps it to one).
+            if let loaded = model.loadedBackend ?? model.loadedChatTTS {
                 Text(loaded.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
                     .lineLimit(1).fixedSize()
             }
@@ -576,7 +578,7 @@ struct RAMChip: View {
     /// showing just the memorychip glyph + GB figure in that state.
     private var ramAccessibilityLabel: String {
         var parts: [String] = []
-        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) voice model loaded") }
+        if let tts = model.loadedBackend ?? model.loadedChatTTS { parts.append("\(tts.rawValue) voice model loaded") }
         if let llm = model.loadedLLM { parts.append("\(llm.rawValue) chat model loaded") }
         if parts.isEmpty { parts.append("No model loaded") }
         parts.append(String(format: "%.1f gigabytes of app memory", model.memGB))
@@ -585,7 +587,7 @@ struct RAMChip: View {
 
     private var ramHelp: String {
         var parts: [String] = []
-        if let tts = model.loadedBackend { parts.append("\(tts.rawValue) (voice) loaded") }
+        if let tts = model.loadedBackend ?? model.loadedChatTTS { parts.append("\(tts.rawValue) (voice) loaded") }
         if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) loaded") }
         if parts.isEmpty { parts.append("no model loaded") }
         parts.append(String(format: "%.2f GB app memory", model.memGB))

@@ -74,6 +74,7 @@ final class AppModel {
     /// Second engine holding only the chat voice: TTS here overlaps the main
     /// engine's LLM decode instead of interleaving with it. See init.
     let chatSpeechEngine: GloamEngine
+    let ttsResidency: TTSResidencyPolicy
     let downloads: ModelDownloadManager
     let speech: SpeechManager
     /// One-shot mic→transcript capture backing the local API's `listen` tool.
@@ -328,6 +329,10 @@ final class AppModel {
 
     // Engine residency (mirrored from the engine actor for the toolbar UI)
     var loadedBackend: BackendID?
+    /// TTS model resident in the parallel chat-speech engine. Under
+    /// `ttsResidency` at most one of this and `loadedBackend` is non-nil in
+    /// steady state; the RAM chip shows whichever is.
+    var loadedChatTTS: BackendID?
     var loadedLLM: LLMBackendID?
     var memGB: Double = 0
     var modelOpInFlight = false
@@ -580,6 +585,11 @@ final class AppModel {
             chatSpeechEngine = GloamEngine(
                 provider: MLXModelProvider(modelPathResolver: ttsResolver))
         }
+        // One TTS model resident across BOTH engines: the two engines exist
+        // for concurrency (TTS overlapping LLM decode), not so two models can
+        // sit in memory — each engine has its own provider, so without this a
+        // Studio backend + chat voice would hold two full weight sets.
+        ttsResidency = TTSResidencyPolicy(engines: [engine, chatSpeechEngine])
         if !ackedLicenses.isEmpty {
             let engine = engine
             let acks = ackedLicenses
@@ -823,6 +833,7 @@ final class AppModel {
 
     func refreshEngineStatus() async {
         loadedBackend = await engine.loadedBackend()
+        loadedChatTTS = await chatSpeechEngine.loadedBackend()
         loadedLLM = await engine.loadedLLM()
         memGB = MemoryFootprint.currentGB()
     }
@@ -842,6 +853,7 @@ final class AppModel {
         modelOpInFlight = true
         loadingBackend = backend
         defer { modelOpInFlight = false; loadingBackend = nil }
+        await ttsResidency.willUse(engine)
         do { try await engine.preload(backend: backend) }
         catch { generationError = describeAny(error) }
         await refreshEngineStatus()
@@ -952,6 +964,9 @@ final class AppModel {
             guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
             tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
             returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil)
+        // Must precede queuing work on `engine` (see TTSResidencyPolicy's
+        // deadlock-safety contract).
+        await ttsResidency.willUse(engine)
         let raw = interleaved
             ? try await engine.synthesizeInterleaved(backend: backend, request: request)
             : try await engine.synthesize(backend: backend, request: request)
@@ -1006,6 +1021,7 @@ final class AppModel {
             let request = SynthesisRequest(
                 text: line, emotion: .neutral, instruct: instruct,
                 language: foundryLanguage == "auto" ? nil : foundryLanguage)
+            await ttsResidency.willUse(engine)
             let raw = try await engine.synthesize(backend: designBackend, request: request)
             let samples = AudioAssembler.normalizePeak(floats: raw.samples)
             let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
@@ -1087,6 +1103,7 @@ final class AppModel {
                     : SynthesisRequest(text: text, refAudioPath: refURL.path,
                                        refText: baseRefText,
                                        exaggerationOverride: expr.chatterboxExaggeration)
+                await ttsResidency.willUse(engine)
                 let raw = try await engine.synthesize(backend: baker, request: request)
                 let samples = AudioAssembler.normalizePeak(floats: raw.samples)
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
