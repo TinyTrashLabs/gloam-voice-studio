@@ -44,6 +44,14 @@ This:
 
 Takes ~5–8 minutes, mostly the archive step and the notarization wait.
 
+`build_notarized` also installs the stapled .app into `/Applications`,
+replacing any existing copy — Developer ID + stapled ticket launches
+directly, unlike the MAS build from `build_pkg` (whose App Store profile
+is rejected locally with launchd error 163). Quit and relaunch the app
+after a build to pick it up. This step lives only in this machine's
+gitignored Fastfile — mirror it into the marketplace template when
+porting.
+
 ## Verify the output is actually Gatekeeper-clean
 
 Don't trust "no error" — confirm Apple's own gatekeeper accepts it:
