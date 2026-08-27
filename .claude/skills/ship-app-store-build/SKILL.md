@@ -36,15 +36,12 @@ Infisical (reads `macos.infisical.*` from `app-build.config.json`), then runs
 the project's real entitlements → productbuild `.pkg`) + `upload` (`xcrun
 altool --upload-app`). Takes several minutes, mostly the archive step.
 
-`build_pkg` also installs the freshly built (signed) .app into
-`/Applications`, replacing any existing copy, so the local install always
-matches the build uploaded to App Store Connect / TestFlight. If the app is
-running during a ship, quit and relaunch it afterwards to pick up the new
-build. Note the copy is App Store distribution-signed — if macOS refuses to
-launch it locally, that's the signing, not a broken build; use the
-`run-app` skill for a locally runnable Debug build. This step (like the
-nested-dylib signing) lives only in this machine's gitignored Fastfile —
-mirror it into the marketplace template when porting.
+Note: the MAS build cannot launch outside the App Store/TestFlight — its
+"Mac App Store" provisioning profile is rejected at spawn (launchd error
+163; verified 2026-08-26). The install-to-/Applications step therefore
+lives on `build_notarized` (see the `release-notarized` skill), whose
+Developer ID + stapled output launches directly. To run the MAS build
+itself, install it via TestFlight.
 
 As of the 2026-07-09 fix to `infisical-macos-signing.sh` (two real bugs —
 `ASC_KEY_PATH` pointing at a file its own cleanup trap deleted before
