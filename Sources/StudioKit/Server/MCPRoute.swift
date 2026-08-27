@@ -180,7 +180,8 @@ enum MCPRoute {
                 .flatMap(Emotion.init(rawValue:)) ?? .neutral
             do {
                 let result = try await deps.gate.run {
-                    try await deps.engine.synthesize(
+                    await deps.prepareTTS()
+                    return try await deps.engine.synthesize(
                         backend: backend,
                         request: SynthesisRequest(
                             text: text, refAudioPath: refPath, refText: refText,

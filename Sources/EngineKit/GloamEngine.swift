@@ -63,6 +63,30 @@ public actor GloamEngine {
         provider.didEvictModel()
     }
 
+    /// Evicts the resident TTS model as soon as no TTS work is executing —
+    /// without waiting for the rest of the task tail. `quiesce()` drains
+    /// EVERYTHING, including an active chat stream whose task parks on `tail`
+    /// for the whole LLM reply; TTS eviction must not wait on that (it is
+    /// exactly what a cross-engine residency hand-off does mid-stream).
+    public func evictTTSWhenIdle() async {
+        while ttsBusy {
+            await withCheckedContinuation { ttsIdleWaiters.append($0) }
+        }
+        unload()
+    }
+
+    /// True while a TTS load or generation is executing (`performSynthesis`,
+    /// including its implicit model load). LLM work never sets this.
+    private var ttsBusy = false
+    private var ttsIdleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func ttsWorkEnded() {
+        ttsBusy = false
+        let waiters = ttsIdleWaiters
+        ttsIdleWaiters.removeAll()
+        for w in waiters { w.resume() }
+    }
+
     public func loadedLLM() -> LLMBackendID? { residentLLM?.backend }
 
     /// Evicts the resident language model and releases accelerator memory.
@@ -199,6 +223,8 @@ public actor GloamEngine {
         let previous = tail
         let work = Task<Void, Error>(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
+            self.ttsBusy = true
+            defer { self.ttsWorkEnded() }
             _ = try await self.residentModel(for: backend)
         }
         tail = Task { _ = try? await work.value }
@@ -232,6 +258,8 @@ public actor GloamEngine {
         if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
             throw EngineError.licenseAckRequired(backend)
         }
+        ttsBusy = true
+        defer { ttsWorkEnded() }
         let plan = try RequestPlanner.plan(backend: backend, request: request)
         let model = try await self.residentModel(for: backend)
         let start = Date()

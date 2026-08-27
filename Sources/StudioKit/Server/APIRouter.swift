@@ -333,7 +333,8 @@ public enum APIRouter {
                     // mid-song on the gloam.fm shell).
                     result = try await Task(priority: GloamEngine.modelWorkPriority) {
                         try await deps.gate.run {
-                            try await deps.engine.synthesize(
+                            await deps.prepareTTS()
+                            return try await deps.engine.synthesize(
                                 backend: backend,
                                 request: SynthesisRequest(
                                     text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
