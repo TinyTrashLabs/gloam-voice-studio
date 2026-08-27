@@ -333,6 +333,9 @@ final class AppModel {
     /// `ttsResidency` at most one of this and `loadedBackend` is non-nil in
     /// steady state; the RAM chip shows whichever is.
     var loadedChatTTS: BackendID?
+    /// The single resident TTS model, whichever engine holds it — what the
+    /// RAM chip (label, help, VoiceOver) displays.
+    var residentTTS: BackendID? { loadedBackend ?? loadedChatTTS }
     var loadedLLM: LLMBackendID?
     var memGB: Double = 0
     var modelOpInFlight = false
@@ -1205,6 +1208,11 @@ final class AppModel {
             listen: { [speech, listenService] maxSeconds, silenceSeconds, language in
                 try await listenService.listen(speech: speech, maxSeconds: maxSeconds,
                                                silenceSeconds: silenceSeconds, language: language)
+            },
+            // Server synthesis renders on the main engine — hand off TTS
+            // residency exactly like the in-app render paths do.
+            prepareTTS: { [ttsResidency, engine] in
+                await ttsResidency.willUse(engine)
             })
     }
 
@@ -1270,10 +1278,11 @@ final class AppModel {
             AppLog.memory.log("evicting resident models (pressure)")
             let engine = self.engine
             let chatSpeechEngine = self.chatSpeechEngine
-            Task {
+            Task { @MainActor [weak self] in
                 await engine.unload()
                 await engine.unloadLLM()
                 await chatSpeechEngine.unload()
+                await self?.refreshEngineStatus()   // RAM chip must drop the names
             }
         }
         source.resume()

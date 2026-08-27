@@ -6,29 +6,38 @@ import Foundation
 /// coordinates residency BETWEEN engines, so an app running a main engine and
 /// a parallel chat-speech engine can end up with two full model copies in
 /// memory. Callers invoke `willUse(_:)` before queuing render work on an
-/// engine; every OTHER engine is quiesced (in-flight work drains) and evicted.
+/// engine; every OTHER engine's TTS model is evicted.
 ///
-/// Deadlock safety: `willUse` must be called BEFORE the caller queues its own
-/// work on the target engine — an engine's task tail therefore never contains
-/// work that is itself waiting on this actor, so quiescing a peer from here
-/// cannot wait on ourselves. Concurrent first-use of two engines can leave a
-/// brief two-resident window (both loads already queued); the next `willUse`
-/// restores the single-resident steady state.
+/// Eviction is TTS-scoped (`evictTTSWhenIdle`), NOT a full `quiesce()`: an
+/// active chat stream parks its whole task on the peer's tail for the entire
+/// LLM reply, and waiting on that would stall the first spoken sentence until
+/// generation finished — defeating the parallel-speech engine's purpose.
+///
+/// Whole `willUse` invocations are serialized through a task chain so actor
+/// reentrancy can't interleave two hand-offs (evicting an engine after its
+/// caller already re-queued work). Deadlock safety: `willUse` must be called
+/// BEFORE the caller queues its own work on the target engine, and
+/// `evictTTSWhenIdle` waits only on in-flight TTS work — which never waits on
+/// this actor — so the chain always drains.
 public actor TTSResidencyPolicy {
     private let engines: [GloamEngine]
+    private var tail: Task<Void, Never>?
 
     public init(engines: [GloamEngine]) {
         self.engines = engines
     }
 
-    /// Evict the TTS model from every engine except `engine`, waiting for
-    /// each peer's queued work to drain first so nothing is evicted
-    /// mid-generation.
+    /// Evict the TTS model from every engine except `engine`, waiting for any
+    /// in-flight TTS generation on each peer so nothing is evicted mid-render.
     public func willUse(_ engine: GloamEngine) async {
-        for other in engines where other !== engine {
-            guard await other.loadedBackend() != nil else { continue }
-            await other.quiesce()
-            await other.unload()
+        let previous = tail
+        let work = Task { [engines] in
+            await previous?.value
+            for other in engines where other !== engine {
+                await other.evictTTSWhenIdle()
+            }
         }
+        tail = work
+        await work.value
     }
 }

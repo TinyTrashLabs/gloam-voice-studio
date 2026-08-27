@@ -185,6 +185,11 @@ public struct APIDependencies: Sendable {
     /// Defaults to unavailable.
     public let listen: @Sendable (_ maxSeconds: Double, _ silenceSeconds: Double,
                                   _ language: String?) async throws -> String
+    /// Runs before any route synthesizes on `engine`. The app supplies its
+    /// TTS residency hand-off here (one resident model across engines) —
+    /// server-triggered synthesis must honor the same invariant as in-app
+    /// renders. Defaults to a no-op.
+    public let prepareTTS: @Sendable () async -> Void
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
@@ -196,7 +201,8 @@ public struct APIDependencies: Sendable {
                 transcribe: @escaping @Sendable (Data, String?) async throws -> String
                     = { _, _ in throw STTUnavailable() },
                 listen: @escaping @Sendable (Double, Double, String?) async throws -> String
-                    = { _, _, _ in throw STTUnavailable() }) {
+                    = { _, _, _ in throw STTUnavailable() },
+                prepareTTS: @escaping @Sendable () async -> Void = {}) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
@@ -208,6 +214,7 @@ public struct APIDependencies: Sendable {
         self.authToken = authToken
         self.transcribe = transcribe
         self.listen = listen
+        self.prepareTTS = prepareTTS
     }
 }
 
