@@ -259,7 +259,18 @@ public struct VoiceLibrary: Sendable {
                 .appendingPathComponent(try GVoice.safeComponent(engine))
             try FileManager.default.createDirectory(at: engineDir, withIntermediateDirectories: true)
             for (filename, blob) in files {
-                try blob.write(to: engineDir.appendingPathComponent(try GVoice.safeComponent(filename)))
+                // An engine's REFERENCE audio meets the same standard as the
+                // top-level one. The LuxTTS lane writes a derived window here
+                // (engines/lux-tts/ref.wav, a trimmed span of source/ref.wav) and
+                // renders the clone from THAT file — so levelling only the
+                // top-level ref would leave the asset that actually matters at
+                // whatever level it happened to be cut at. Everything else in an
+                // engine folder (style embeddings, voice.json) passes through:
+                // RefLoudness only touches WAV it recognises, so this is safe to
+                // apply by name.
+                let safe = try GVoice.safeComponent(filename)
+                let data = safe.hasSuffix(".wav") ? RefLoudness.normalized(wav: blob) : blob
+                try data.write(to: engineDir.appendingPathComponent(safe))
             }
         }
     }

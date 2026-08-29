@@ -25,17 +25,29 @@ public enum RefLoudness {
     public static func normalized(wav: Data,
                                   targetDbFS: Float = AudioAssembler.referenceLoudnessDbFS,
                                   peakCeilingDbFS: Float = AudioAssembler.referencePeakCeilingDbFS) -> Data {
-        guard let chunk = pcm16DataChunk(in: wav) else { return wav }
-        let count = chunk.length / 2
+        guard let chunk = dataChunk(in: wav) else { return wav }
+        let bytesPerSample = chunk.format == .pcm16 ? 2 : 4
+        let count = chunk.length / bytesPerSample
         guard count > 0 else { return wav }
 
         var samples = [Float](repeating: 0, count: count)
         wav.withUnsafeBytes { raw in
             let base = raw.baseAddress!.advanced(by: chunk.offset)
-            for i in 0..<count {
-                let lo = UInt16(base.load(fromByteOffset: i * 2, as: UInt8.self))
-                let hi = UInt16(base.load(fromByteOffset: i * 2 + 1, as: UInt8.self))
-                samples[i] = Float(Int16(bitPattern: lo | (hi << 8))) / 32768
+            switch chunk.format {
+            case .pcm16:
+                for i in 0..<count {
+                    let lo = UInt16(base.load(fromByteOffset: i * 2, as: UInt8.self))
+                    let hi = UInt16(base.load(fromByteOffset: i * 2 + 1, as: UInt8.self))
+                    samples[i] = Float(Int16(bitPattern: lo | (hi << 8))) / 32768
+                }
+            case .float32:
+                for i in 0..<count {
+                    var bits: UInt32 = 0
+                    for b in 0..<4 {
+                        bits |= UInt32(base.load(fromByteOffset: i * 4 + b, as: UInt8.self)) << (8 * UInt32(b))
+                    }
+                    samples[i] = Float(bitPattern: bits)
+                }
             }
         }
 
@@ -49,24 +61,48 @@ public enum RefLoudness {
         var out = wav
         out.withUnsafeMutableBytes { raw in
             let base = raw.baseAddress!.advanced(by: chunk.offset)
-            for i in 0..<count {
-                let scaled = samples[i] * gain
-                let clamped = max(-1, min(1, scaled))
-                let v = Int16(clamped * 32767)
-                let u = UInt16(bitPattern: v)
-                base.storeBytes(of: UInt8(u & 0xFF), toByteOffset: i * 2, as: UInt8.self)
-                base.storeBytes(of: UInt8(u >> 8), toByteOffset: i * 2 + 1, as: UInt8.self)
+            switch chunk.format {
+            case .pcm16:
+                for i in 0..<count {
+                    let v = Int16(max(-1, min(1, samples[i] * gain)) * 32767)
+                    let u = UInt16(bitPattern: v)
+                    base.storeBytes(of: UInt8(u & 0xFF), toByteOffset: i * 2, as: UInt8.self)
+                    base.storeBytes(of: UInt8(u >> 8), toByteOffset: i * 2 + 1, as: UInt8.self)
+                }
+            case .float32:
+                for i in 0..<count {
+                    // Float WAV is not bound to [-1, 1] by the format, but every
+                    // consumer here treats it as full scale — clamp for the same
+                    // reason the PCM path does.
+                    let bits = max(-1, min(1, samples[i] * gain)).bitPattern
+                    for b in 0..<4 {
+                        base.storeBytes(of: UInt8((bits >> (8 * UInt32(b))) & 0xFF),
+                                        toByteOffset: i * 4 + b, as: UInt8.self)
+                    }
+                }
             }
         }
         return out
     }
 
-    /// Byte range of the `data` chunk, but only for a plain 16-bit PCM file.
+    /// Sample format of a `data` chunk this scaler understands.
+    enum SampleFormat: Equatable {
+        /// WAVE_FORMAT_PCM, 16-bit signed little-endian.
+        case pcm16
+        /// WAVE_FORMAT_IEEE_FLOAT, 32-bit little-endian. The LuxTTS lane writes
+        /// its derived reference window in this format (engines/lux-tts/ref.wav),
+        /// and that is the file the engine actually renders from — so a standard
+        /// that only understood PCM16 would silently skip exactly the asset that
+        /// matters for a cloned voice.
+        case float32
+    }
+
+    /// Byte range of the `data` chunk and its format.
     /// Walks the RIFF chunk list rather than assuming a 44-byte header: a WAV
     /// may legally carry LIST/fact/cue chunks before `data`, and an offset
     /// guessed from the canonical layout would scale header bytes as if they
     /// were audio.
-    static func pcm16DataChunk(in wav: Data) -> (offset: Int, length: Int)? {
+    static func dataChunk(in wav: Data) -> (offset: Int, length: Int, format: SampleFormat)? {
         guard wav.count >= 12,
               wav[wav.startIndex ..< wav.startIndex + 4].elementsEqual(Array("RIFF".utf8)),
               wav[wav.startIndex + 8 ..< wav.startIndex + 12].elementsEqual(Array("WAVE".utf8))
@@ -89,13 +125,21 @@ public enum RefLoudness {
                 formatTag = u16(body)
                 bitsPerSample = u16(body + 14)
             } else if id == "data" {
-                // 1 == WAVE_FORMAT_PCM. Anything else (float, ADPCM, extensible)
-                // is not what this scaler assumes, so leave it alone.
-                guard formatTag == 1, bitsPerSample == 16 else { return nil }
-                return (body, size)
+                // 1 == WAVE_FORMAT_PCM, 3 == WAVE_FORMAT_IEEE_FLOAT. Anything else
+                // (ADPCM, extensible) is not what this scaler assumes, so leave it.
+                if formatTag == 1, bitsPerSample == 16 { return (body, size, .pcm16) }
+                if formatTag == 3, bitsPerSample == 32 { return (body, size, .float32) }
+                return nil
             }
             i = body + size + (size % 2)   // chunks are word-aligned
         }
         return nil
+    }
+
+    /// Back-compat: the PCM16 range only. Kept because the shape of a 16-bit
+    /// reference is what most callers reason about.
+    static func pcm16DataChunk(in wav: Data) -> (offset: Int, length: Int)? {
+        guard let c = dataChunk(in: wav), c.format == .pcm16 else { return nil }
+        return (c.offset, c.length)
     }
 }

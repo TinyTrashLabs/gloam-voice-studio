@@ -119,6 +119,67 @@ final class RefLoudnessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rmsDbFS(out), rmsDbFS(spiky) - 0.01)
     }
 
+    /// 32-bit IEEE float WAV — the format the LuxTTS lane writes its derived
+    /// reference window in (engines/lux-tts/ref.wav), and the file the engine
+    /// actually renders a cloned voice from. A standard that only understood
+    /// PCM16 skipped exactly the asset that matters.
+    private func floatWav(amplitude: Float, seconds: Double = 1, rate: Int = 24_000) -> Data {
+        let n = Int(Double(rate) * seconds)
+        var body = Data()
+        for i in 0..<n {
+            let v = amplitude * sin(2 * .pi * 220 * Float(i) / Float(rate))
+            body.append(contentsOf: withUnsafeBytes(of: v.bitPattern.littleEndian) { Array($0) })
+        }
+        var out = Data("RIFF".utf8)
+        out.append(contentsOf: withUnsafeBytes(of: UInt32(36 + body.count).littleEndian) { Array($0) })
+        out.append(contentsOf: Array("WAVEfmt ".utf8))
+        out.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
+        out.append(contentsOf: withUnsafeBytes(of: UInt16(3).littleEndian) { Array($0) })   // IEEE float
+        out.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
+        out.append(contentsOf: withUnsafeBytes(of: UInt32(rate).littleEndian) { Array($0) })
+        out.append(contentsOf: withUnsafeBytes(of: UInt32(rate * 4).littleEndian) { Array($0) })
+        out.append(contentsOf: withUnsafeBytes(of: UInt16(4).littleEndian) { Array($0) })
+        out.append(contentsOf: withUnsafeBytes(of: UInt16(32).littleEndian) { Array($0) })
+        out.append(contentsOf: Array("data".utf8))
+        out.append(contentsOf: withUnsafeBytes(of: UInt32(body.count).littleEndian) { Array($0) })
+        out.append(body)
+        return out
+    }
+
+    private func floatRmsDbFS(_ d: Data) -> Float {
+        guard let c = RefLoudness.dataChunk(in: d), c.format == .float32 else { return .nan }
+        let n = c.length / 4
+        var sum = 0.0
+        d.withUnsafeBytes { raw in
+            let b = raw.baseAddress!.advanced(by: c.offset)
+            for i in 0..<n {
+                var bits: UInt32 = 0
+                for k in 0..<4 { bits |= UInt32(b.load(fromByteOffset: i * 4 + k, as: UInt8.self)) << (8 * UInt32(k)) }
+                let v = Double(Float(bitPattern: bits)); sum += v * v
+            }
+        }
+        return Float(20 * log10((sum / Double(n)).squareRoot()))
+    }
+
+    func testFloat32ReferenceIsLevelledToo() {
+        let quiet = floatWav(amplitude: 0.08)
+        XCTAssertEqual(RefLoudness.dataChunk(in: quiet)?.format, .float32)
+        XCTAssertLessThan(floatRmsDbFS(quiet), AudioAssembler.referenceLoudnessDbFS - 2)
+        let fixed = RefLoudness.normalized(wav: quiet)
+        XCTAssertEqual(floatRmsDbFS(fixed), AudioAssembler.referenceLoudnessDbFS, accuracy: 0.5)
+        XCTAssertEqual(fixed.count, quiet.count)
+        XCTAssertEqual(fixed.prefix(44), quiet.prefix(44))
+    }
+
+    /// A PCM16 and a float32 reference that start at the same level must end at
+    /// the same level — otherwise "gain 1" still means two different things
+    /// depending on which lane wrote the asset.
+    func testBothFormatsLandOnTheSameStandard() {
+        let a = rmsDbFS(RefLoudness.normalized(wav: wav(amplitude: 0.08)))
+        let b = floatRmsDbFS(RefLoudness.normalized(wav: floatWav(amplitude: 0.08)))
+        XCTAssertEqual(a, b, accuracy: 0.3)
+    }
+
     /// Format is training material for a cloning backend — only amplitude may
     /// change. Same byte count, same header, same sample rate.
     func testHeaderAndSampleRateSurviveUntouched() {
