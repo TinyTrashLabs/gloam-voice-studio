@@ -94,7 +94,17 @@ public enum AudioAssembler {
         guard rms > 1e-6, peak > 1e-6 else { return 1 }
         let wanted = pow(10, targetDbFS / 20) / rms
         let ceiling = pow(10, peakCeilingDbFS / 20) / peak
-        return min(wanted, ceiling)
+        // Coming DOWN is always safe — attenuation cannot clip — so an over-level
+        // reference just takes the gain it needs.
+        guard wanted > 1 else { return wanted }
+        // Coming UP, the ceiling may bind. Take the smaller gain, but NEVER below
+        // unity: a reference that is already under target and already peaking has
+        // a high crest factor, and attenuating it would make the exact problem
+        // this exists to fix worse. Better to sit under the standard than to push
+        // a quiet voice quieter. (Caught by measuring a real library pass: `joe`
+        // at -25.8 dBFS RMS was being pulled DOWN another 0.5 dB because its
+        // peaks were already near full scale.)
+        return max(1, min(wanted, ceiling))
     }
 
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {

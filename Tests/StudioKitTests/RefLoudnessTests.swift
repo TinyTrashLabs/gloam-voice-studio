@@ -80,15 +80,43 @@ final class RefLoudnessTests: XCTestCase {
         XCTAssertEqual(a, b, accuracy: 0.5)
     }
 
-    /// A quiet-but-spiky clip must not be boosted into clipping — the ceiling
-    /// binds and we accept being under target rather than distort.
-    func testPeakCeilingWinsOverTheRmsTarget() {
-        // Mostly silence with one full-scale spike: very low RMS, peak already at FS.
-        var pcm = Data(count: 24_000 * 2)
-        pcm.replaceSubrange(0..<2, with: withUnsafeBytes(of: Int16(32767).littleEndian) { Array($0) })
+    /// The ceiling CAPS THE BOOST: a clip with room to grow but a high crest
+    /// factor is raised only until its peak reaches the ceiling, not all the way
+    /// to the RMS target. Under-target and undistorted beats on-target and
+    /// clipped.
+    func testPeakCeilingCapsTheBoost() {
+        // Spikes at half scale, mostly silence: peak -6 dBFS, RMS far below target,
+        // so the RMS target would demand far more gain than the ceiling allows.
+        var pcm = Data()
+        for i in 0..<24_000 {
+            let v: Int16 = (i % 200 == 0) ? 16_384 : 0
+            pcm.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Array($0) })
+        }
         let spiky = WAVEncoder.encode(pcm16: pcm, sampleRate: 24_000)
         let out = RefLoudness.normalized(wav: spiky)
-        XCTAssertLessThanOrEqual(peakDbFS(out), AudioAssembler.referencePeakCeilingDbFS + 0.5)
+        // Boosted (it had room)…
+        XCTAssertGreaterThan(rmsDbFS(out), rmsDbFS(spiky) + 1)
+        // …but stopped at the ceiling rather than reaching the RMS target.
+        XCTAssertEqual(peakDbFS(out), AudioAssembler.referencePeakCeilingDbFS, accuracy: 0.2)
+        XCTAssertLessThan(rmsDbFS(out), AudioAssembler.referenceLoudnessDbFS)
+    }
+
+    /// A reference that is BELOW target but already peaking has a high crest
+    /// factor — the ceiling binds and no boost is possible. It must be left
+    /// alone, never pulled down: attenuating it makes the very problem this
+    /// exists to fix worse. Found by measuring a real library pass, where a
+    /// voice at -25.8 dBFS RMS was being quietened a further 0.5 dB.
+    func testAQuietButPeakingReferenceIsNeverMadeQuieter() {
+        // Alternating full-scale spikes and silence: peak at FS, RMS well under.
+        var pcm = Data()
+        for i in 0..<24_000 {
+            let v: Int16 = (i % 400 == 0) ? 32767 : 0
+            pcm.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Array($0) })
+        }
+        let spiky = WAVEncoder.encode(pcm16: pcm, sampleRate: 24_000)
+        XCTAssertLessThan(rmsDbFS(spiky), AudioAssembler.referenceLoudnessDbFS)
+        let out = RefLoudness.normalized(wav: spiky)
+        XCTAssertGreaterThanOrEqual(rmsDbFS(out), rmsDbFS(spiky) - 0.01)
     }
 
     /// Format is training material for a cloning backend — only amplitude may
