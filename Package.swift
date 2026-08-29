@@ -163,6 +163,18 @@ let package = Package(
             ],
             path: "Tests/StudioKitTests"
         ),
+        // One-off maintenance tool: brings references that are ALREADY on disk up
+        // to the loudness standard. VoiceLibrary applies the standard at its
+        // write sites, so new voices meet it automatically — existing library
+        // voices and the bundled .gvoice packs need this run over them once.
+        .executableTarget(
+            name: "voice-level",
+            dependencies: [
+                "StudioKit",
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
+            path: "Sources/voice-level"
+        ),
         .target(
             name: "SpeechKit",
             dependencies: [

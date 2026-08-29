@@ -34,7 +34,12 @@ public enum RefAudioCombiner {
     }
 
     /// Decode arbitrary audio data to mono floats at the target rate.
-    static func decodeMono(_ data: Data) throws -> [Float] {
+    ///
+    /// Public because it is also the only decoder in the package that will read
+    /// a reference whose bytes are not WAV at all — six library voices hold
+    /// MP3/M4A under a `.wav` name, which the loudness standard cannot touch and
+    /// `voice-level --transcode` repairs through here.
+    public static func decodeMono(_ data: Data) throws -> [Float] {
         // AVAudioFile needs a URL; stage the bytes in a temp file.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("refcombine-\(UUID().uuidString).audio")

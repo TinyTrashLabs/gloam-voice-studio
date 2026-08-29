@@ -54,7 +54,7 @@ public enum AudioAssembler {
 
     // MARK: - Loudness standard
 
-    /// The reference-audio loudness standard, in dBFS RMS.
+    /// The reference-audio loudness standard, in LUFS (ITU-R BS.1770 K-weighted).
     ///
     /// A clone sounds as loud as the reference it was built from, and nothing
     /// downstream re-levels it: on iOS the voice path is a straight gain
@@ -63,49 +63,35 @@ public enum AudioAssembler {
     /// an imported voice came in ~2.3 dB under the shipped hosts and was
     /// audibly quieter on an iPhone at the same setting (David, 2026-08-29).
     ///
-    /// The number is not a preference: it is measured from `billie-frost`, the
-    /// bundled host whose level is known-good, and `shane` independently sits
-    /// within 0.8 dB of it. Matching it is what makes "gain 1" mean the same
-    /// thing for every voice — which is the actual contract the UI implies.
+    /// The anchor is not a preference: it is measured from `billie-frost`, the
+    /// bundled host whose level is known-good, which sits at **-18.2 LUFS**.
+    /// Matching it is what makes "gain 1" mean the same thing for every voice —
+    /// the contract the UI already implies.
     ///
-    /// RMS rather than peak on purpose. `normalizePeak` above equalises the
-    /// loudest SAMPLE, which one transient can dominate, so two clips can share
-    /// a peak and differ audibly — exactly the case here: billie-frost peaks at
-    /// -2.2 dBFS and the quiet import at -5.8, but the perceived gap lives in
-    /// their RMS (-18.0 vs -20.3).
-    public static let referenceLoudnessDbFS: Float = -18.0
+    /// The target is that anchor raised **1.2 dB** (≈15% in linear amplitude).
+    /// Levelling the set to billie-frost made every voice CONSISTENT but left the
+    /// whole set quiet against the music bed (David, 2026-08-29). Consistency was
+    /// the bug; absolute level is a separate, deliberate choice on top of it.
+    ///
+    /// LUFS rather than RMS, and RMS rather than peak, for the same reason twice
+    /// over — each is a closer model of what an ear reports than the last.
+    /// `normalizePeak` equalises the loudest SAMPLE, which one transient
+    /// dominates. Plain RMS equalises energy, but weights 60 Hz the same as
+    /// 3 kHz: measured over the real library, `maceo-sad` and `david` sit at an
+    /// identical -18.0 dBFS RMS and still differ by 2.0 LU, in the direction the
+    /// ear reports. K-weighting costs two biquads and removes most of that gap.
+    public static let referenceLoudnessLUFS: Float = -17.0
 
-    /// Never let normalisation push a peak above this. Boosting a quiet-but-
-    /// spiky clip to hit an RMS target can clip; when the ceiling binds we take
-    /// the smaller gain and stay honest about the level rather than distort.
+    /// Never let normalisation push a peak above this.
+    ///
+    /// This bounds the LIMITER, not the gain. The first version of this standard
+    /// used the ceiling to cap the gain instead, and that silently disabled the
+    /// whole feature for about half the library: any clip with a couple of
+    /// transients near full scale could not be boosted at all, so `joe` stayed
+    /// 7.8 dB under target and `morgan-freeman` 4.3 dB under. Bending those
+    /// transients is a far smaller edit to a reference than leaving the voice
+    /// permanently quiet on every device.
     public static let referencePeakCeilingDbFS: Float = -1.0
-
-    /// Gain (linear) that moves `samples` to `targetDbFS` RMS without pushing the
-    /// peak past `peakCeilingDbFS`. Returns 1 for silence — there is no loudness
-    /// to correct, and any finite gain on digital silence is still silence.
-    public static func loudnessGain(floats samples: [Float],
-                                    targetDbFS: Float = referenceLoudnessDbFS,
-                                    peakCeilingDbFS: Float = referencePeakCeilingDbFS) -> Float {
-        guard !samples.isEmpty else { return 1 }
-        var sumSquares: Double = 0
-        var peak: Float = 0
-        for s in samples { sumSquares += Double(s) * Double(s); peak = max(peak, abs(s)) }
-        let rms = Float((sumSquares / Double(samples.count)).squareRoot())
-        guard rms > 1e-6, peak > 1e-6 else { return 1 }
-        let wanted = pow(10, targetDbFS / 20) / rms
-        let ceiling = pow(10, peakCeilingDbFS / 20) / peak
-        // Coming DOWN is always safe — attenuation cannot clip — so an over-level
-        // reference just takes the gain it needs.
-        guard wanted > 1 else { return wanted }
-        // Coming UP, the ceiling may bind. Take the smaller gain, but NEVER below
-        // unity: a reference that is already under target and already peaking has
-        // a high crest factor, and attenuating it would make the exact problem
-        // this exists to fix worse. Better to sit under the standard than to push
-        // a quiet voice quieter. (Caught by measuring a real library pass: `joe`
-        // at -25.8 dBFS RMS was being pulled DOWN another 0.5 dB because its
-        // peaks were already near full scale.)
-        return max(1, min(wanted, ceiling))
-    }
 
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {
         var peak: Int32 = 0

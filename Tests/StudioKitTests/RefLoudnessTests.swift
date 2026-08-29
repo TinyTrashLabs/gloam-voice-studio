@@ -52,71 +52,160 @@ final class RefLoudnessTests: XCTestCase {
         return Float(20 * log10(peak))
     }
 
+    private func lufs(_ d: Data) -> Float {
+        guard let c = RefLoudness.dataChunk(in: d) else { return .nan }
+        return Loudness.lufs(floats(d), sampleRate: c.sampleRate)
+    }
+
+    /// Decoded samples, whichever of the two formats the WAV is in.
+    private func floats(_ d: Data) -> [Float] {
+        guard let c = RefLoudness.dataChunk(in: d) else { return [] }
+        let step = c.format == .pcm16 ? 2 : 4
+        let n = c.length / step
+        var out = [Float](repeating: 0, count: n)
+        d.withUnsafeBytes { raw in
+            let b = raw.baseAddress!.advanced(by: c.offset)
+            for i in 0..<n {
+                if c.format == .pcm16 {
+                    let lo = UInt16(b.load(fromByteOffset: i * 2, as: UInt8.self))
+                    let hi = UInt16(b.load(fromByteOffset: i * 2 + 1, as: UInt8.self))
+                    out[i] = Float(Int16(bitPattern: lo | (hi << 8))) / 32768
+                } else {
+                    var bits: UInt32 = 0
+                    for k in 0..<4 { bits |= UInt32(b.load(fromByteOffset: i * 4 + k, as: UInt8.self)) << (8 * UInt32(k)) }
+                    out[i] = Float(bitPattern: bits)
+                }
+            }
+        }
+        return out
+    }
+
     /// THE bug: an imported voice sat ~2.3 dB under the shipped hosts and was
     /// audibly quieter on an iPhone at the same gain.
     func testQuietReferenceIsBroughtUpToTheStandard() {
         // A sine's RMS sits only 3 dB under its peak, so "quiet" here means a
-        // much smaller amplitude than a speech waveform would need: 0.08 peak is
-        // about -24.9 dBFS RMS, comfortably under the standard.
+        // much smaller amplitude than a speech waveform would need.
         let quiet = wav(amplitude: 0.08)
-        XCTAssertLessThan(rmsDbFS(quiet), AudioAssembler.referenceLoudnessDbFS - 2)
+        XCTAssertLessThan(lufs(quiet), AudioAssembler.referenceLoudnessLUFS - 2)
         let fixed = RefLoudness.normalized(wav: quiet)
-        XCTAssertEqual(rmsDbFS(fixed), AudioAssembler.referenceLoudnessDbFS, accuracy: 0.5)
+        XCTAssertEqual(lufs(fixed), AudioAssembler.referenceLoudnessLUFS, accuracy: 0.5)
     }
 
     /// Normalising is a two-way standard, not a boost: a hot reference comes DOWN.
     func testHotReferenceIsBroughtDownToTheStandard() {
         let loud = wav(amplitude: 0.95)
-        XCTAssertGreaterThan(rmsDbFS(loud), AudioAssembler.referenceLoudnessDbFS + 2)
-        XCTAssertEqual(rmsDbFS(RefLoudness.normalized(wav: loud)),
-                       AudioAssembler.referenceLoudnessDbFS, accuracy: 0.5)
+        XCTAssertGreaterThan(lufs(loud), AudioAssembler.referenceLoudnessLUFS + 2)
+        XCTAssertEqual(lufs(RefLoudness.normalized(wav: loud)),
+                       AudioAssembler.referenceLoudnessLUFS, accuracy: 0.5)
     }
 
     /// The whole point: two references that started far apart end up matched, so
     /// "gain 1" means the same thing for every voice.
     func testTwoVoicesEndUpAtTheSameLevel() {
-        let a = rmsDbFS(RefLoudness.normalized(wav: wav(amplitude: 0.08)))
-        let b = rmsDbFS(RefLoudness.normalized(wav: wav(amplitude: 0.90)))
+        let a = lufs(RefLoudness.normalized(wav: wav(amplitude: 0.08)))
+        let b = lufs(RefLoudness.normalized(wav: wav(amplitude: 0.90)))
         XCTAssertEqual(a, b, accuracy: 0.5)
     }
 
-    /// The ceiling CAPS THE BOOST: a clip with room to grow but a high crest
-    /// factor is raised only until its peak reaches the ceiling, not all the way
-    /// to the RMS target. Under-target and undistorted beats on-target and
-    /// clipped.
-    func testPeakCeilingCapsTheBoost() {
-        // Spikes at half scale, mostly silence: peak -6 dBFS, RMS far below target,
-        // so the RMS target would demand far more gain than the ceiling allows.
+    /// THE REGRESSION THIS FILE EXISTS FOR NOW. A quiet clip whose few transients
+    /// already sit at full scale must still reach the standard — the transients
+    /// get limited, the body comes up. The first version of this code used the
+    /// ceiling to cap the GAIN instead, which silently disabled levelling for
+    /// about half the real library: `joe` stayed 7.8 dB under target because a
+    /// handful of samples were near full scale.
+    ///
+    /// Fault-injected: reverting `Loudness.leveled` to `max(1, min(wanted,
+    /// ceiling))` fails this test, which is the whole point of writing it.
+    func testAQuietClipWithFullScaleTransientsStillReachesTheStandard() {
+        // Continuous quiet tone plus a full-scale spike every 400 samples: peak
+        // pegged at FS, loudness far below target. This is the `joe` shape.
         var pcm = Data()
-        for i in 0..<24_000 {
-            let v: Int16 = (i % 200 == 0) ? 16_384 : 0
+        for i in 0..<48_000 {
+            let tone = 0.05 * sin(2 * .pi * 220 * Float(i) / 24_000)
+            let v: Int16 = (i % 400 == 0) ? 32767 : Int16(tone * 32767)
             pcm.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Array($0) })
         }
         let spiky = WAVEncoder.encode(pcm16: pcm, sampleRate: 24_000)
+        XCTAssertEqual(peakDbFS(spiky), 0, accuracy: 0.1, "fixture must already peak at full scale")
+        XCTAssertLessThan(lufs(spiky), AudioAssembler.referenceLoudnessLUFS - 5)
+
         let out = RefLoudness.normalized(wav: spiky)
-        // Boosted (it had room)…
-        XCTAssertGreaterThan(rmsDbFS(out), rmsDbFS(spiky) + 1)
-        // …but stopped at the ceiling rather than reaching the RMS target.
-        XCTAssertEqual(peakDbFS(out), AudioAssembler.referencePeakCeilingDbFS, accuracy: 0.2)
-        XCTAssertLessThan(rmsDbFS(out), AudioAssembler.referenceLoudnessDbFS)
+        XCTAssertEqual(lufs(out), AudioAssembler.referenceLoudnessLUFS, accuracy: 0.5)
+        // …and the ceiling still held.
+        XCTAssertLessThanOrEqual(peakDbFS(out), AudioAssembler.referencePeakCeilingDbFS + 0.1)
     }
 
-    /// A reference that is BELOW target but already peaking has a high crest
-    /// factor — the ceiling binds and no boost is possible. It must be left
-    /// alone, never pulled down: attenuating it makes the very problem this
-    /// exists to fix worse. Found by measuring a real library pass, where a
-    /// voice at -25.8 dBFS RMS was being quietened a further 0.5 dB.
+    /// A reference that is below target must never be made quieter — attenuating
+    /// it makes the very problem this exists to fix worse. Found by measuring a
+    /// real library pass, where a voice at -25.8 dBFS RMS was being quietened a
+    /// further 0.5 dB.
     func testAQuietButPeakingReferenceIsNeverMadeQuieter() {
-        // Alternating full-scale spikes and silence: peak at FS, RMS well under.
         var pcm = Data()
         for i in 0..<24_000 {
             let v: Int16 = (i % 400 == 0) ? 32767 : 0
             pcm.append(contentsOf: withUnsafeBytes(of: v.littleEndian) { Array($0) })
         }
         let spiky = WAVEncoder.encode(pcm16: pcm, sampleRate: 24_000)
-        XCTAssertLessThan(rmsDbFS(spiky), AudioAssembler.referenceLoudnessDbFS)
-        let out = RefLoudness.normalized(wav: spiky)
-        XCTAssertGreaterThanOrEqual(rmsDbFS(out), rmsDbFS(spiky) - 0.01)
+        XCTAssertLessThan(lufs(spiky), AudioAssembler.referenceLoudnessLUFS)
+        XCTAssertGreaterThanOrEqual(lufs(RefLoudness.normalized(wav: spiky)), lufs(spiky) - 0.01)
+    }
+
+    /// The limiter is what buys the boost, so it must hold its ceiling exactly.
+    func testSoftLimitNeverExceedsTheCeiling() {
+        let hot = (0..<10_000).map { Float($0 % 200) / 50 - 2 }   // ±2.0, way over FS
+        let out = Loudness.softLimit(hot, ceilingDbFS: -1)
+        let ceiling = pow(Float(10), -1.0 / 20)
+        XCTAssertLessThanOrEqual(out.map { abs($0) }.max() ?? 0, ceiling + 1e-5)
+    }
+
+    /// …and be transparent below the knee, which is nearly all of a speech clip.
+    /// A limiter that touched the body of the signal would be re-voicing the
+    /// reference, not protecting its peaks.
+    func testSoftLimitLeavesBelowKneeSamplesBitIdentical() {
+        // Knee sits 6 dB under a -1 dBFS ceiling ≈ 0.447; stay well below it.
+        let quiet = (0..<1_000).map { 0.3 * sin(Float($0) / 10) }
+        XCTAssertEqual(Loudness.softLimit(quiet, ceilingDbFS: -1, kneeDb: 6), quiet)
+    }
+
+    /// K-weighting is the reason for this rewrite: two clips at the SAME RMS can
+    /// differ audibly by spectrum, and the measurement has to see that. Measured
+    /// in the real library, `maceo-sad` and `david` sat at an identical -18.0
+    /// dBFS RMS and 2.0 LU apart.
+    func testKWeightingSeparatesTwoClipsOfEqualRMS() {
+        let rate = 24_000
+        func tone(_ hz: Float) -> [Float] {
+            (0..<rate).map { 0.2 * sin(2 * .pi * hz * Float($0) / Float(rate)) }
+        }
+        let low = tone(120), high = tone(3_000)
+        // Same amplitude, so identical RMS by construction…
+        func rms(_ s: [Float]) -> Float { (s.reduce(0) { $0 + $1 * $1 } / Float(s.count)).squareRoot() }
+        XCTAssertEqual(rms(low), rms(high), accuracy: 0.001)
+        // …but the ear, and K-weighting, hear the bright one as louder.
+        XCTAssertGreaterThan(Loudness.lufs(high, sampleRate: rate),
+                             Loudness.lufs(low, sampleRate: rate) + 2)
+    }
+
+    /// Weighting is frequency-dependent, so the filter must be built for the
+    /// clip's OWN rate. Reusing the widely-quoted 48 kHz coefficients detunes
+    /// both stages on the 22.05/24 kHz references this library actually holds.
+    func testTheSameToneMeasuresTheSameAtDifferentSampleRates() {
+        func tone(_ rate: Int) -> [Float] {
+            (0..<rate).map { 0.2 * sin(2 * .pi * 1_000 * Float($0) / Float(rate)) }
+        }
+        XCTAssertEqual(Loudness.lufs(tone(24_000), sampleRate: 24_000),
+                       Loudness.lufs(tone(44_100), sampleRate: 44_100), accuracy: 0.3)
+    }
+
+    /// A WAV with no usable `fmt ` rate cannot be weighted, and guessing a rate
+    /// would silently mismeasure. Pass it through instead.
+    func testMissingSampleRateIsRefusedRatherThanGuessed() {
+        var broken = wav(amplitude: 0.08)
+        guard let c = RefLoudness.dataChunk(in: broken) else { return XCTFail("no chunk") }
+        XCTAssertEqual(c.sampleRate, 24_000)
+        // Zero the sample-rate field inside `fmt ` (offset 24 in a canonical header).
+        for k in 24..<28 { broken[broken.startIndex + k] = 0 }
+        XCTAssertNil(RefLoudness.dataChunk(in: broken))
+        XCTAssertEqual(RefLoudness.normalized(wav: broken), broken)
     }
 
     /// 32-bit IEEE float WAV — the format the LuxTTS lane writes its derived
@@ -164,9 +253,9 @@ final class RefLoudnessTests: XCTestCase {
     func testFloat32ReferenceIsLevelledToo() {
         let quiet = floatWav(amplitude: 0.08)
         XCTAssertEqual(RefLoudness.dataChunk(in: quiet)?.format, .float32)
-        XCTAssertLessThan(floatRmsDbFS(quiet), AudioAssembler.referenceLoudnessDbFS - 2)
+        XCTAssertLessThan(lufs(quiet), AudioAssembler.referenceLoudnessLUFS - 2)
         let fixed = RefLoudness.normalized(wav: quiet)
-        XCTAssertEqual(floatRmsDbFS(fixed), AudioAssembler.referenceLoudnessDbFS, accuracy: 0.5)
+        XCTAssertEqual(lufs(fixed), AudioAssembler.referenceLoudnessLUFS, accuracy: 0.5)
         XCTAssertEqual(fixed.count, quiet.count)
         XCTAssertEqual(fixed.prefix(44), quiet.prefix(44))
     }
@@ -175,8 +264,8 @@ final class RefLoudnessTests: XCTestCase {
     /// the same level — otherwise "gain 1" still means two different things
     /// depending on which lane wrote the asset.
     func testBothFormatsLandOnTheSameStandard() {
-        let a = rmsDbFS(RefLoudness.normalized(wav: wav(amplitude: 0.08)))
-        let b = floatRmsDbFS(RefLoudness.normalized(wav: floatWav(amplitude: 0.08)))
+        let a = lufs(RefLoudness.normalized(wav: wav(amplitude: 0.08)))
+        let b = lufs(RefLoudness.normalized(wav: floatWav(amplitude: 0.08)))
         XCTAssertEqual(a, b, accuracy: 0.3)
     }
 

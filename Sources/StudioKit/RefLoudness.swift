@@ -23,7 +23,7 @@ public enum RefLoudness {
     /// a reference that cannot be levelled is still a usable reference, and
     /// refusing to save it would be a worse failure than saving it quiet.
     public static func normalized(wav: Data,
-                                  targetDbFS: Float = AudioAssembler.referenceLoudnessDbFS,
+                                  targetLUFS: Float = AudioAssembler.referenceLoudnessLUFS,
                                   peakCeilingDbFS: Float = AudioAssembler.referencePeakCeilingDbFS) -> Data {
         guard let chunk = dataChunk(in: wav) else { return wav }
         let bytesPerSample = chunk.format == .pcm16 ? 2 : 4
@@ -51,12 +51,38 @@ public enum RefLoudness {
             }
         }
 
-        let gain = AudioAssembler.loudnessGain(floats: samples,
-                                               targetDbFS: targetDbFS,
-                                               peakCeilingDbFS: peakCeilingDbFS)
-        // A gain this close to unity is below the threshold of audibility and
-        // rewriting the bytes for it only churns the file.
-        guard abs(gain - 1) > 0.01 else { return wav }
+        // Loudness is measured on a mono downmix. References here are mono in
+        // practice, but a K-weighting filter run over INTERLEAVED stereo would be
+        // filtering a signal that alternates between two channels — garbage. The
+        // gain is still applied per sample, so the channel layout is preserved.
+        let mono: [Float]
+        if chunk.channels > 1 {
+            let frames = count / chunk.channels
+            mono = (0..<frames).map { f in
+                var sum: Float = 0
+                for c in 0..<chunk.channels { sum += samples[f * chunk.channels + c] }
+                return sum / Float(chunk.channels)
+            }
+        } else {
+            mono = samples
+        }
+
+        let measured = Loudness.lufs(mono, sampleRate: chunk.sampleRate)
+        var peak: Float = 0
+        for s in samples { peak = max(peak, abs(s)) }
+        let ceiling = pow(10, peakCeilingDbFS / 20)
+        // Already at the standard and already under the ceiling: rewriting the
+        // bytes for a sub-audible correction only churns the file.
+        if measured.isFinite, abs(measured - targetLUFS) < 0.1, peak <= ceiling {
+            return wav
+        }
+
+        let leveled = Loudness.leveled(samples,
+                                       sampleRate: chunk.sampleRate,
+                                       targetLUFS: targetLUFS,
+                                       ceilingDbFS: peakCeilingDbFS,
+                                       measuring: mono)
+        guard leveled.count == count else { return wav }
 
         var out = wav
         out.withUnsafeMutableBytes { raw in
@@ -64,7 +90,7 @@ public enum RefLoudness {
             switch chunk.format {
             case .pcm16:
                 for i in 0..<count {
-                    let v = Int16(max(-1, min(1, samples[i] * gain)) * 32767)
+                    let v = Int16(max(-1, min(1, leveled[i])) * 32767)
                     let u = UInt16(bitPattern: v)
                     base.storeBytes(of: UInt8(u & 0xFF), toByteOffset: i * 2, as: UInt8.self)
                     base.storeBytes(of: UInt8(u >> 8), toByteOffset: i * 2 + 1, as: UInt8.self)
@@ -74,7 +100,7 @@ public enum RefLoudness {
                     // Float WAV is not bound to [-1, 1] by the format, but every
                     // consumer here treats it as full scale — clamp for the same
                     // reason the PCM path does.
-                    let bits = max(-1, min(1, samples[i] * gain)).bitPattern
+                    let bits = max(-1, min(1, leveled[i])).bitPattern
                     for b in 0..<4 {
                         base.storeBytes(of: UInt8((bits >> (8 * UInt32(b))) & 0xFF),
                                         toByteOffset: i * 4 + b, as: UInt8.self)
@@ -86,7 +112,7 @@ public enum RefLoudness {
     }
 
     /// Sample format of a `data` chunk this scaler understands.
-    enum SampleFormat: Equatable {
+    public enum SampleFormat: Equatable {
         /// WAVE_FORMAT_PCM, 16-bit signed little-endian.
         case pcm16
         /// WAVE_FORMAT_IEEE_FLOAT, 32-bit little-endian. The LuxTTS lane writes
@@ -102,7 +128,8 @@ public enum RefLoudness {
     /// may legally carry LIST/fact/cue chunks before `data`, and an offset
     /// guessed from the canonical layout would scale header bytes as if they
     /// were audio.
-    static func dataChunk(in wav: Data) -> (offset: Int, length: Int, format: SampleFormat)? {
+    public static func dataChunk(in wav: Data) -> (offset: Int, length: Int, format: SampleFormat,
+                                            sampleRate: Int, channels: Int)? {
         guard wav.count >= 12,
               wav[wav.startIndex ..< wav.startIndex + 4].elementsEqual(Array("RIFF".utf8)),
               wav[wav.startIndex + 8 ..< wav.startIndex + 12].elementsEqual(Array("WAVE".utf8))
@@ -115,6 +142,8 @@ public enum RefLoudness {
 
         var bitsPerSample = 0
         var formatTag = 0
+        var sampleRate = 0
+        var channels = 0
         var i = wav.startIndex + 12
         while i + 8 <= wav.endIndex {
             let id = String(decoding: wav[i ..< i + 4], as: UTF8.self)
@@ -123,12 +152,22 @@ public enum RefLoudness {
             guard size >= 0, body + size <= wav.endIndex else { return nil }
             if id == "fmt " , size >= 16 {
                 formatTag = u16(body)
+                channels = u16(body + 2)
+                sampleRate = u32(body + 4)
                 bitsPerSample = u16(body + 14)
             } else if id == "data" {
+                // Loudness weighting is frequency-dependent, so a missing or
+                // nonsense sample rate makes the measurement meaningless rather
+                // than merely approximate — refuse instead of guessing 44100.
+                guard sampleRate > 0, channels > 0 else { return nil }
                 // 1 == WAVE_FORMAT_PCM, 3 == WAVE_FORMAT_IEEE_FLOAT. Anything else
                 // (ADPCM, extensible) is not what this scaler assumes, so leave it.
-                if formatTag == 1, bitsPerSample == 16 { return (body, size, .pcm16) }
-                if formatTag == 3, bitsPerSample == 32 { return (body, size, .float32) }
+                if formatTag == 1, bitsPerSample == 16 {
+                    return (body, size, .pcm16, sampleRate, channels)
+                }
+                if formatTag == 3, bitsPerSample == 32 {
+                    return (body, size, .float32, sampleRate, channels)
+                }
                 return nil
             }
             i = body + size + (size % 2)   // chunks are word-aligned
