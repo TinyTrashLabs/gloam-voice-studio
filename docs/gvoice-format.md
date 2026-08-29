@@ -153,6 +153,7 @@ doc showed one; it was never implemented and this is the correction.)
   "variants": ["base", "hype"],
   "pace": 1.0,
   "enginePace": { "supertonic": 1.08 },
+  "gain": -2.0,
   "source": {
     "base": { "audio": "source/ref.wav",      "text": "…" },
     "hype": { "audio": "source/ref-hype.wav", "text": "…" }
@@ -180,6 +181,7 @@ doc showed one; it was never implemented and this is the correction.)
 | `createdAt` | no | RFC 3339 UTC, from the producing library. Informational only, same caveat as `slug`. |
 | `variants` | no | Ordered variant keys. `base` is semantically first regardless of list position — see Rule 4. |
 | `pace` | no | Delivery pace, `1.0` = the reference's own pace. Absent means `1.0`. A property of the VOICE: a slow, deliberate reference needs ~1.7 to sound like radio while a brisk one is right at 1.0, so no single app-wide setting serves both. A reader that ignores it renders at the reference's own pace, which is always a valid reading. |
+| `gain` | no | Per-voice loudness trim in **dB**, applied to rendered OUTPUT. Absent means 0 — the voice sits exactly where the reference loudness standard put it. Readers MUST clamp to ±12 dB and MUST treat a non-finite value as absent. Exists because the standard makes every reference MEASURE the same (−17.0 LUFS, K-weighted) but cannot settle how a voice SITS in a mix: two references at an identical level still differ by timbre and delivery. It belongs to the voice rather than the listener for the same reason `pace` does — so a recipient hears it at the level its maker chose instead of re-dialling it. Applied to output, never baked into `ref.wav`: baking would move the asset off the standard, so the next measurement would "correct" it straight back. A reader that ignores this key gets the standard's level, which is a valid reading, so adding it does NOT bump `gvoice`. |
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
 | `source` | no | Variant key → `{ audio, text }`. Paths are pack-relative. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |

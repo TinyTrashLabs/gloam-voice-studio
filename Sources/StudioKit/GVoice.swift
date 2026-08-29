@@ -26,6 +26,22 @@ public enum GVoice {
         return 1.0
     }
 
+    /// Bound on the per-voice loudness trim, in dB either way.
+    ///
+    /// A trim corrects a voice that already measures right, so anything this
+    /// large means the reference is the problem, not the taste. Without a bound
+    /// a slider could simply undo the standard — which is how the library got
+    /// into the state the standard exists to fix.
+    public static let maxGainDb: Double = 12
+
+    /// Per-voice loudness trim in dB, clamped. Absent — or non-finite, which is
+    /// what a hand-edited manifest carrying `null`/`NaN` decodes to — means 0,
+    /// i.e. the voice sits exactly where the reference standard put it.
+    public static func gain(in manifest: Manifest) -> Double {
+        guard let g = manifest.gain, g.isFinite else { return 0 }
+        return max(-maxGainDb, min(maxGainDb, g))
+    }
+
     // MARK: manifest
 
     public struct Manifest: Codable, Equatable, Sendable {
@@ -57,6 +73,18 @@ public enum GVoice {
         /// A reader that ignores this falls back to `pace`, which the format
         /// already calls a valid reading — hence NO `gvoice` bump.
         public var enginePace: [String: Double]?
+        /// Per-voice loudness trim in dB, on top of the reference standard.
+        ///
+        /// Belongs to the VOICE for the same reason `pace` does: it is a property
+        /// of how this particular voice sits, not a setting of the listener's.
+        /// The reference standard already makes every voice MEASURE the same;
+        /// this carries the part measurement cannot settle, so a recipient hears
+        /// the voice at the level its maker chose rather than re-dialling it.
+        ///
+        /// Absent means 0 — no trim, exactly where the standard put it. A reader
+        /// that ignores this key gets the standard's level, which the format
+        /// already calls a valid reading, so adding it does NOT bump `gvoice`.
+        public var gain: Double?
         /// variant key -> source audio + its transcript
         public var source: [String: Source]?
         /// engine id -> variant key -> pack-relative member paths. A list
@@ -88,6 +116,7 @@ public enum GVoice {
             createdAt: base.meta.createdAt.isEmpty ? nil : base.meta.createdAt,
             variants: orderedKeys(variants.keys),
             pace: base.meta.pace, enginePace: base.meta.enginePace,
+            gain: base.meta.gain,
             source: [:], engines: [:], provenance: base.meta.provenance)
         var entries: [(name: String, data: Data)] = []
 
@@ -234,7 +263,8 @@ public enum GVoice {
         let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
                                         refText: sources["base"]?.text ?? "",
                                         provenance: manifest.provenance, engines: baseAssets,
-                                        pace: manifest.pace, enginePace: manifest.enginePace)
+                                        pace: manifest.pace, enginePace: manifest.enginePace,
+                                        gain: manifest.gain)
 
         for key in keys where key != "base" {
             let safeKey = try safeComponent(key)

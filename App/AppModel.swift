@@ -979,8 +979,14 @@ final class AppModel {
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
         // so history, A/B variants, and script takes all stay consistent.
-        let result = SynthesisResult(
-            samples: AudioAssembler.normalizePeak(floats: raw.samples),
+        // Then the voice's own trim, on top. The standard makes every reference
+        // MEASURE the same; this carries the part measurement can't settle, so
+        // it goes AFTER the peak normalize above — applied before it, the
+        // normalize would simply erase it.
+        let trimmed = AudioAssembler.applyGain(
+            floats: AudioAssembler.normalizePeak(floats: raw.samples),
+            db: resolvedVoice.map { voices.gainDb(for: $0) } ?? 0)
+        let result = SynthesisResult(samples: trimmed,
             sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
         if recordHistory {

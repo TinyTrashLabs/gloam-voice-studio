@@ -29,6 +29,10 @@ struct VoiceEditorForm: View {
     @State private var error: String?
     @State private var transcribing = false
     @State private var transcriptNote: String?
+    /// Loudness trim in dB. 0 covers both "unset" and "deliberately flat" in the
+    /// UI — the distinction only matters on the wire, where `save` restores it by
+    /// writing nil for 0 so an untrimmed voice still exports without the key.
+    @State private var gainDb: Double = 0
     @State private var avatarVersion = 0
     @State private var avatarImporterPresented = false
 
@@ -77,6 +81,25 @@ struct VoiceEditorForm: View {
                 }
             } else if let transcriptNote {
                 Text(transcriptNote).font(.caption).foregroundStyle(.secondary)
+            }
+
+            // Only in edit mode: a trim is a correction to a voice you have
+            // heard, and there is nothing to judge before the first render.
+            if editingSlug != nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Loudness trim").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text(gainDb == 0 ? "0.0 dB" : String(format: "%+.1f dB", gainDb))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(gainDb == 0 ? Brand.fgFaint : Brand.fgDim)
+                    }
+                    Slider(value: $gainDb, in: -GVoice.maxGainDb ... GVoice.maxGainDb, step: 0.5)
+                        .accessibilityIdentifier("voice-gain")
+                    Text("Every voice is levelled to the same standard on the way in. "
+                         + "Use this only where one still sits wrong against the rest.")
+                        .font(.caption2).foregroundStyle(Brand.fgFaint)
+                }
             }
 
             GroupBox {
@@ -201,6 +224,7 @@ struct VoiceEditorForm: View {
         guard let slug = editingSlug, let found = try? model.voices.get(slug) else { return }
         name = found.meta.name
         refText = found.meta.refText
+        gainDb = found.meta.gain ?? 0
         keepingExistingRef = true
     }
 
@@ -241,6 +265,11 @@ struct VoiceEditorForm: View {
                 // wrapper migrates chats + emotion variants + selection.
                 _ = try model.updateVoice(slug, name: name, refText: refText,
                                           refWav: refWav)
+                // After updateVoice, since a rename re-slugs and the trim has to
+                // land on the voice's NEW directory. Written as nil at 0 so an
+                // untrimmed voice stays untrimmed rather than gaining the key.
+                let current = (try? Slug.slugify(name)) ?? slug
+                try model.voices.setGain(current, gainDb: gainDb == 0 ? nil : gainDb)
                 onSaved(nil)
             } else {
                 let meta = try model.voices.save(name: name, refWav: refWav ?? Data(),

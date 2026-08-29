@@ -82,6 +82,24 @@ public enum AudioAssembler {
     /// ear reports. K-weighting costs two biquads and removes most of that gap.
     public static let referenceLoudnessLUFS: Float = -17.0
 
+    /// Apply a per-voice loudness trim, in dB, to rendered output.
+    ///
+    /// On OUTPUT rather than on the reference, even though a clone comes out as
+    /// loud as what it was cloned from. Baking a trim into `ref.wav` would move
+    /// the asset off the standard, so the next measurement would "correct" it
+    /// straight back and the trim would evaporate — and it would be destructive,
+    /// since the original level is not recoverable afterwards. Kept as metadata,
+    /// the trim is reversible, travels inside the pack, and leaves the reference
+    /// meaning exactly one thing.
+    ///
+    /// Soft-limited rather than clipped, for the same reason levelling is: a trim
+    /// that pushes a loud take past full scale should bend, not tear.
+    public static func applyGain(floats samples: [Float], db: Double) -> [Float] {
+        guard db != 0, samples.count > 0 else { return samples }
+        let gain = Float(pow(10, db / 20))
+        return Loudness.softLimit(samples.map { $0 * gain }, ceilingDbFS: 0)
+    }
+
     /// Never let normalisation push a peak above this.
     ///
     /// This bounds the LIMITER, not the gain. The first version of this standard

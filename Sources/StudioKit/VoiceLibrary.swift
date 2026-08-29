@@ -36,10 +36,28 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     public var pace: Double?
     /// Engine id -> pace override. See `GVoice.pace(for:in:)` for resolution.
     public var enginePace: [String: Double]?
+    /// Per-voice loudness trim in dB, on top of the reference standard.
+    ///
+    /// The standard (`RefLoudness`) makes every voice measure the same. This is
+    /// for the part measurement cannot settle: two references at an identical
+    /// -17.0 LUFS can still sit differently in a mix, because timbre, delivery
+    /// and the material behind them all move perceived level. Taste, in other
+    /// words — which is why it is a per-voice trim and not another target.
+    ///
+    /// Deliberately layered ON TOP of the standard rather than replacing it. A
+    /// trim over a working baseline is a small correction most voices leave at
+    /// zero; a trim over an unlevelled library would be 34 numbers dialled by
+    /// hand to paper over a bug, re-dialled on every import.
+    ///
+    /// Nil means unset, which is NOT the same as 0 — writing a default into
+    /// every pack would make "unset" indistinguishable from "deliberately flat"
+    /// on re-export, exactly as `pace` documents above.
+    public var gain: Double?
 
     public init(name: String, slug: String, refText: String, createdAt: String,
                 persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil,
-                pace: Double? = nil, enginePace: [String: Double]? = nil) {
+                pace: Double? = nil, enginePace: [String: Double]? = nil,
+                gain: Double? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
@@ -49,6 +67,7 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         self.variantOf = variantOf
         self.pace = pace
         self.enginePace = enginePace
+        self.gain = gain
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -65,6 +84,8 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         // Tolerant like the fields above: a malformed pace must not break load.
         pace = (try? c.decodeIfPresent(Double.self, forKey: .pace)) ?? nil
         enginePace = (try? c.decodeIfPresent([String: Double].self, forKey: .enginePace)) ?? nil
+        // Tolerant like every field above: a malformed trim must not break load.
+        gain = (try? c.decodeIfPresent(Double.self, forKey: .gain)) ?? nil
     }
 }
 
@@ -122,7 +143,8 @@ public struct VoiceLibrary: Sendable {
                      provenance: JSONValue? = nil,
                      engines: [String: [String: Data]] = [:],
                      pace: Double? = nil,
-                     enginePace: [String: Double]? = nil) throws -> VoiceMeta {
+                     enginePace: [String: Double]? = nil,
+                     gain: Double? = nil) throws -> VoiceMeta {
         let slug = try Slug.slugify(name)
         let voiceDir = directory.appendingPathComponent(slug)
         guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
@@ -141,7 +163,7 @@ public struct VoiceLibrary: Sendable {
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
-                             pace: pace, enginePace: enginePace)
+                             pace: pace, enginePace: enginePace, gain: gain)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -370,9 +392,47 @@ public struct VoiceLibrary: Sendable {
         }
         if let refText { meta.refText = refText }
         if let refWav, !refWav.isEmpty {
-            try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
+            // The standard applies HERE too. This is the third write site for a
+            // reference and it was the one that missed — re-recording a voice
+            // through `update` dropped it back to whatever level the microphone
+            // happened to give, silently undoing the standard for that voice
+            // while `save` and `saveAt` still honoured it.
+            try RefLoudness.normalized(wav: refWav)
+                .write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
+        return meta
+    }
+
+    /// Resolved loudness trim for a slug, in dB: its own trim, else the trim of
+    /// the base voice it is a variant of, else 0.
+    ///
+    /// Falls back through `variantOf` for the same reason `enginePace` falls back
+    /// to `pace` — a variant is the same identity acted differently, so trimming
+    /// "cruz" must move "cruz-hype" too, or every base trim would have to be
+    /// repeated across a voice's variants and kept in sync by hand. A variant
+    /// that sets its OWN trim still wins, which is what makes the expressive
+    /// variants (a shouted take sits hotter than a whispered one) tunable.
+    public func gainDb(for slug: String) -> Double {
+        guard let meta = (try? get(slug))?.0 else { return 0 }
+        if let g = meta.gain, g.isFinite {
+            return max(-GVoice.maxGainDb, min(GVoice.maxGainDb, g))
+        }
+        guard let base = meta.variantOf, base != slug,
+              let baseGain = (try? get(base))?.0.gain, baseGain.isFinite else { return 0 }
+        return max(-GVoice.maxGainDb, min(GVoice.maxGainDb, baseGain))
+    }
+
+    /// Sets (or clears, with nil) the per-voice loudness trim, in dB.
+    ///
+    /// Clamped to ±`GVoice.maxGainDb`. A trim is a correction on top of a voice
+    /// that already measures right, so a large one means something else is wrong
+    /// — an unclamped field would let a slider undo the standard entirely.
+    @discardableResult
+    public func setGain(_ slug: String, gainDb: Double?) throws -> VoiceMeta {
+        var (meta, _) = try get(slug)
+        meta.gain = gainDb.map { max(-GVoice.maxGainDb, min(GVoice.maxGainDb, $0)) }
+        try write(meta, to: directory.appendingPathComponent(slug))
         return meta
     }
 
