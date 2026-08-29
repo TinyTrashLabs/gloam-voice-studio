@@ -132,7 +132,12 @@ public struct VoiceLibrary: Sendable {
             throw StudioError.invalidArchive("voice \(slug) has neither reference audio nor engine assets")
         }
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        if let refWav { try refWav.write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        // Every reference meets the loudness standard on the way in (RefLoudness).
+        // A clone is exactly as loud as what it was cloned from and nothing
+        // downstream re-levels it, so this write is the one boundary where "gain
+        // 1 means the same thing for every voice" can actually be made true —
+        // and every voice crosses it exactly once, however it arrived.
+        if let refWav { try RefLoudness.normalized(wav: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
@@ -157,7 +162,7 @@ public struct VoiceLibrary: Sendable {
         let safeSlug = try GVoice.safeComponent(slug)
         let voiceDir = directory.appendingPathComponent(safeSlug)
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        if let refWav { try refWav.write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        if let refWav { try RefLoudness.normalized(wav: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: safeSlug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance, variantOf: variantOf)

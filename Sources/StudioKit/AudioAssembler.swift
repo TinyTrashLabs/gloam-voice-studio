@@ -52,6 +52,51 @@ public enum AudioAssembler {
         return samples.map { max(-1.0, min(1.0, $0 * scale)) }
     }
 
+    // MARK: - Loudness standard
+
+    /// The reference-audio loudness standard, in dBFS RMS.
+    ///
+    /// A clone sounds as loud as the reference it was built from, and nothing
+    /// downstream re-levels it: on iOS the voice path is a straight gain
+    /// multiply (VoiceMixer.setGain) with no compressor at all. So a quietly
+    /// recorded voice is quiet on every device, at every gain setting, forever —
+    /// an imported voice came in ~2.3 dB under the shipped hosts and was
+    /// audibly quieter on an iPhone at the same setting (David, 2026-08-29).
+    ///
+    /// The number is not a preference: it is measured from `billie-frost`, the
+    /// bundled host whose level is known-good, and `shane` independently sits
+    /// within 0.8 dB of it. Matching it is what makes "gain 1" mean the same
+    /// thing for every voice — which is the actual contract the UI implies.
+    ///
+    /// RMS rather than peak on purpose. `normalizePeak` above equalises the
+    /// loudest SAMPLE, which one transient can dominate, so two clips can share
+    /// a peak and differ audibly — exactly the case here: billie-frost peaks at
+    /// -2.2 dBFS and the quiet import at -5.8, but the perceived gap lives in
+    /// their RMS (-18.0 vs -20.3).
+    public static let referenceLoudnessDbFS: Float = -18.0
+
+    /// Never let normalisation push a peak above this. Boosting a quiet-but-
+    /// spiky clip to hit an RMS target can clip; when the ceiling binds we take
+    /// the smaller gain and stay honest about the level rather than distort.
+    public static let referencePeakCeilingDbFS: Float = -1.0
+
+    /// Gain (linear) that moves `samples` to `targetDbFS` RMS without pushing the
+    /// peak past `peakCeilingDbFS`. Returns 1 for silence — there is no loudness
+    /// to correct, and any finite gain on digital silence is still silence.
+    public static func loudnessGain(floats samples: [Float],
+                                    targetDbFS: Float = referenceLoudnessDbFS,
+                                    peakCeilingDbFS: Float = referencePeakCeilingDbFS) -> Float {
+        guard !samples.isEmpty else { return 1 }
+        var sumSquares: Double = 0
+        var peak: Float = 0
+        for s in samples { sumSquares += Double(s) * Double(s); peak = max(peak, abs(s)) }
+        let rms = Float((sumSquares / Double(samples.count)).squareRoot())
+        guard rms > 1e-6, peak > 1e-6 else { return 1 }
+        let wanted = pow(10, targetDbFS / 20) / rms
+        let ceiling = pow(10, peakCeilingDbFS / 20) / peak
+        return min(wanted, ceiling)
+    }
+
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {
         var peak: Int32 = 0
         pcm.withUnsafeBytes { raw in
