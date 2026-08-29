@@ -87,6 +87,32 @@ final class GVoiceTests: XCTestCase {
         XCTAssertEqual(m.engines?["supertonic-3"]?["base"], ["engines/supertonic-3/style.json"])
     }
 
+    /// A pack is handed to another PERSON, so members that only mean something
+    /// on the exporter's own machine must not ride along: an `elevenlabs`
+    /// voiceId resolves against the exporter's account alone, and
+    /// kokoro/qwen3-design are preset/instruct engines that cannot be the cloned
+    /// identity the pack exists for. The local library keeps them either way.
+    func testExportStripsEnginesThatCannotTravel() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi", engines: [
+            "supertonic": ["style.json": Self.style],
+            "elevenlabs": ["voice.json": Data(#"{"voiceId":"abc123"}"#.utf8)],
+            "kokoro": ["voice.json": Data(#"{"speaker":"am_onyx"}"#.utf8)],
+            "qwen3-design": ["voice.json": Data(#"{"instruct":"a warm host"}"#.utf8)],
+        ])
+        let pack = try GVoice.export("cruz", from: lib)
+
+        XCTAssertEqual(try members(pack).sorted(),
+                       ["engines/supertonic/style.json", "manifest.json", "source/ref.wav"])
+        XCTAssertEqual(Set(try manifest(pack).engines?.keys ?? [:].keys), ["supertonic"])
+        // The account-scoped id must not survive anywhere in the bytes, manifest
+        // or member — this is the half that would leak.
+        XCTAssertFalse(String(decoding: pack, as: UTF8.self).contains("abc123"))
+
+        // Stripped on the way OUT only: the studio still auditions with them.
+        XCTAssertEqual(Set(try lib.entry("cruz").engines.keys),
+                       ["supertonic", "elevenlabs", "kokoro", "qwen3-design"])
+    }
+
     /// The defect that took gvoice to 2: a rendition of more than one file
     /// (lux-tts is window audio + its transcript) wrote every file into the zip
     /// but could name only one in the manifest, so import dropped the rest.

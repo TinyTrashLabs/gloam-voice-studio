@@ -52,6 +52,65 @@ public enum AudioAssembler {
         return samples.map { max(-1.0, min(1.0, $0 * scale)) }
     }
 
+    // MARK: - Loudness standard
+
+    /// The reference-audio loudness standard, in LUFS (ITU-R BS.1770 K-weighted).
+    ///
+    /// A clone sounds as loud as the reference it was built from, and nothing
+    /// downstream re-levels it: on iOS the voice path is a straight gain
+    /// multiply (VoiceMixer.setGain) with no compressor at all. So a quietly
+    /// recorded voice is quiet on every device, at every gain setting, forever —
+    /// an imported voice came in ~2.3 dB under the shipped hosts and was
+    /// audibly quieter on an iPhone at the same setting (David, 2026-08-29).
+    ///
+    /// The anchor is not a preference: it is measured from `billie-frost`, the
+    /// bundled host whose level is known-good, which sits at **-18.2 LUFS**.
+    /// Matching it is what makes "gain 1" mean the same thing for every voice —
+    /// the contract the UI already implies.
+    ///
+    /// The target is that anchor raised **1.2 dB** (≈15% in linear amplitude).
+    /// Levelling the set to billie-frost made every voice CONSISTENT but left the
+    /// whole set quiet against the music bed (David, 2026-08-29). Consistency was
+    /// the bug; absolute level is a separate, deliberate choice on top of it.
+    ///
+    /// LUFS rather than RMS, and RMS rather than peak, for the same reason twice
+    /// over — each is a closer model of what an ear reports than the last.
+    /// `normalizePeak` equalises the loudest SAMPLE, which one transient
+    /// dominates. Plain RMS equalises energy, but weights 60 Hz the same as
+    /// 3 kHz: measured over the real library, `maceo-sad` and `david` sit at an
+    /// identical -18.0 dBFS RMS and still differ by 2.0 LU, in the direction the
+    /// ear reports. K-weighting costs two biquads and removes most of that gap.
+    public static let referenceLoudnessLUFS: Float = -17.0
+
+    /// Apply a per-voice loudness trim, in dB, to rendered output.
+    ///
+    /// On OUTPUT rather than on the reference, even though a clone comes out as
+    /// loud as what it was cloned from. Baking a trim into `ref.wav` would move
+    /// the asset off the standard, so the next measurement would "correct" it
+    /// straight back and the trim would evaporate — and it would be destructive,
+    /// since the original level is not recoverable afterwards. Kept as metadata,
+    /// the trim is reversible, travels inside the pack, and leaves the reference
+    /// meaning exactly one thing.
+    ///
+    /// Soft-limited rather than clipped, for the same reason levelling is: a trim
+    /// that pushes a loud take past full scale should bend, not tear.
+    public static func applyGain(floats samples: [Float], db: Double) -> [Float] {
+        guard db != 0, samples.count > 0 else { return samples }
+        let gain = Float(pow(10, db / 20))
+        return Loudness.softLimit(samples.map { $0 * gain }, ceilingDbFS: 0)
+    }
+
+    /// Never let normalisation push a peak above this.
+    ///
+    /// This bounds the LIMITER, not the gain. The first version of this standard
+    /// used the ceiling to cap the gain instead, and that silently disabled the
+    /// whole feature for about half the library: any clip with a couple of
+    /// transients near full scale could not be boosted at all, so `joe` stayed
+    /// 7.8 dB under target and `morgan-freeman` 4.3 dB under. Bending those
+    /// transients is a far smaller edit to a reference than leaving the voice
+    /// permanently quiet on every device.
+    public static let referencePeakCeilingDbFS: Float = -1.0
+
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {
         var peak: Int32 = 0
         pcm.withUnsafeBytes { raw in

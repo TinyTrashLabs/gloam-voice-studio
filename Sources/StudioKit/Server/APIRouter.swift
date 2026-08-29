@@ -260,6 +260,10 @@ public enum APIRouter {
             var refPath: String? = nil
             var refText: String? = nil
             var usedVariant = false
+            // The library slug actually rendered, so the voice's own loudness
+            // trim can be applied to the output below. Nil for preset/instruct
+            // backends, whose `voice` is not a library slug at all.
+            var trimSlug: String? = nil
             let defaultVoice = deps.defaultVoice()
             let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
             // Baked engine rendition: a pack carrying assets for THIS backend
@@ -306,6 +310,7 @@ public enum APIRouter {
                     }
                     refPath = resolved.refURL.path
                     refText = resolved.meta.refText.isEmpty ? nil : resolved.meta.refText
+                    trimSlug = resolved.slug
                 } else if clones {
                     logError("/v1/audio/speech: \(StudioError.voiceNotFound(slug: voice))"
                         + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -351,7 +356,14 @@ public enum APIRouter {
                 } catch is RequestGate.Busy {
                     throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
                 }
-                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples),
+                // The voice's own loudness trim. Applied HERE and not only in the
+                // app, because this route is how everything off-machine hears a
+                // voice — a trim that existed only in the Studio's own playback
+                // would mean the voice sounds like itself in exactly one place.
+                let trimmed = AudioAssembler.applyGain(
+                    floats: result.samples,
+                    db: trimSlug.map { deps.voices.gainDb(for: $0) } ?? 0)
+                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: trimmed),
                                             sampleRate: result.sampleRate)
                 deps.log.record(.init(
                     method: "POST", path: "/v1/audio/speech", status: 200,

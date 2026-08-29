@@ -82,12 +82,6 @@ struct StudioView: View {
         }
     }
 
-    /// Same curated order as the toolbar's model picker — used to pick the
-    /// best engine to offer when the current one can't render the voice.
-    private static let packBarBackendOrder: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
-         .supertonic, .luxTTS, .pocketTTS]
-
     /// Auto-transcribe a voice's reference audio into `meta.refText` using the
     /// same STT engine the RECORD flow uses — unlocking the transcript-
     /// conditioned engines (qwen3-0.6b/1.7b, lux-tts) for this pack.
@@ -143,19 +137,43 @@ struct StudioView: View {
             let _ = model.voicesVersion
             let caps = model.voices.capabilities(slug)
             let renderable = caps.supports(model.backend)
-            let cloneActive = renderable && !caps.engines.contains(model.backend.rawValue)
-            let cloneEngines = Self.packBarBackendOrder
-                .filter { $0.controls.voiceClone != .none }.map(\.rawValue)
+            // What can SPEAK this voice, which is not what the pack contains.
+            // `engines/` ids answer a different question: they include ids this
+            // app cannot render at all (elevenlabs), and ids that mint a voice
+            // from an instruct rather than speaking a stored one (qwen3-design).
+            // Listing them as the voice's engines told users a Benson pack
+            // "included" kokoro, when kokoro only ever speaks its own presets.
+            // `supports` is the predicate the sidebar and the mismatch warning
+            // below already use — one answer everywhere.
+            //
+            // Derived from `BackendID.allCases`, never a curated list: add a
+            // cloning engine tomorrow and every voice that carries a recording
+            // gains it here with no edit to this view. A curated array would
+            // silently omit it.
+            //
+            // Partitioned rather than sorted by a `contains`-pair predicate:
+            // that comparator is not a strict weak ordering, which can trap
+            // inside Swift's sort.
+            let compatible = BackendID.allCases.filter { caps.supports($0) }
+            let orderedCompatible = compatible.filter { caps.engines.contains($0.rawValue) }
+                + compatible.filter { !caps.engines.contains($0.rawValue) }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     VoiceAvatarView(slug: slug, name: meta.name,
                                     avatarURL: model.voices.avatarURL(slug), size: 20)
                     Text(meta.name).font(.callout.weight(.semibold))
-                    Text("This voice includes:").font(.caption).foregroundStyle(Brand.fgFaint)
+                    Text("Works with:").font(.caption).foregroundStyle(Brand.fgFaint)
+                    ForEach(orderedCompatible, id: \.self) { backend in
+                        packChip(backend.rawValue, active: backend == model.backend)
+                            .help(caps.engines.contains(backend.rawValue)
+                                  ? "Pre-rendered for \(backend.rawValue) — speaks this voice with no recording needed"
+                                  : "Cloned from this voice's recording")
+                    }
+                    if orderedCompatible.isEmpty {
+                        Text("no engine can speak this voice yet")
+                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    }
                     if caps.hasSource {
-                        packChip("voice recording", icon: "mic", active: cloneActive)
-                            .help("Reference audio — any cloning engine can speak this voice: "
-                                  + cloneEngines.joined(separator: ", "))
                         // A missing transcript silently halves the cloning
                         // roster (qwen/lux condition on it) — say so, and fix
                         // it in one click via the same STT the RECORD flow uses.
@@ -174,10 +192,6 @@ struct StudioView: View {
                             }
                         }
                     }
-                    ForEach(caps.engines.sorted(), id: \.self) { engine in
-                        packChip(engine, active: engine == model.backend.rawValue)
-                            .help("Pre-rendered for \(engine) — speaks this voice with no recording needed")
-                    }
                     Spacer(minLength: 0)
                 }
                 if !renderable {
@@ -185,9 +199,9 @@ struct StudioView: View {
                     // pick: a clone ref unlocks the whole cloning roster, so a
                     // single suggestion would undersell the pack. Baked
                     // renditions sort first and say so.
-                    let targets = Self.packBarBackendOrder
-                        .filter { caps.supports($0) && model.hasSufficientRAM(for: $0) }
-                        .sorted { caps.engines.contains($0.rawValue) && !caps.engines.contains($1.rawValue) }
+                    let affordable = compatible.filter { model.hasSufficientRAM(for: $0) }
+                    let targets = affordable.filter { caps.engines.contains($0.rawValue) }
+                        + affordable.filter { !caps.engines.contains($0.rawValue) }
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
@@ -196,7 +210,7 @@ struct StudioView: View {
                         // Engines the pack would support if only the transcript
                         // existed — shown disabled with the reason, so "why not
                         // qwen?" answers itself.
-                        let transcriptLocked = Self.packBarBackendOrder.filter {
+                        let transcriptLocked = BackendID.allCases.filter {
                             !caps.supports($0) && caps.hasSource && $0.needsRefText
                                 && $0.controls.voiceClone != .none
                                 && model.hasSufficientRAM(for: $0)

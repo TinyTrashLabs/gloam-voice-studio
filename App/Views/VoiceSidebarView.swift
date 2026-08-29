@@ -143,6 +143,15 @@ struct VoiceSidebarView: View {
             .onReceive(NotificationCenter.default.publisher(for: .gloamMigrate)) { _ in
                 migratePresented = true
             }
+            // Packs opened through Launch Services (double-click, Open With, an
+            // accepted AirDrop) can land before this view exists — attaching
+            // drains anything queued during launch as well as arming later opens.
+            .onAppear { PackOpenHandler.shared.attach(model) }
+            .onChange(of: PackOpenHandler.shared.openError) { _, error in
+                guard let error else { return }
+                actionError = error
+                PackOpenHandler.shared.openError = nil
+            }
             .background(
                 Color.clear
                     .frame(width: 0, height: 0)
@@ -287,6 +296,8 @@ struct VoiceSidebarView: View {
         .help("Play the reference audio for this voice")
         Button("Export…") { export(voice.slug) }
             .help("Export voice as a .gvoice pack")
+        Button("Share…") { share(voice.slug) }
+            .help("Send this voice as a .gvoice pack via AirDrop, Messages, or Mail")
         Divider()
         Button("Delete", role: .destructive) { pendingDeleteSlug = voice.slug }
             .help("Permanently delete this voice")
@@ -317,6 +328,16 @@ struct VoiceSidebarView: View {
         } catch { actionError = model.describeAny(error) }
     }
 
+    /// Export to a temp file, then hand it to the system share menu. Sharing
+    /// needs a real file on disk (AirDrop transfers a file, not bytes), so
+    /// unlike `export` this can't stop at a `DataDocument`.
+    private func share(_ slug: String) {
+        do {
+            let data = try GVoice.export(slug, from: model.voices)
+            SharePicker.present(try SharePicker.stage(data, filename: "\(slug).gvoice"))
+        } catch { actionError = model.describeAny(error) }
+    }
+
     private func delete(_ slug: String) {
         do {
             try model.voices.delete(slug)
@@ -327,14 +348,7 @@ struct VoiceSidebarView: View {
 
     private func importPacks(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result else { return }
-        var failures: [String] = []
-        for url in urls {
-            guard url.startAccessingSecurityScopedResource() else { continue }
-            defer { url.stopAccessingSecurityScopedResource() }
-            do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
-            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
-        }
-        model.voicesVersion += 1
+        let failures = model.importPacks(from: urls)
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
     }
 
@@ -421,14 +435,7 @@ struct VoiceEmptyStateActions: View {
 
     private func importPacks(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result else { return }
-        var failures: [String] = []
-        for url in urls {
-            guard url.startAccessingSecurityScopedResource() else { continue }
-            defer { url.stopAccessingSecurityScopedResource() }
-            do { _ = try GVoice.`import`(try Data(contentsOf: url), into: model.voices) }
-            catch { failures.append("\(url.lastPathComponent): \(model.describeAny(error))") }
-        }
-        model.voicesVersion += 1
+        let failures = model.importPacks(from: urls)
         if !failures.isEmpty { actionError = failures.joined(separator: "\n") }
     }
 }

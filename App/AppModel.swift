@@ -888,6 +888,29 @@ final class AppModel {
         return meta
     }
 
+    /// Install `.gvoice` packs from disk, returning a per-pack failure list.
+    ///
+    /// Shared by every door a pack can arrive through: the sidebar's file
+    /// importer, the empty state's, and files handed to us by Launch Services
+    /// (double-click, Open With, an AirDrop the user accepted). Those doors
+    /// differ in one way that matters — a URL from an `NSOpenPanel` is
+    /// security-scoped and one from Launch Services is not, and
+    /// `startAccessingSecurityScopedResource` returns false for the latter.
+    /// Treating that false as "no access" would silently skip exactly the
+    /// AirDrop case, so it only gates the balancing `stop` call.
+    @discardableResult
+    func importPacks(from urls: [URL]) -> [String] {
+        var failures: [String] = []
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do { _ = try GVoice.import(try Data(contentsOf: url), into: voices) }
+            catch { failures.append("\(url.lastPathComponent): \(describeAny(error))") }
+        }
+        voicesVersion += 1
+        return failures
+    }
+
     /// Shared engine path used by single-line mode and script mode.
     /// Throws AppGenerationError for precondition failures so callers show
     /// the same messages the single-line flow does.
@@ -979,8 +1002,14 @@ final class AppModel {
         // Even out loudness: Fish output peaks at ~6–9% full-scale vs Chatterbox's
         // ~95%, so without this Fish takes sound much quieter. Normalize once here
         // so history, A/B variants, and script takes all stay consistent.
-        let result = SynthesisResult(
-            samples: AudioAssembler.normalizePeak(floats: raw.samples),
+        // Then the voice's own trim, on top. The standard makes every reference
+        // MEASURE the same; this carries the part measurement can't settle, so
+        // it goes AFTER the peak normalize above — applied before it, the
+        // normalize would simply erase it.
+        let trimmed = AudioAssembler.applyGain(
+            floats: AudioAssembler.normalizePeak(floats: raw.samples),
+            db: resolvedVoice.map { voices.gainDb(for: $0) } ?? 0)
+        let result = SynthesisResult(samples: trimmed,
             sampleRate: raw.sampleRate, wallSeconds: raw.wallSeconds)
         await refreshEngineStatus()   // synthesis loads implicitly
         if recordHistory {

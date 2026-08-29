@@ -2,6 +2,9 @@ import SwiftUI
 
 struct GloamVoiceStudioApp: App {
     @State private var model = AppModel()
+    // Only reason for a delegate: `application(_:open:)` is how Launch Services
+    // hands over a double-clicked / AirDropped .gvoice pack.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         // In UI-test mode, reset persisted UI state so tests start from a clean
