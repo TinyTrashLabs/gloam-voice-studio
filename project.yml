@@ -62,6 +62,17 @@ targets:
         NSAudioCaptureUsageDescription: >-
           Gloam can record what your Mac is playing to capture a reference
           clip for voice cloning. Audio never leaves this Mac.
+        # Claims .gvoice so a double-clicked or AirDropped pack opens HERE.
+        # Declaring the type above only names it; without this the sole
+        # registered handler is Archive Utility, which unzips the pack into
+        # loose files instead of importing it. Scoped to the custom UTI alone —
+        # claiming public.zip-archive would take over every zip on the Mac.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Gloam voice pack
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - fm.gloam.gvoice
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: fm.gloam.gvoice
             UTTypeConformsTo:

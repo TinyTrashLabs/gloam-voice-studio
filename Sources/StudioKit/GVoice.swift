@@ -96,6 +96,25 @@ public enum GVoice {
         public var provenance: JSONValue?
     }
 
+    /// Engine ids that must never leave this machine inside a pack.
+    ///
+    /// A `.gvoice` is something you hand to another PERSON — AirDropped, mailed,
+    /// synced. Two kinds of member fail that trip:
+    ///
+    /// - `elevenlabs` is an account-scoped `voiceId`. It resolves against the
+    ///   exporter's ElevenLabs account and nobody else's, so to a recipient it
+    ///   is dead weight that also names a voice in a private library.
+    /// - `kokoro` and `qwen3-design` are preset/instruct engines: the first
+    ///   speaks only its own fixed speakers, the second mints a voice from a
+    ///   text description. Neither can BE the cloned identity the pack is for,
+    ///   so a pointer to one claims a likeness that does not exist — a Benson
+    ///   pack "including" kokoro means Benson renders as a stranger.
+    ///
+    /// Stripped at EXPORT rather than refused at import: the local library may
+    /// legitimately hold these (the studio uses them to audition), and a voice
+    /// carrying one must still be shareable — minus the parts that don't travel.
+    static let unshareableEngines: Set<String> = ["elevenlabs", "kokoro", "qwen3-design"]
+
     // MARK: export
 
     /// Pack a voice and its emotion variants.
@@ -129,7 +148,7 @@ public enum GVoice {
                 entries.append((member, try Data(contentsOf: refURL)))
                 manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText)
             }
-            for (engine, files) in entry.engines {
+            for (engine, files) in entry.engines where !Self.unshareableEngines.contains(engine) {
                 for (filename, url) in files {
                     let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
                     entries.append((member, try Data(contentsOf: url)))
