@@ -42,10 +42,13 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         # Shared Models/ and Voices/ with the other Gloam apps (Butler).
-        # macOS requires the Team ID prefix; iOS's bare `group.` form is
-        # rejected. Must also be registered on the App ID in the portal or
-        # signing fails -- StoragePaths falls back to this app's own
-        # container if the group can't be resolved at runtime.
+        # macOS requires the Team ID prefix; iOS's bare `group.` form is for
+        # portal-registered groups and is rejected here. A macOS group is NOT a
+        # portal resource -- profiles grant `application-groups` as the wildcard
+        # <TeamID>.*, so any team-prefixed id is self-authorizing. What IS
+        # required is the APP_GROUPS capability on the bundle ID and a profile
+        # issued AFTER it: scripts/sync-app-group.sh does both. StoragePaths
+        # falls back to this app's own container if the group can't be resolved.
         com.apple.security.application-groups:
           - UT233385J9.fm.gloam
         com.apple.security.network.client: true
