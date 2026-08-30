@@ -41,6 +41,13 @@ targets:
       path: App/GloamVoiceStudio.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        # Shared Models/ and Voices/ with the other Gloam apps (Butler).
+        # macOS requires the Team ID prefix; iOS's bare `group.` form is
+        # rejected. Must also be registered on the App ID in the portal or
+        # signing fails -- StoragePaths falls back to this app's own
+        # container if the group can't be resolved at runtime.
+        com.apple.security.application-groups:
+          - UT233385J9.fm.gloam
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.security.device.audio-input: true
