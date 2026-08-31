@@ -336,3 +336,51 @@ Not done — deliberately. `asc publish appstore --submit` is the command.
 **Build 8 still carries the Generate crash (#48).** A crash on the app's primary feature
 is a plausible Guideline 2.1 rejection, and a second rejection on this app is worse than
 a delay. That call is the human's, not the agent's.
+
+---
+
+## Build 9 — the App Store Connect logo fix (2026-08-31)
+
+**The listing logo was wrong because ASC only ever had a 256px icon.**
+
+ASC takes the store icon from `AppIcon.icns` in the bundle — the build's
+`iconAssetToken` points straight at it — **not** from `Assets.car`. `actool`
+writes only a compatibility icns of 16/32/128/256 (`ic04`/`ic11`/`ic07`/`ic13`),
+with no 512 and no 1024, so ASC upscaled a 256px image everywhere.
+
+Two things that looked like the cause and were not: the asset catalog (verified
+complete, all ten renditions including the 1024) and slot files shared between
+sizes (a from-scratch actool run on ten distinct files emits the same four).
+
+Fixed by a `postBuildScripts` phase — `scripts/embed-full-appicon.sh` rebuilds
+the icns with `iconutil`, and `scripts/verify-appicon-icns.py` fails the build
+if `ic09`/`ic10` are absent. It took three passes to get through the archive
+sandbox, all of which pass a plain `xcodebuild build` and only fail at archive:
+`DERIVED_FILE_DIR` is not writable, `iconutil` may not unlink its own output,
+and `BUILT_PRODUCTS_DIR` diverges from `TARGET_BUILD_DIR` during an install
+build. Verify build-phase changes with `fastlane build_pkg`, not `build`.
+
+**Result, measured:**
+
+| | build 8 | build 9 |
+|:--|:--|:--|
+| `iconAssetToken` | 256 x 256, `.../AppIcon.icns` | **1024 x 1024**, `.../AppIcon.png` |
+| bundle `AppIcon.icns` | 61 KB, 4 sizes | 774 KB, 10 sizes |
+
+Build 9 (`d00d1097-8d9f-43af-a106-3f76c96ddb3b`) is uploaded, `VALID`, and
+attached. `asc validate` → **0 errors, 0 warnings**, state
+`PREPARE_FOR_SUBMISSION`.
+
+> The **Apps-list thumbnail** in the ASC web UI is the app-record icon and is
+> served from the last build Apple processed for review — it can keep showing
+> the old artwork until this version is actually submitted. The version's own
+> build icon is correct now; if the grid thumbnail still looks stale, that is
+> the cache, not the build.
+
+### Release notes
+
+The "Known issue" section was removed from the v1.0.0-build.8 GitHub release.
+The Generate abort was seen **once in ~25 generations and never reproduced**
+across 8 voices, three sample rates and five cold starts — that is not
+established enough to publish as a known defect. #48 stays open for
+investigation.
