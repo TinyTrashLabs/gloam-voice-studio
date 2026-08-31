@@ -223,8 +223,22 @@ Two gotchas if you touch that phase:
 
 - `ENABLE_USER_SCRIPT_SANDBOXING: YES` means **every file the script reads must
   be listed in `inputFiles`**, and it may only write its declared `outputFiles`.
-  Staging the iconset under `DERIVED_FILE_DIR` is denied
-  (`Sandbox: mkdir deny(1) file-write-create`); build it in `mktemp -d`.
+  Three separate denials came out of this, all of which pass a plain `build`
+  and only fail at `archive` time:
+  - Staging the iconset under `DERIVED_FILE_DIR` is denied
+    (`mkdir deny(1) file-write-create`) -- build it in `mktemp -d`.
+  - `iconutil` unlinks its output before writing, and the sandbox permits
+    writing a declared output but **not unlinking it**
+    (`deny(1) file-write-unlink`) -- write to a temp path and truncate the
+    destination with `cat >`.
+  - `BUILT_PRODUCTS_DIR` and `TARGET_BUILD_DIR` **diverge during an
+    archive/install build**; using the former writes into
+    `InstallationBuildProductsLocation` while the grant went elsewhere
+    (`deny(1) file-write-data`). Use `TARGET_BUILD_DIR` in both the script and
+    `outputFiles`.
+
+  Always verify a build-phase change with `fastlane build_pkg`, not just
+  `xcodebuild build` -- the archive sandbox is stricter.
 - A correct icns is ~770KB. If it's ~60KB, actool's version is still winning.
 
 Check any built app with:
