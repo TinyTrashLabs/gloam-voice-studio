@@ -125,7 +125,7 @@ targets:
           - $(SRCROOT)/scripts/embed-full-appicon.sh
           - $(SRCROOT)/scripts/verify-appicon-icns.py
         outputFiles:
-          - $(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns
     scheme:
       testTargets: [GloamVoiceStudioUITests]
   GloamVoiceStudioUITests:

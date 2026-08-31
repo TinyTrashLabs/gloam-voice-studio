@@ -18,7 +18,9 @@
 set -euo pipefail
 
 SRC="${SRCROOT:?}/App/Assets.xcassets/AppIcon.appiconset"
-DEST="${BUILT_PRODUCTS_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}/AppIcon.icns"
+# TARGET_BUILD_DIR, not BUILT_PRODUCTS_DIR: during an archive/install build the
+# two diverge, and the sandbox grants write only to the declared output path.
+DEST="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}/AppIcon.icns"
 # Staged in a temp dir, not DERIVED_FILE_DIR: user script sandboxing only
 # grants write access to this phase's declared outputFiles, so building the
 # iconset anywhere under the build directory is denied.
@@ -40,7 +42,12 @@ cp "$SRC/icon-512.png"  "$WORK/icon_256x256@2x.png"
 cp "$SRC/icon-512.png"  "$WORK/icon_512x512.png"
 cp "$SRC/icon-1024.png" "$WORK/icon_512x512@2x.png"
 
-iconutil -c icns "$WORK" -o "$DEST"
+# Build to a temp path, then overwrite $DEST in place. iconutil unlinks its
+# output first, and during an archive/install build the sandbox permits
+# writing this phase's declared output but NOT unlinking it
+# ("deny(1) file-write-unlink"). Truncating via cat sidesteps that.
+iconutil -c icns "$WORK" -o "$WORK.icns"
+cat "$WORK.icns" > "$DEST"
 
 # Fail the build rather than silently ship a truncated icon again: ic09 is the
 # 512 and ic10 the 1024.
