@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-08-31).** See `HANDOFF-2026-08-31-rejection-and-release.md`.
+> This file describes `chore/studio-build-7` as unpushed; that branch has since
+> been merged to `main` (PR #49) and deleted.
+
 # Handoff — 2026-08-30 night session
 
 Written while the App Store archive was building. **Check the "Live at handoff" section
