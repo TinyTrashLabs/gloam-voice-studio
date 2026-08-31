@@ -100,11 +100,32 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "8"
+        CURRENT_PROJECT_VERSION: "9"
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "6.0"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postBuildScripts:
+      # ASC reads the store icon from AppIcon.icns, and actool only writes one
+      # up to 256 -- so the listing showed an upscaled, soft logo. Rebuild it
+      # with iconutil (which honours 512 and 1024) after resources are copied
+      # and before signing, so the signature covers what we wrote.
+      - script: "\"$SRCROOT/scripts/embed-full-appicon.sh\""
+        name: Embed full-resolution AppIcon.icns
+        inputFiles:
+          # Every file the script reads must be declared -- user script
+          # sandboxing is on, so an undeclared read is a build failure.
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-16.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-32.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-64.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-128.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-256.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-512.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          - $(SRCROOT)/scripts/embed-full-appicon.sh
+          - $(SRCROOT)/scripts/verify-appicon-icns.py
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns
     scheme:
       testTargets: [GloamVoiceStudioUITests]
   GloamVoiceStudioUITests:

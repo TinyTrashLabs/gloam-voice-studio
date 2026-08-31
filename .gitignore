@@ -39,3 +39,6 @@ Models/pocket-tts/
 
 # Local voice-pack backups
 packs/*.bak-*
+
+# Stray marketing captures
+mc-*.png
