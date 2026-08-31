@@ -182,6 +182,30 @@ ASC only accepts `--social-media true` when `--user-generated-content true`,
 and `--social-media-age-restricted true` when age assurance and social media
 are both true.
 
+### Submitting: there is no submit-only `asc` command
+
+`asc publish appstore --submit --confirm` is the documented path, but it
+requires `--ipa` or local-build mode and will try to **re-upload** — useless
+when the build is already uploaded and attached. `asc submit` only offers
+`status` and `cancel`. So the final submit goes through the web UI:
+
+1. Version page → **Add for Review** (top right).
+2. Pick the existing **Draft Submission** rather than "Create New Submission" —
+   ASC keeps one open submission per app, and the draft is the container "Add
+   for Review" fills. A draft opened by the API key months earlier is still the
+   right one to use.
+3. The drawer lists **Items Ready to Submit** — confirm it names the build you
+   expect (e.g. `macOS App 1.0.0 (9)`) before clicking **Submit for Review**.
+
+Confirm afterwards with `asc status --app APP_ID`: `review.state` should be
+`WAITING_FOR_REVIEW` with `blockers: []`.
+
+Release type is often **MANUAL**, which means approval does *not* publish:
+
+```bash
+asc versions release --version-id VERSION_ID --confirm
+```
+
 ### What still genuinely needs the web UI
 
 - **App Privacy** publish state is not readable via the public API. `validate`
