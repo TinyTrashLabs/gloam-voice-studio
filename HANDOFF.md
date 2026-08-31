@@ -384,3 +384,28 @@ The Generate abort was seen **once in ~25 generations and never reproduced**
 across 8 voices, three sample rates and five cold starts — that is not
 established enough to publish as a known defect. #48 stays open for
 investigation.
+
+---
+
+## SUBMITTED — 2026-08-31 12:48 UTC
+
+Version 1.0.0, **build 9**, macOS. `WAITING_FOR_REVIEW`, no blockers. Apple
+quotes up to 48 hours and emails the outcome.
+
+Submitted through the ASC web UI: there is **no submit-only `asc` command**.
+`asc publish appstore --submit` insists on `--ipa` or local-build mode and
+would try to re-upload, and `asc submit` only offers `status`/`cancel`. The
+draft submission container (`8ef788d8`, opened by the API key on Jul 3 and the
+one that refused to cancel) is what "Add for Review" fills, and its drawer
+listed exactly one item: `macOS App 1.0.0 (9)`.
+
+Release type is **MANUAL**, so approval will not publish it. Release with:
+
+```sh
+asc versions release --version-id 24ddead4-2d32-47d3-83eb-253227293d98 --confirm
+```
+
+Watch it with `asc status --app 6786521434`.
+
+**If it comes back rejected for a crash**, that is #48 and the fix is real work,
+not a metadata change — see the issue.
