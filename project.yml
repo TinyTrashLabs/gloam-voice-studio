@@ -41,6 +41,16 @@ targets:
       path: App/GloamVoiceStudio.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        # Shared Models/ and Voices/ with the other Gloam apps (Butler).
+        # macOS requires the Team ID prefix; iOS's bare `group.` form is for
+        # portal-registered groups and is rejected here. A macOS group is NOT a
+        # portal resource -- profiles grant `application-groups` as the wildcard
+        # <TeamID>.*, so any team-prefixed id is self-authorizing. What IS
+        # required is the APP_GROUPS capability on the bundle ID and a profile
+        # issued AFTER it: scripts/sync-app-group.sh does both. StoragePaths
+        # falls back to this app's own container if the group can't be resolved.
+        com.apple.security.application-groups:
+          - UT233385J9.fm.gloam
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.security.device.audio-input: true
@@ -49,6 +59,11 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Gloam Voice Studio
+        # The menu-bar title comes from CFBundleName, NOT CFBundleDisplayName --
+        # unset it falls back to $(PRODUCT_NAME) and reads "GloamVoiceStudio".
+        # The bundle/executable stay GloamVoiceStudio so signing and the
+        # provisioning profile are untouched.
+        CFBundleName: Gloam Voice Studio
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
@@ -85,11 +100,32 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "6"
+        CURRENT_PROJECT_VERSION: "9"
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "6.0"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postBuildScripts:
+      # ASC reads the store icon from AppIcon.icns, and actool only writes one
+      # up to 256 -- so the listing showed an upscaled, soft logo. Rebuild it
+      # with iconutil (which honours 512 and 1024) after resources are copied
+      # and before signing, so the signature covers what we wrote.
+      - script: "\"$SRCROOT/scripts/embed-full-appicon.sh\""
+        name: Embed full-resolution AppIcon.icns
+        inputFiles:
+          # Every file the script reads must be declared -- user script
+          # sandboxing is on, so an undeclared read is a build failure.
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-16.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-32.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-64.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-128.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-256.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-512.png
+          - $(SRCROOT)/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+          - $(SRCROOT)/scripts/embed-full-appicon.sh
+          - $(SRCROOT)/scripts/verify-appicon-icns.py
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AppIcon.icns
     scheme:
       testTargets: [GloamVoiceStudioUITests]
   GloamVoiceStudioUITests:

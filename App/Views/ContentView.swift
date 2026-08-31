@@ -158,11 +158,6 @@ struct ContentView: View {
                 .popover(isPresented: $llmPickerOpen, arrowEdge: .bottom) { llmPickerList }
         }
 
-        // 2b. Resident model + app RAM — always visible so you can see and unload
-        //     whatever is loaded, including qwen3-design (the Foundry loads it, but it
-        //     isn't in the picker). This is the RAM-management surface on the top bar.
-        ToolbarItem(placement: .automatic) { RAMChip() }
-
         if #available(macOS 26, *) { ToolbarSpacer(.fixed) }
 
         // 3. API server indicator — clicking selects the API Server tab first
@@ -300,8 +295,19 @@ struct ContentView: View {
     @ViewBuilder
     private var modelStatusChip: some View {
         HStack(spacing: 5) {
+            // Pairs with the LLM chip's `brain`: at a glance, which chip is the
+            // voice and which is the language model.
+            Image(systemName: "waveform").font(.system(size: 10))
+                .foregroundStyle(Brand.fgFaint)
             dot(statusDot(for: model.backend))
             Text(model.backend.rawValue)
+            // What THIS model costs, measured across its own load -- on the
+            // control you click to change it, so it's always in view.
+            if let gb = model.measuredGB[model.backend.rawValue] {
+                Text(String(format: "· %.1f GB", gb))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Brand.fgFaint)
+            }
             if model.modelOpInFlight { ProgressView().controlSize(.mini) }
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
@@ -318,7 +324,9 @@ struct ContentView: View {
         // the opaque name text, so clicking the chevron/spacing did nothing.
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(model.backend.rawValue) model, \(modelStateText(model.backend))")
+        .accessibilityLabel("\(model.backend.rawValue) model, \(modelStateText(model.backend))"
+            + (model.measuredGB[model.backend.rawValue]
+                .map { String(format: ", using %.1f gigabytes", $0) } ?? ""))
     }
 
     /// Status-dot color for a chat LLM, same scheme as the voice backends.
@@ -349,6 +357,11 @@ struct ContentView: View {
             Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
             dot(llmStatusDot(for: model.chatLLM))
             Text(model.chatLLM.rawValue)
+            if let gb = model.measuredGB[model.chatLLM.rawValue] {
+                Text(String(format: "· %.1f GB", gb))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Brand.fgFaint)
+            }
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(Brand.fgFaint)
@@ -360,7 +373,9 @@ struct ContentView: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(model.chatLLM.rawValue) chat model, \(llmStateText(model.chatLLM))")
+        .accessibilityLabel("\(model.chatLLM.rawValue) chat model, \(llmStateText(model.chatLLM))"
+            + (model.measuredGB[model.chatLLM.rawValue]
+                .map { String(format: ", using %.1f gigabytes", $0) } ?? ""))
     }
 
     /// Popover for the LLM chooser: one row per chat LLM (dot + name + state +
@@ -373,9 +388,13 @@ struct ContentView: View {
                 let ramOK = model.hasSufficientRAM(for: llm)
                 let state = model.downloads.state(for: llm)
                 Button {
-                    model.chatLLM = llm
+                    // Load now rather than deferring to the first reply: until
+                    // it's resident there is no dot to go green and no measured
+                    // cost to show.
                     if state == .ready {
-                        Task { try? await model.ensureLLMReady(llm) }
+                        Task { await model.loadChatLLM(llm) }
+                    } else {
+                        model.chatLLM = llm
                     }
                     llmPickerOpen = false
                 } label: {
@@ -389,6 +408,11 @@ struct ContentView: View {
                                 .font(.caption2).foregroundStyle(Brand.fgDim)
                         }
                         Spacer(minLength: 12)
+                        if let gb = model.measuredGB[llm.rawValue], model.loadedLLM == llm {
+                            Text(String(format: "%.1f GB", gb))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(Brand.fgDim)
+                        }
                         if state == .notDownloaded, ramOK {
                             Button("Download") { model.downloads.download(llm) }
                                 .font(.caption)
@@ -461,14 +485,32 @@ struct ContentView: View {
     @ViewBuilder
     private var modelPickerList: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // Without this the failure mode is silent and alarming: every model
+            // reads "not downloaded" on a Mac that has all of them.
+            if model.usingFallbackStore {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                    Text("Shared storage unavailable — this build can't reach the "
+                         + "app group, so your installed models aren't visible. "
+                         + "They haven't been deleted.")
+                        .font(.caption2).foregroundStyle(Brand.fgDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
+            }
             ForEach(pickerBackends, id: \.self) { b in
                 let loaded = model.loadedBackend == b
                 let ramOK = model.hasSufficientRAM(for: b)
                 Button {
+                    // Selection follows residency (see refreshEngineStatus), so
+                    // don't move it for a model that can't load yet -- ask first.
+                    // Silently kicking off a multi-gigabyte download on a click
+                    // is not a thing to do without saying so.
+                    guard model.downloads.state(for: b) == .ready else { return }
                     model.backend = b
-                    if model.downloads.state(for: b) == .ready {
-                        Task { await model.loadModel(b) }
-                    }
+                    Task { await model.loadModel(b) }
                     modelPickerOpen = false
                 } label: {
                     HStack(spacing: 8) {
@@ -479,6 +521,16 @@ struct ContentView: View {
                                 .font(.caption2).foregroundStyle(Brand.fgDim)
                         }
                         Spacer(minLength: 12)
+                        // What this model is actually costing, right now.
+                        if loaded, let gb = model.measuredGB[b.rawValue] {
+                            Text(String(format: "%.1f GB", gb))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(Brand.fgDim)
+                        }
+                        if model.downloads.state(for: b) == .notDownloaded, ramOK {
+                            Button("Download") { model.downloads.download(b) }
+                                .font(.caption)
+                        }
                         if loaded {
                             Image(systemName: "checkmark")
                                 .font(.caption.weight(.semibold))
@@ -525,74 +577,12 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .disabled(model.isGenerating || model.modelOpInFlight)
             }
-            Text(String(format: "App memory: %.2f GB", model.memGB))
-                .font(.caption2).foregroundStyle(Brand.fgFaint)
-                .padding(.horizontal, 8).padding(.top, 2)
         }
         .padding(8)
         .frame(width: 260)
         // Translucent over the popover's native glass chrome rather than
         // opaque ink — keeps the tint, lets the system material show.
         .background(Brand.ink2.opacity(0.5))
-    }
-}
-
-/// Resident-model + app-RAM chip, as its OWN View so it re-renders reliably when
-/// `loadedBackend`/`memGB` change — toolbar content built from a parent's computed
-/// property often won't observe @Observable changes. Shows whatever backend is
-/// actually loaded (Foundry's qwen3-design, a bake's fish/chatterbox, …); click unloads.
-struct RAMChip: View {
-    @Environment(AppModel.self) private var model
-    var body: some View {
-        // Pure indicator — NOT a button. Load/unload lives in the model picker
-        // popover (the "regular menu"); an accidental click here must never evict a
-        // model. Shows the resident model + app RAM at a glance.
-        HStack(spacing: 5) {
-            Image(systemName: "memorychip").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
-            // The resident TTS model lives in either the main engine or the
-            // parallel chat-speech engine (TTSResidencyPolicy keeps it to one).
-            if let loaded = model.residentTTS {
-                Text(loaded.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
-                    .lineLimit(1).fixedSize()
-            }
-            // Resident chat LLM — it's served on the same OpenAI-compatible
-            // server as the voice engines, so it gets equal billing up here.
-            if let llm = model.loadedLLM {
-                Image(systemName: "brain").font(.system(size: 10)).foregroundStyle(Brand.fgFaint)
-                Text(llm.rawValue).font(.caption).foregroundStyle(Brand.fgDim)
-                    .lineLimit(1).fixedSize()
-            }
-            Text(String(format: "%.1f GB", model.memGB))
-                .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
-        }
-        .padding(.horizontal, 9).padding(.vertical, 2)
-        .help(ramHelp)
-        .accessibilityIdentifier("ram-chip")
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(ramAccessibilityLabel)
-    }
-
-    /// Mirrors the chip's own rendering rules (loaded voice model, loaded chat
-    /// LLM, app memory) so VoiceOver hears exactly what's on screen — falls
-    /// back to "No model loaded" when neither is resident, matching the chip
-    /// showing just the memorychip glyph + GB figure in that state.
-    private var ramAccessibilityLabel: String {
-        var parts: [String] = []
-        if let tts = model.residentTTS { parts.append("\(tts.rawValue) voice model loaded") }
-        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) chat model loaded") }
-        if parts.isEmpty { parts.append("No model loaded") }
-        parts.append(String(format: "%.1f gigabytes of app memory", model.memGB))
-        return parts.joined(separator: ", ")
-    }
-
-    private var ramHelp: String {
-        var parts: [String] = []
-        if let tts = model.residentTTS { parts.append("\(tts.rawValue) (voice) loaded") }
-        if let llm = model.loadedLLM { parts.append("\(llm.rawValue) (LLM) loaded") }
-        if parts.isEmpty { parts.append("no model loaded") }
-        parts.append(String(format: "%.2f GB app memory", model.memGB))
-        return parts.joined(separator: " · ")
-            + " — voice models load/unload in the model picker, the LLM in the chat inspector"
     }
 }
 

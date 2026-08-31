@@ -337,6 +337,19 @@ final class AppModel {
     /// RAM chip (label, help, VoiceOver) displays.
     var residentTTS: BackendID? { loadedBackend ?? loadedChatTTS }
     var loadedLLM: LLMBackendID?
+    /// What each resident model ACTUALLY costs on this Mac, keyed by rawValue.
+    /// `minRAMBytes` is a floor for "can this Mac run it" and the download
+    /// sizes are on-disk bytes -- neither is usage, so neither can answer
+    /// "what is this model costing me right now". Mirrored from the engines,
+    /// which measure at the load itself so a model loaded by Generate, the API
+    /// server or a bake is covered exactly like one loaded from the picker.
+    var measuredGB: [String: Double] = [:]
+
+    /// Set when the App Group container couldn't be resolved, so the shared
+    /// model/voice store fell back to this app's private Application Support.
+    /// Worth saying out loud: the symptom is an existing library appearing
+    /// empty and re-downloading, which looks like data loss but isn't.
+    var usingFallbackStore: Bool { StoragePaths.isUsingFallbackStore }
     var memGB: Double = 0
     var modelOpInFlight = false
     /// The specific backend currently being loaded, so only its row spins
@@ -838,6 +851,26 @@ final class AppModel {
         loadedBackend = await engine.loadedBackend()
         loadedChatTTS = await chatSpeechEngine.loadedBackend()
         loadedLLM = await engine.loadedLLM()
+        let footprints = await engine.measuredFootprints()
+            .merging(await chatSpeechEngine.measuredFootprints()) { a, _ in a }
+        measuredGB = footprints.mapValues { Double($0) / 1_073_741_824 }
+        // Residency DRIVES selection: what is in memory is what is selected,
+        // so a picker can never name a model that isn't loaded. Without this
+        // the two drift apart in ordinary use -- picking an undownloaded
+        // backend, or switching chatLLM (which loads lazily, on first send) --
+        // and the toolbar reads as if two models were resident when only the
+        // old one ever is.
+        //
+        // Guarded on inequality because both didSets rebuild the API server,
+        // and Swift fires didSet even when the value is unchanged.
+        //
+        // qwen3-design is the one deliberate exception: the Foundry loads it
+        // for Create Voice only and it is not a Studio speak-backend (init
+        // performs the same carve-out when restoring the saved selection).
+        if let resident = residentTTS, resident != .qwenDesign, resident != backend {
+            backend = resident
+        }
+        if let llm = loadedLLM, llm != chatLLM { chatLLM = llm }
         memGB = MemoryFootprint.currentGB()
     }
 
@@ -858,6 +891,19 @@ final class AppModel {
         defer { modelOpInFlight = false; loadingBackend = nil }
         await ttsResidency.willUse(engine)
         do { try await engine.preload(backend: backend) }
+        catch { generationError = describeAny(error) }
+        await refreshEngineStatus()
+    }
+
+    /// Load the chat LLM into residency now, rather than waiting for the first
+    /// reply to do it implicitly -- so the picker's dot means something and the
+    /// cost can be measured.
+    func loadChatLLM(_ backend: LLMBackendID) async {
+        guard downloads.state(for: backend) == .ready, !modelOpInFlight else { return }
+        modelOpInFlight = true
+        defer { modelOpInFlight = false }
+        chatLLM = backend
+        do { try await engine.preloadLLM(backend: backend) }
         catch { generationError = describeAny(error) }
         await refreshEngineStatus()
     }

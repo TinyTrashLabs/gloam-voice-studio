@@ -32,10 +32,37 @@ public actor GloamEngine {
     private let languageProvider: LanguageModelProviding?
     private var residentLLM: (backend: LLMBackendID, model: any LanguageModel)?
 
-    public init(provider: ModelProviding, languageProvider: LanguageModelProviding? = nil) {
+    /// What each resident model actually cost, keyed by backend rawValue and
+    /// measured as the process-footprint delta across its own load. Recorded
+    /// HERE rather than at the call site so every path is covered -- picker
+    /// preload, first Generate, an API request, a bake. Dropped on eviction:
+    /// a model that isn't resident isn't costing anything.
+    private var measured: [String: Int64] = [:]
+
+    public func measuredFootprints() -> [String: Int64] { measured }
+
+    /// Records `key`'s cost if the load actually grew the footprint. A flat or
+    /// negative delta means something was freed in the same window (a peer
+    /// engine evicting, or the allocator returning pages); recording that would
+    /// be worse than recording nothing.
+    private func record(_ key: String, from before: Int64) {
+        let delta = footprint() - before
+        if delta > 50_000_000 { measured[key] = delta }
+    }
+
+    /// `footprint` is injectable so load measurement can be tested without
+    /// depending on process-global memory -- two tests each allocating and
+    /// freeing hundreds of megabytes interleave, and one test's free lands
+    /// inside another's measurement window.
+    public init(provider: ModelProviding,
+                languageProvider: LanguageModelProviding? = nil,
+                footprint: @escaping @Sendable () -> Int64 = { ProcessFootprint.bytes() }) {
         self.provider = provider
         self.languageProvider = languageProvider
+        self.footprint = footprint
     }
+
+    private let footprint: @Sendable () -> Int64
 
     public func acknowledgeLicense(for backend: BackendID) {
         ackedLicenses.insert(backend)
@@ -59,6 +86,7 @@ public actor GloamEngine {
     public func unload() {
         guard let resident else { return }
         engineLog.log("unload TTS \(resident.backend.rawValue, privacy: .public)")
+        measured[resident.backend.rawValue] = nil
         self.resident = nil
         provider.didEvictModel()
     }
@@ -93,6 +121,7 @@ public actor GloamEngine {
     public func unloadLLM() {
         guard let residentLLM else { return }
         engineLog.log("unload LLM \(residentLLM.backend.rawValue, privacy: .public)")
+        measured[residentLLM.backend.rawValue] = nil
         self.residentLLM = nil
         languageProvider?.didEvictModel()
     }
@@ -200,15 +229,31 @@ public actor GloamEngine {
         }
     }
 
+    /// Load `backend` into LLM residency without generating -- the LLM analog of
+    /// `preload(backend:)`. Without this the chat model only loads on the first
+    /// reply, so the app cannot show a real "loaded" state (or measure what the
+    /// load actually costs) until the user has already sent a message.
+    public func preloadLLM(backend: LLMBackendID) async throws {
+        let previous = tail
+        let work = Task<Void, Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            _ = try await self.residentLanguageModel(for: backend)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
     private func residentLanguageModel(for backend: LLMBackendID) async throws -> any LanguageModel {
         if let residentLLM, residentLLM.backend == backend { return residentLLM.model }
         guard let languageProvider else { throw EngineError.languageProviderUnavailable }
         unloadLLM()
         let start = Date()
+        let footprintBefore = footprint()
         engineLog.log("loading LLM \(backend.rawValue, privacy: .public)…")
         let model = try await languageProvider.loadModel(backend: backend)
         engineLog.log("loaded LLM \(backend.rawValue, privacy: .public) in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s")
         residentLLM = (backend, model)
+        record(backend.rawValue, from: footprintBefore)
         return model
     }
 
@@ -282,10 +327,12 @@ public actor GloamEngine {
         }
         unload()
         let start = Date()
+        let footprintBefore = footprint()
         engineLog.log("loading TTS \(backend.rawValue, privacy: .public)…")
         let model = try await provider.loadModel(backend: backend)
         engineLog.log("loaded TTS \(backend.rawValue, privacy: .public) in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s")
         resident = (backend, model)
+        record(backend.rawValue, from: footprintBefore)
         return model
     }
 }

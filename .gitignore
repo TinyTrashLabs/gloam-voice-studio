@@ -29,3 +29,16 @@ ExportOptions.plist
 
 # Fetched TTS model weights — hundreds of MB, re-fetchable via scripts/fetch-*.sh
 Models/pocket-tts/
+
+# asc CLI credentials (App Store Connect API key material) — never commit
+.asc/
+
+# Agent tooling scratch output (Playwright MCP traces, task reports) — not project content
+.playwright-mcp/
+.superpowers-task-report.md
+
+# Local voice-pack backups
+packs/*.bak-*
+
+# Stray marketing captures
+mc-*.png

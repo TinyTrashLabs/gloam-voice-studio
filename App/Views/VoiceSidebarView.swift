@@ -17,10 +17,10 @@ struct VoiceSidebarView: View {
     @State private var actionError: String?
     @State private var migratePresented = false
     @State private var refPlayer = PreviewPlayer()
-    @State private var hoveredSlug: String?
     @State private var catalogPresented = false
     @State private var pendingDeleteSlug: String?
     @State private var searchText = ""
+    @State private var hoveredSlug: String?
 
     var body: some View {
         @Bindable var model = model
@@ -171,13 +171,18 @@ struct VoiceSidebarView: View {
     @ViewBuilder
     private func voiceRow(_ voice: VoiceMeta, isVariant: Bool, variantCount: Int) -> some View {
         let isPlaying = refPlayer.playingID == voice.slug
-        let showControls = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
         // Engine-matched enablement: derived from the voice's pack contents
         // (source audio and/or engines/<id>/ renditions). Unrenderable rows
         // stay selectable (editing, persona) but dim and say what they DO work
         // on, so a supertonic-only pack isn't mistaken for broken.
         let caps = model.voices.capabilities(voice.slug)
         let renderable = caps.supports(model.backend)
+        // Hover/selection drives EMPHASIS only, never presence: the controls
+        // are always laid out (an on-hover insert made the row's width jump and
+        // hid the actions from discovery), they just brighten when the row is
+        // hovered or selected.
+        let emphasized = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
+        let controlTint = emphasized ? Brand.fg : Brand.fgDim
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -199,6 +204,10 @@ struct VoiceSidebarView: View {
                 HStack(spacing: 5) {
                     Text(voice.name).font(isVariant ? .callout : .body)
                         .foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
+                        // Truncate the name rather than shoving the row's
+                        // controls off the edge -- a long name must not be able
+                        // to delete the "..." menu.
+                        .lineLimit(1).truncationMode(.tail)
                     if !renderable && !isVariant {
                         // Minimal indicator — the full engine list lives in the
                         // tooltip, keeping the row quiet (dim name + one glyph).
@@ -225,46 +234,56 @@ struct VoiceSidebarView: View {
                 }
             }
             Spacer(minLength: 4)
-            if showControls || isPlaying {
-                Button { previewRef(voice) } label: {
-                    ZStack {
-                        if isPlaying { EqualizerBars(color: Brand.accent) }
-                        else {
-                            Image(systemName: "play.fill").font(.system(size: 10))
-                                .foregroundStyle(Brand.fgDim)
-                        }
+            Button { previewRef(voice) } label: {
+                ZStack {
+                    if isPlaying { EqualizerBars(color: Brand.accent) }
+                    else {
+                        Image(systemName: "play.fill").font(.system(size: 10))
+                            .foregroundStyle(controlTint)
                     }
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
-                    .contentShape(Circle())
                 }
-                .buttonStyle(.borderless)
-                .help(isPlaying ? "Stop preview" : "Play sample")
-                .accessibilityIdentifier("play-voice")
-                .accessibilityLabel("Preview Voice")
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
+                .contentShape(Circle())
             }
-            if showControls && !isVariant {
+            .buttonStyle(.borderless)
+            .help(isPlaying ? "Stop preview" : "Play sample")
+            .accessibilityIdentifier("play-voice")
+            .accessibilityLabel("Preview Voice")
+
+            if !isVariant {
                 Button { openEdit(voice.slug) } label: {
                     Image(systemName: "pencil")
                 }
-                .buttonStyle(.borderless).foregroundStyle(Brand.fgDim)
+                .buttonStyle(.borderless).foregroundStyle(controlTint)
                 .help("Edit this voice (name, reference, emotion variants)")
                 .accessibilityIdentifier("edit-voice")
                 .accessibilityLabel("Edit Voice")
             }
+            // Inside this List's rows the .borderlessButton menu is an
+            // AppKit-backed popup that tints its template label itself, so
+            // SwiftUI foreground/tint never reaches the glyph and it comes out
+            // black-on-ink or not painted at all (ChatView's copy of that shape
+            // works only because it isn't in a List). .button + .plain keeps
+            // the label in SwiftUI's renderer, where the colour applies.
             Menu { voiceActions(voice) } label: {
-                Image(systemName: "ellipsis").foregroundStyle(Brand.fgDim)
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(controlTint)
+                    .frame(width: 18, alignment: .center)
+                    .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .menuStyle(.button).buttonStyle(.plain)
+            .menuIndicator(.hidden).fixedSize()
+            .layoutPriority(1)
             .help("More actions").accessibilityIdentifier("voice-menu")
             .accessibilityLabel("More Actions")
         }
         .contentShape(Rectangle())
-        .onHover { hovering in
-            if hovering { hoveredSlug = voice.slug }
+        .tag(voice.slug)
+        .onHover { inside in
+            if inside { hoveredSlug = voice.slug }
             else if hoveredSlug == voice.slug { hoveredSlug = nil }
         }
-        .tag(voice.slug)
         .contextMenu { voiceActions(voice) }
     }
 
