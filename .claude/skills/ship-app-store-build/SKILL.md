@@ -190,8 +190,35 @@ are both true.
 - **Release type MANUAL** means an approved version does not go live on its
   own (`asc versions release --version-id VERSION_ID --confirm` releases it).
 
-Do not try to drive the ASC web UI with a browser tool — it requires an Apple
-ID password and 2FA, which an agent must not enter. Ask the human to log in.
+### Reading the ASC web UI: use the user's own Chrome
+
+For the handful of things the API cannot see, drive **the user's real Chrome**
+with the `claude-in-chrome` tools (`mcp__claude-in-chrome__*`) — they attach to
+the browser the human is already signed into, so there is nothing to log in to:
+
+```
+tabs_context_mcp {createIfEmpty: true}   # always first
+tabs_create_mcp                          # your own tab, don't hijack theirs
+navigate  https://appstoreconnect.apple.com/apps/APP_ID/distribution/privacy
+computer  {action: "screenshot"}         # the page renders async; wait ~3s and re-shoot
+```
+
+**Do NOT reach for the Playwright MCP tools here.** They run an isolated
+browser profile with no Apple session, so ASC bounces straight to
+`/login?...&authResult=FAILED` and it looks like the user is logged out when
+they are not. That misread cost a round trip.
+
+Either way, **never type an Apple ID password or a 2FA code** — that stays the
+human's to do. `asc web auth login --apple-id ...` exists for the `asc web`
+family and prompts for both; if a web session is genuinely needed, hand the
+user that command rather than running it for them (`asc web auth status` shows
+whether one is live).
+
+Useful pages:
+
+- App Privacy: `/apps/APP_ID/distribution/privacy` — the "Published N ago"
+  line at top right is the state `validate` cannot read.
+- In-flight version: `/apps/APP_ID/distribution/macos/version/inflight`
 
 ## The app icon: ASC reads AppIcon.icns, and actool truncates it
 
@@ -256,4 +283,13 @@ asc builds info --app APP_ID --latest --output json | python3 -c \
 ```
 
 If that reports `"width": 256`, the uploaded build has the truncated icns and
-**no metadata change will fix it** — it needs a new build.
+**no metadata change will fix it** — it needs a new build. A fixed build
+reports `1024 x 1024` and a token ending in `AppIcon.png` rather than
+`AppIcon.icns`.
+
+Finally: the **Apps-grid and app-header thumbnails in the ASC web UI are the
+app-record icon**, served from the last build Apple processed for review. They
+can keep showing months-old artwork after a correct build is uploaded and
+attached. Judge the fix by the `iconAssetToken` above, not by that thumbnail,
+and tell the user which one they are looking at — otherwise a correct fix reads
+as a failed one.
