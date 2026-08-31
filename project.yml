@@ -59,6 +59,11 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Gloam Voice Studio
+        # The menu-bar title comes from CFBundleName, NOT CFBundleDisplayName --
+        # unset it falls back to $(PRODUCT_NAME) and reads "GloamVoiceStudio".
+        # The bundle/executable stay GloamVoiceStudio so signing and the
+        # provisioning profile are untouched.
+        CFBundleName: Gloam Voice Studio
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
