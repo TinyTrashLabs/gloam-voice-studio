@@ -42,3 +42,8 @@ packs/*.bak-*
 
 # Stray marketing captures
 mc-*.png
+
+# Handoffs are internal working notes — they do not belong in a public repo.
+# Keep them in handoffs/ locally; see CLAUDE.md.
+HANDOFF*.md
+handoffs/
