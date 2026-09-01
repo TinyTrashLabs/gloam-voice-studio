@@ -115,6 +115,25 @@ public enum GVoice {
     /// carrying one must still be shareable — minus the parts that don't travel.
     static let unshareableEngines: Set<String> = ["elevenlabs", "kokoro", "qwen3-design"]
 
+    /// `elevenlabs` never travels — a voiceId is bound to someone else's
+    /// account, so the pointer is useless in another library whatever the pack
+    /// is.
+    static let neverShareableEngines: Set<String> = ["elevenlabs"]
+
+    /// Whether `engine`'s rendition may be exported from a pack.
+    ///
+    /// The rule above exists because a pointer to a preset engine inside a
+    /// CLONED pack claims a likeness that does not exist — a Benson pack
+    /// "including" kokoro means Benson renders as a stranger. That reasoning
+    /// inverts for a pack with no source of its own: there the preset pointer
+    /// IS the identity, not a false claim about one, and stripping it leaves an
+    /// empty pack that cannot be imported at all. The built-in preset voices are
+    /// exactly that shape.
+    static func shareable(engine: String, packHasSource: Bool) -> Bool {
+        if neverShareableEngines.contains(engine) { return false }
+        return packHasSource ? !unshareableEngines.contains(engine) : true
+    }
+
     // MARK: export
 
     /// Pack a voice and its emotion variants.
@@ -148,7 +167,9 @@ public enum GVoice {
                 entries.append((member, try Data(contentsOf: refURL)))
                 manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText)
             }
-            for (engine, files) in entry.engines where !Self.unshareableEngines.contains(engine) {
+            let packHasSource = includeSource && entry.refURL != nil
+            for (engine, files) in entry.engines
+            where Self.shareable(engine: engine, packHasSource: packHasSource) {
                 for (filename, url) in files {
                     let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
                     entries.append((member, try Data(contentsOf: url)))

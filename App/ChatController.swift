@@ -125,7 +125,7 @@ final class ChatController {
         // Seed the persona's greeting as the opening message, if any — but
         // never auto-speak it (surprise audio on a voice click would be worse
         // than a silent bubble; the replay button covers it).
-        if let greeting = (try? app.voices.get(slug).meta)?.persona?.greeting,
+        if let greeting = (try? app.voices.meta(slug))?.persona?.greeting,
            !greeting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             convo.messages.append(ChatMessage(
                 id: UUID().uuidString, role: "assistant", text: greeting,
@@ -422,7 +422,7 @@ final class ChatController {
     // MARK: internals
 
     private func makeRequest(for convo: Conversation) -> ChatRequest {
-        let meta = try? app.voices.get(convo.voiceSlug).meta
+        let meta = try? app.voices.meta(convo.voiceSlug)
         let system = PersonaPromptBuilder.systemPrompt(
             voiceName: meta?.name ?? convo.voiceSlug, persona: meta?.persona)
         var turns = [ChatTurn(role: .system, content: system)]

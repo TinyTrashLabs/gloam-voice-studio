@@ -221,11 +221,15 @@ struct VoiceEditorForm: View {
     }
 
     private func loadExisting() {
-        guard let slug = editingSlug, let found = try? model.voices.get(slug) else { return }
-        name = found.meta.name
-        refText = found.meta.refText
-        gainDb = found.meta.gain ?? 0
-        keepingExistingRef = true
+        // `meta`, not `get`: a voice need not have reference audio to be
+        // editable. The built-in preset packs have none, and refusing to open
+        // them here would make them the one kind of voice you cannot rename or
+        // give a persona to.
+        guard let slug = editingSlug, let meta = try? model.voices.meta(slug) else { return }
+        name = meta.name
+        refText = meta.refText
+        gainDb = meta.gain ?? 0
+        keepingExistingRef = model.voices.capabilities(slug).hasSource
     }
 
     private func loadDrop(_ providers: [NSItemProvider]) {

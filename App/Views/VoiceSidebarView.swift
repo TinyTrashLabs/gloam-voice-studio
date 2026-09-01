@@ -74,13 +74,14 @@ struct VoiceSidebarView: View {
             .padding(.bottom, 6)
 
             List(selection: $model.selectedVoiceSlug) {
-                if voiceList.isEmpty {
+                let shelves = filteredShelves
+                if shelves.own.isEmpty && searchText.isEmpty {
                     // First-run empty state: say what a voice IS and offer all
                     // three ways in, instead of a one-liner pointing at "+".
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("No voices yet")
+                        Text("No voices of your own yet")
                             .font(.callout.weight(.semibold))
-                        Text("A voice is a reusable identity — record a clip, import a .gvoice pack, or grab a free one.")
+                        Text("A voice is a reusable identity — record a clip, import a .gvoice pack, grab a free one, or make a bundled voice yours.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         VoiceEmptyStateActions()
@@ -88,21 +89,27 @@ struct VoiceSidebarView: View {
                     .padding(.vertical, 8)
                     .accessibilityIdentifier("voices-empty-state")
                 }
-                let groups = filteredGroups
-                if groups.isEmpty && !voiceList.isEmpty && !searchText.isEmpty {
+                if shelves.own.isEmpty && shelves.bundled.isEmpty && !searchText.isEmpty {
                     Text("No voices match “\(searchText)”")
                         .font(.caption).foregroundStyle(.secondary)
                         .padding(.vertical, 6)
                 }
-                ForEach(groups, id: \.base.slug) { group in
-                    voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
-                    // While searching, matched groups show their variants without
-                    // needing a chevron click — the match may BE a variant.
-                    if expandedBases.contains(group.base.slug) || !searchText.isEmpty {
-                        ForEach(group.variants, id: \.slug) { variant in
-                            voiceRow(variant, isVariant: true, variantCount: 0)
-                        }
+                groupRows(shelves.own)
+                // The engines' own voices, kept apart so they read as a shelf
+                // to pick from rather than something the user made. Editing one
+                // — a rename, an avatar, notes — promotes it: it becomes the
+                // user's and moves up, and the shelf refills on next launch.
+                if !shelves.bundled.isEmpty {
+                    Section {
+                        groupRows(shelves.bundled)
+                    } header: {
+                        Text("Bundled")
+                    } footer: {
+                        Text("Built into the engines. Edit one — rename it, add an avatar or notes — and it becomes yours.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .accessibilityIdentifier("bundled-voices")
                 }
             }
             .listStyle(.sidebar)
@@ -127,7 +134,7 @@ struct VoiceSidebarView: View {
                 Button("OK") { actionError = nil }
             } message: { Text(actionError ?? "") }
             .confirmationDialog(
-                "Delete “\(pendingDeleteSlug.flatMap { try? model.voices.get($0).meta.name } ?? "")”?",
+                "Delete “\(pendingDeleteSlug.flatMap { try? model.voices.meta($0).name } ?? "")”?",
                 isPresented: .init(get: { pendingDeleteSlug != nil },
                                    set: { if !$0 { pendingDeleteSlug = nil } }),
                 titleVisibility: .visible
@@ -327,17 +334,42 @@ struct VoiceSidebarView: View {
         return model.voices.list()
     }
 
-    /// Groups surviving the search filter: a group stays when its base or any
-    /// variant matches by name or slug (case-insensitive substring).
-    private var filteredGroups: [(base: VoiceMeta, variants: [VoiceMeta])] {
-        let groups = groupedVoices(voiceList)
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return groups }
-        func matches(_ v: VoiceMeta) -> Bool {
-            v.name.localizedCaseInsensitiveContains(query)
-                || v.slug.localizedCaseInsensitiveContains(query)
+    private typealias VoiceGroup = (base: VoiceMeta, variants: [VoiceMeta])
+
+    @ViewBuilder
+    private func groupRows(_ groups: [VoiceGroup]) -> some View {
+        ForEach(groups, id: \.base.slug) { group in
+            voiceRow(group.base, isVariant: false, variantCount: group.variants.count)
+            // While searching, matched groups show their variants without
+            // needing a chevron click — the match may BE a variant.
+            if expandedBases.contains(group.base.slug) || !searchText.isEmpty {
+                ForEach(group.variants, id: \.slug) { variant in
+                    voiceRow(variant, isVariant: true, variantCount: 0)
+                }
+            }
         }
-        return groups.filter { matches($0.base) || $0.variants.contains(where: matches) }
+    }
+
+    /// The user's voices and the untouched engine presets, each surviving the
+    /// search filter: a group stays when its base or any variant matches by
+    /// name or slug (case-insensitive substring).
+    private var filteredShelves: (own: [VoiceGroup], bundled: [VoiceGroup]) {
+        var groups = groupedVoices(voiceList)
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty {
+            func matches(_ v: VoiceMeta) -> Bool {
+                v.name.localizedCaseInsensitiveContains(query)
+                    || v.slug.localizedCaseInsensitiveContains(query)
+            }
+            groups = groups.filter { matches($0.base) || $0.variants.contains(where: matches) }
+        }
+        // An acted variant is an edit too: a preset that has grown one is the
+        // user's, whatever its own meta.json says.
+        let bundled = groups.filter {
+            $0.variants.isEmpty && PresetVoiceSeeder.isBundled($0.base, in: model.voices)
+        }
+        let bundledSlugs = Set(bundled.map(\.base.slug))
+        return (groups.filter { !bundledSlugs.contains($0.base.slug) }, bundled)
     }
 
     private func export(_ slug: String) {

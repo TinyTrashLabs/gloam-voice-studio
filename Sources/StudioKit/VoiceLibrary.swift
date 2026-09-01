@@ -54,10 +54,17 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// on re-export, exactly as `pace` documents above.
     public var gain: Double?
 
+    /// Free-form human description of the voice — what it sounds like, where it
+    /// came from. Seeded on the built-in preset packs (Kokoro's per-voicepack
+    /// blurbs, SuperTonic's M/F style notes) and editable like any other field,
+    /// which is the point: the description belongs to the voice, not to whatever
+    /// view happened to be showing it. Nil means unset, as for `pace`/`gain`.
+    public var notes: String?
+
     public init(name: String, slug: String, refText: String, createdAt: String,
                 persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil,
                 pace: Double? = nil, enginePace: [String: Double]? = nil,
-                gain: Double? = nil) {
+                gain: Double? = nil, notes: String? = nil) {
         self.name = name
         self.slug = slug
         self.refText = refText
@@ -68,6 +75,7 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         self.pace = pace
         self.enginePace = enginePace
         self.gain = gain
+        self.notes = notes
     }
 
     // Foreign archives may omit refText/createdAt; tolerate like Python's dict reads.
@@ -86,6 +94,7 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         enginePace = (try? c.decodeIfPresent([String: Double].self, forKey: .enginePace)) ?? nil
         // Tolerant like every field above: a malformed trim must not break load.
         gain = (try? c.decodeIfPresent(Double.self, forKey: .gain)) ?? nil
+        notes = (try? c.decodeIfPresent(String.self, forKey: .notes)) ?? nil
     }
 }
 
@@ -123,6 +132,23 @@ public struct VoiceCapabilities: Sendable, Equatable {
     }
 }
 
+/// How a pack renders on one engine.
+///
+/// Two shapes, because a voice's assets are not always files. A cloning or baked
+/// voice carries tensors on disk; a preset voice carries only the *name* of a
+/// speaker the engine already ships — Kokoro's voicepacks live inside the model,
+/// and SuperTonic's style tensors live in the model repo, neither of them in the
+/// pack. The `.gvoice` format has always described the second shape
+/// (`engines/<id>/voice.json` with a `speaker`, see docs/gvoice-format.md); this
+/// is the type that finally reads it.
+public enum VoiceRendition: Sendable, Equatable {
+    /// A baked style file in the pack (supertonic `style.json`).
+    case style(URL)
+    /// The engine's own preset speaker name — Kokoro "af_heart", SuperTonic
+    /// "M1", qwen3-custom "Dylan". Passed through as `SynthesisRequest.speaker`.
+    case builtinSpeaker(String)
+}
+
 /// Voice library rooted at an injectable directory (sandbox container in the
 /// app, temp dir in tests). Stateless: all state lives on disk.
 public struct VoiceLibrary: Sendable {
@@ -144,7 +170,8 @@ public struct VoiceLibrary: Sendable {
                      engines: [String: [String: Data]] = [:],
                      pace: Double? = nil,
                      enginePace: [String: Double]? = nil,
-                     gain: Double? = nil) throws -> VoiceMeta {
+                     gain: Double? = nil,
+                     notes: String? = nil) throws -> VoiceMeta {
         let slug = try Slug.slugify(name)
         let voiceDir = directory.appendingPathComponent(slug)
         guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
@@ -163,7 +190,8 @@ public struct VoiceLibrary: Sendable {
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
-                             pace: pace, enginePace: enginePace, gain: gain)
+                             pace: pace, enginePace: enginePace, gain: gain,
+                             notes: notes)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -180,14 +208,16 @@ public struct VoiceLibrary: Sendable {
     @discardableResult
     public func saveAt(slug: String, name: String, refWav: Data?, refText: String,
                        provenance: JSONValue? = nil, variantOf: String? = nil,
-                       engines: [String: [String: Data]] = [:]) throws -> VoiceMeta {
+                       engines: [String: [String: Data]] = [:],
+                       notes: String? = nil) throws -> VoiceMeta {
         let safeSlug = try GVoice.safeComponent(slug)
         let voiceDir = directory.appendingPathComponent(safeSlug)
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
         if let refWav { try RefLoudness.normalized(wav: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: safeSlug, refText: refText,
-                             createdAt: Self.timestamp(), provenance: provenance, variantOf: variantOf)
+                             createdAt: Self.timestamp(), provenance: provenance, variantOf: variantOf,
+                             notes: notes)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -234,20 +264,47 @@ public struct VoiceLibrary: Sendable {
                                  engines: Set(engines.keys))
     }
 
-    /// The baked style file for `engine` in `slug`'s pack (supertonic:
-    /// engines/supertonic/style.json). An emotion-variant voice without its
-    /// own rendition falls back to its base voice's — same resolution order
-    /// as reference audio.
-    public func renditionStyleURL(_ slug: String, engine: String) -> URL? {
-        func direct(_ s: String) -> URL? {
+    /// How `slug` renders on `engine`, or nil if it cannot. An emotion-variant
+    /// voice without its own rendition falls back to its base voice's — same
+    /// resolution order as reference audio.
+    ///
+    /// A `voice.json` naming a `speaker` wins over any style file: it is the
+    /// explicit statement "render me as the engine's own preset X". Only files
+    /// that are NOT `voice.json` are treated as baked styles, because
+    /// `voice.json` is also where lux-tts stores its reference window,
+    /// qwen3-design its instruct and elevenlabs its voiceId — none of which is a
+    /// style, and all of which the previous "first .json in the directory"
+    /// heuristic happily returned as one. That heuristic is why a pack carrying
+    /// `engines/kokoro/voice.json` used to reach the planner with a styleURL
+    /// set, which zeroed the speaker and handed Kokoro `voice: nil`.
+    public func rendition(_ slug: String, engine: String) -> VoiceRendition? {
+        func direct(_ s: String) -> VoiceRendition? {
             guard let (_, _, engines) = try? entry(s),
                   let files = engines[engine] else { return nil }
-            return files.sorted { $0.key < $1.key }
-                .first { $0.value.pathExtension == "json" }?.value
+            let sorted = files.sorted { $0.key < $1.key }
+            if let voiceJSON = files["voice.json"],
+               let data = try? Data(contentsOf: voiceJSON),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let speaker = object["speaker"] as? String,
+               !speaker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .builtinSpeaker(speaker)
+            }
+            guard let style = sorted.first(where: {
+                $0.value.pathExtension == "json" && $0.key != "voice.json"
+            })?.value else { return nil }
+            return .style(style)
         }
-        if let url = direct(slug) { return url }
+        if let found = direct(slug) { return found }
         guard let base = (try? entry(slug))?.meta.variantOf else { return nil }
         return direct(base)
+    }
+
+    /// The baked style file for `engine` in `slug`'s pack (supertonic:
+    /// engines/supertonic/style.json). Nil when the pack renders by preset name
+    /// instead — see `rendition(_:engine:)`, which this wraps.
+    public func renditionStyleURL(_ slug: String, engine: String) -> URL? {
+        if case .style(let url) = rendition(slug, engine: engine) { return url }
+        return nil
     }
 
     /// Variant key -> library slug for `slug` and its "<slug>-<x>" siblings.
@@ -295,6 +352,20 @@ public struct VoiceLibrary: Sendable {
                 try data.write(to: engineDir.appendingPathComponent(safe))
             }
         }
+    }
+
+    /// A stored voice's metadata, with no requirement that it have reference
+    /// audio.
+    ///
+    /// The right call for everything that reads or edits a voice's *identity* —
+    /// name, notes, persona, loudness trim. `get()` below additionally demands
+    /// `ref.wav` and is for the synthesis paths that genuinely cannot work
+    /// without it. The split matters now that a pack need not have a reference
+    /// at all: the built-in preset voices are name-bound, and under `get()` they
+    /// would have been unreadable, unrenamable and unpromotable — which would
+    /// have defeated the point of storing them as ordinary voices.
+    public func meta(_ slug: String) throws -> VoiceMeta {
+        try entry(slug).meta
     }
 
     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
@@ -363,7 +434,7 @@ public struct VoiceLibrary: Sendable {
     public func update(_ slug: String, name: String? = nil,
                        refText: String? = nil, refWav: Data? = nil,
                        variantSuffixes: Set<String> = []) throws -> VoiceMeta {
-        var (meta, _) = try get(slug)
+        var meta = try self.meta(slug)
         var voiceDir = directory.appendingPathComponent(slug)
         if let name, name != meta.name {
             let newSlug = try Slug.slugify(name)
@@ -379,7 +450,7 @@ public struct VoiceLibrary: Sendable {
                     let newDir = directory.appendingPathComponent("\(newSlug)-\(suffix)")
                     guard FileManager.default.fileExists(atPath: oldDir.path),
                           !FileManager.default.fileExists(atPath: newDir.path),
-                          var variantMeta = (try? get("\(slug)-\(suffix)"))?.meta
+                          var variantMeta = try? self.meta("\(slug)-\(suffix)")
                     else { continue }
                     try FileManager.default.moveItem(at: oldDir, to: newDir)
                     variantMeta.slug = "\(newSlug)-\(suffix)"
@@ -414,12 +485,12 @@ public struct VoiceLibrary: Sendable {
     /// that sets its OWN trim still wins, which is what makes the expressive
     /// variants (a shouted take sits hotter than a whispered one) tunable.
     public func gainDb(for slug: String) -> Double {
-        guard let meta = (try? get(slug))?.0 else { return 0 }
+        guard let meta = try? self.meta(slug) else { return 0 }
         if let g = meta.gain, g.isFinite {
             return max(-GVoice.maxGainDb, min(GVoice.maxGainDb, g))
         }
         guard let base = meta.variantOf, base != slug,
-              let baseGain = (try? get(base))?.0.gain, baseGain.isFinite else { return 0 }
+              let baseGain = (try? self.meta(base))?.gain, baseGain.isFinite else { return 0 }
         return max(-GVoice.maxGainDb, min(GVoice.maxGainDb, baseGain))
     }
 
@@ -430,7 +501,7 @@ public struct VoiceLibrary: Sendable {
     /// — an unclamped field would let a slider undo the standard entirely.
     @discardableResult
     public func setGain(_ slug: String, gainDb: Double?) throws -> VoiceMeta {
-        var (meta, _) = try get(slug)
+        var meta = try self.meta(slug)
         meta.gain = gainDb.map { max(-GVoice.maxGainDb, min(GVoice.maxGainDb, $0)) }
         try write(meta, to: directory.appendingPathComponent(slug))
         return meta
@@ -439,7 +510,7 @@ public struct VoiceLibrary: Sendable {
     /// Sets (or clears, with nil) the chat persona on a stored voice.
     @discardableResult
     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
-        var (meta, _) = try get(slug)
+        var meta = try self.meta(slug)
         meta.persona = persona
         try write(meta, to: directory.appendingPathComponent(slug))
         return meta
