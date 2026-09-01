@@ -39,9 +39,11 @@ struct SettingsView: View {
 struct AboutSettings: View {
     var body: some View {
         Form {
-            Section {
-                Text("Gloam Voice Studio processes everything on this Mac. There's no account, no analytics, and no data sent to us.")
-                    .font(.callout)
+            Section("More from Gloam") {
+                // The engine is free and open source; these are what it powers.
+                // Links only — nothing is sent from this app; the App Store
+                // records the campaign token only once someone clicks through.
+                SiblingAppsList(campaign: .settings)
             }
             Section {
                 Link("Privacy Policy",
@@ -359,6 +361,14 @@ struct ServerSettings: View {
                             .textSelection(.enabled)
                     }
                     .padding(.top, 4)
+                }
+            }
+            Section("Apps that speak through this engine") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Point them at this server and they render with your voices, "
+                         + "on this Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    SiblingAppsList(campaign: .serverPane)
                 }
             }
             Section {
