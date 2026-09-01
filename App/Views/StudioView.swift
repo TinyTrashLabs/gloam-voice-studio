@@ -131,7 +131,7 @@ struct StudioView: View {
     /// sidebar row explained, where a new user is actually looking.
     @ViewBuilder
     private var voicePackBar: some View {
-        if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+        if let slug = model.selectedVoiceSlug, let meta = try? model.voices.meta(slug) {
             // Read voicesVersion so a saved transcript re-derives capabilities
             // (and re-lights the engine chips) without reselecting the voice.
             let _ = model.voicesVersion
@@ -205,7 +205,7 @@ struct StudioView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
-                        Text("\(model.backend.rawValue) can't speak this voice yet")
+                        Text("\(model.backend.rawValue) can't speak this voice — nothing will generate")
                             .font(.caption).foregroundStyle(Brand.fgDim)
                         // Engines the pack would support if only the transcript
                         // existed — shown disabled with the reason, so "why not
@@ -294,7 +294,7 @@ struct StudioView: View {
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 0) {
+        VSplitView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
@@ -302,21 +302,33 @@ struct StudioView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.never)
-            // TAKES shelf pinned to the bottom of the write column: new takes
-            // are always in view without scrolling past the bench.
-            if !model.variants.isEmpty {
-                Divider().overlay(Color.white.opacity(0.06)).padding(.vertical, 8)
+            .frame(minHeight: 220)
+            // TAKES takes the rest of the column rather than a 240pt shelf at
+            // the bottom: the shelf left a band of dead space between the bench
+            // and the takes, and hid entirely until the first take existed, so
+            // the space was empty in the one state where a hint would help.
+            VStack(alignment: .leading, spacing: 0) {
                 zoneLabel("TAKES")
-                ScrollView {
+                if model.variants.isEmpty {
                     VStack(spacing: 10) {
-                        ForEach(model.variants) { variant in
-                            variantCard(variant)
+                        Text("No takes yet — write a line and press Generate (⌘↩).")
+                            .font(.caption).foregroundStyle(Brand.fgFaint)
+                        SiblingAppsFootnote(campaign: .takesEmptyState)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            ForEach(model.variants) { variant in
+                                variantCard(variant)
+                            }
                         }
+                        .padding(.top, 6)
                     }
                 }
-                .frame(maxHeight: 240)
-                .padding(.top, 6)
             }
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .accessibilityIdentifier("takes-region")
         }
     }
 
@@ -431,104 +443,6 @@ struct StudioView: View {
             Text(String(format: "%.2f×", model.speed))
                 .font(.system(.caption, design: .monospaced))
         }
-    }
-
-    /// CustomVoice preset character + language, from the model's spk_id table.
-    static let speakerInfo: [String: (desc: String, lang: String)] = [
-        "Vivian": ("Bright, slightly edgy young female", "Chinese"),
-        "Serena": ("Warm, gentle young female", "Chinese"),
-        "Uncle_Fu": ("Seasoned male, low mellow timbre", "Chinese"),
-        "Dylan": ("Youthful, clear male", "Beijing dialect"),
-        "Eric": ("Lively, slightly husky male", "Sichuan dialect"),
-        "Ryan": ("Dynamic male, strong rhythmic drive", "English"),
-        "Aiden": ("Sunny American male, clear midrange", "English"),
-        "Ono_Anna": ("Playful, light female", "Japanese"),
-        "Sohee": ("Warm, emotional female", "Korean"),
-    ]
-
-    /// Picker label: "Ryan · English" so the language is visible at a glance.
-    static func speakerLabel(_ name: String) -> String {
-        if let info = speakerInfo[name] { return "\(name) · \(info.lang)" }
-        return name
-    }
-
-    /// hexgrad's own per-voice quality grade (A best, F+ weakest) plus language and
-    /// gender, keyed by voicepack name. Source: hexgrad/Kokoro-82M's VOICES.md + the
-    /// vendored mlx-audio-swift README (fetched during design). "—" = ungraded there.
-    static let kokoroVoiceInfo: [String: (language: String, gender: String, grade: String)] = [
-        "af_heart": ("American English", "Female", "A"),
-        "af_bella": ("American English", "Female", "A-"),
-        "af_nicole": ("American English", "Female", "B-"),
-        "af_aoede": ("American English", "Female", "C+"),
-        "af_kore": ("American English", "Female", "C+"),
-        "af_sarah": ("American English", "Female", "C+"),
-        "af_alloy": ("American English", "Female", "C"),
-        "af_nova": ("American English", "Female", "C"),
-        "af_sky": ("American English", "Female", "C-"),
-        "af_jessica": ("American English", "Female", "D"),
-        "af_river": ("American English", "Female", "D"),
-        "am_fenrir": ("American English", "Male", "C+"),
-        "am_michael": ("American English", "Male", "C+"),
-        "am_puck": ("American English", "Male", "C+"),
-        "am_echo": ("American English", "Male", "D"),
-        "am_eric": ("American English", "Male", "D"),
-        "am_liam": ("American English", "Male", "D"),
-        "am_onyx": ("American English", "Male", "D"),
-        "am_santa": ("American English", "Male", "D-"),
-        "am_adam": ("American English", "Male", "F+"),
-        "bf_emma": ("British English", "Female", "B-"),
-        "bf_isabella": ("British English", "Female", "C"),
-        "bf_alice": ("British English", "Female", "D"),
-        "bf_lily": ("British English", "Female", "D"),
-        "bm_fable": ("British English", "Male", "C"),
-        "bm_george": ("British English", "Male", "C"),
-        "bm_lewis": ("British English", "Male", "D+"),
-        "bm_daniel": ("British English", "Male", "D"),
-        "ff_siwis": ("French", "Female", "B-"),
-        "hf_alpha": ("Hindi", "Female", "C"),
-        "hf_beta": ("Hindi", "Female", "C"),
-        "hm_omega": ("Hindi", "Male", "C"),
-        "hm_psi": ("Hindi", "Male", "C"),
-        "if_sara": ("Italian", "Female", "C"),
-        "im_nicola": ("Italian", "Male", "C"),
-        "jf_alpha": ("Japanese", "Female", "C+"),
-        "jf_gongitsune": ("Japanese", "Female", "C"),
-        "jf_tebukuro": ("Japanese", "Female", "C"),
-        "jf_nezumi": ("Japanese", "Female", "C-"),
-        "jm_kumo": ("Japanese", "Male", "C-"),
-        "ef_dora": ("Spanish", "Female", "—"),
-        "em_alex": ("Spanish", "Male", "—"),
-        "em_santa": ("Spanish", "Male", "—"),
-        "pf_dora": ("Portuguese", "Female", "—"),
-        "pm_alex": ("Portuguese", "Male", "—"),
-        "pm_santa": ("Portuguese", "Male", "—"),
-        "zf_xiaobei": ("Chinese", "Female", "D"),
-        "zf_xiaoni": ("Chinese", "Female", "D"),
-        "zf_xiaoxiao": ("Chinese", "Female", "D"),
-        "zf_xiaoyi": ("Chinese", "Female", "D"),
-        "zm_yunjian": ("Chinese", "Male", "D"),
-        "zm_yunxi": ("Chinese", "Male", "D"),
-        "zm_yunxia": ("Chinese", "Male", "D"),
-        "zm_yunyang": ("Chinese", "Male", "D"),
-    ]
-
-    /// Display order for the grouped Kokoro speaker picker — matches the vendored
-    /// README's language ordering.
-    static let kokoroLanguageOrder = [
-        "American English", "British English", "French", "Hindi", "Italian",
-        "Japanese", "Spanish", "Portuguese", "Chinese",
-    ]
-
-    /// Voicepack names for one language, in `BackendID.kokoroVoices`' order.
-    static func kokoroVoices(in language: String) -> [String] {
-        BackendID.kokoroVoices.filter { kokoroVoiceInfo[$0]?.language == language }
-    }
-
-    /// Picker row label: "af_heart — A" so the grade is visible without opening
-    /// the picker or selecting the voice first.
-    static func kokoroVoiceLabel(_ name: String) -> String {
-        guard let info = kokoroVoiceInfo[name] else { return name }
-        return "\(name) — \(info.grade)"
     }
 
     static let languages: [(String, String)] = [
@@ -664,7 +578,8 @@ struct StudioView: View {
         case .qwenDesign:
             "Invent a brand-new voice purely from your description — there's no voice to pick or clone."
         case .qwenCustom:
-            "Pick a built-in Speaker, then describe how it should talk. The identity stays fixed; your Direction shapes the delivery."
+            "Describe how the voice should talk. Pick who is talking in the voice list — "
+            + "the identity stays fixed; your Direction shapes the delivery."
         case .fishS2Pro:
             "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
         case .chatterbox:
@@ -672,14 +587,14 @@ struct StudioView: View {
         case .chatterboxTurbo:
             "Clone a voice; the emotional read comes from the reference clip. No manual delivery knobs."
         case .kokoro:
-            "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
-            + "varies a lot by voice; the grade shown is the model author's own rating."
+            "Kokoro speaks its own fixed voices — choose one in the voice list. It doesn't "
+            + "clone or take free-text direction, and quality varies a lot by voice."
         case .luxTTS:
             "Clones a voice from a reference clip — the prosody comes entirely from that clip. "
             + "No free-text Direction; tune the flow-matching steps/guidance in Advanced instead."
         case .supertonic:
-            "Pick a preset voice — SuperTonic doesn't clone or take free-text direction. "
-            + "Fast, multilingual, 44.1 kHz."
+            "SuperTonic speaks its own preset voice styles — choose one in the voice list. "
+            + "Fast, multilingual, 44.1 kHz. No cloning or free-text direction."
         case .pocketTTS:
             "Clones a voice from a reference clip (first ~10s) — the prosody comes from that "
             + "clip. No free-text Direction and no delivery knobs; each take samples fresh."
@@ -691,9 +606,12 @@ struct StudioView: View {
         @Bindable var model = model
 
         // ── VOICE picker ────────────────────────────────────────────────────
-        // Spec §C.1: only show the Voice picker for clone-capable backends.
-        // Hide it for voiceClone == .none (qwen3-design/custom).
-        if model.backend.controls.voiceClone != .none {
+        // Every backend that speaks a stored voice shows the picker — which now
+        // includes the preset engines, whose voices used to be chosen from a
+        // Speaker menu over in the Direct pane. Only qwen3-design is left out,
+        // and it mints a voice from an instruct rather than speaking one.
+        if !model.backend.controls.presetSpeakers.isEmpty
+            || model.backend.controls.voiceClone != .none {
             zoneLabel("VOICE")
             let voices = model.voices.list()
             // Custom popover dropdown (not a native Menu): AppKit menus flatten
@@ -751,16 +669,35 @@ struct StudioView: View {
 
         // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
+        // Why generation is blocked, or nil when it isn't. The engine/voice
+        // mismatch used to be a note beside a working button, which is how a
+        // take could come out in a voice nobody chose; it stops the button now.
+        let blockedReason: String? = {
+            guard let slug = model.selectedVoiceSlug else {
+                return "Pick a voice in the sidebar."
+            }
+            let _ = model.voicesVersion
+            guard !model.voices.capabilities(slug).supports(model.backend) else { return nil }
+            let name = (try? model.voices.meta(slug).name) ?? slug
+            return "\(model.backend.rawValue) can't speak “\(name)” — switch engine, "
+                + "or pick a voice it can render."
+        }()
         HStack(spacing: 10) {
             Button("Generate") { Task { await model.generate(takes: 1) } }
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(model.isGenerating)
+                .disabled(model.isGenerating || blockedReason != nil)
                 .accessibilityIdentifier("generate")
-                .help("Synthesize this line (⌘↩)")
+                .help(blockedReason ?? "Synthesize this line (⌘↩)")
             Button("Generate A/B") { Task { await model.generate(takes: 2) } }
-                .disabled(model.isGenerating)
-                .help("Two takes to compare")
+                .disabled(model.isGenerating || blockedReason != nil)
+                .help(blockedReason ?? "Two takes to compare")
             if model.isGenerating { ProgressView().controlSize(.small) }
+            if let blockedReason {
+                Text(blockedReason)
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("generate-blocked")
+            }
             Spacer()
         }
 
@@ -781,53 +718,6 @@ struct StudioView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Speaker (CustomVoice / Kokoro)
-            if !controls.presetSpeakers.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    // Label above, picker full-width — the inspector column is
-                    // narrow and resizable, so no fixed 220pt row here.
-                    Text("Speaker").font(.caption).foregroundStyle(Brand.fgDim)
-                    if model.backend == .kokoro {
-                        Picker("", selection: $model.speaker) {
-                            ForEach(Self.kokoroLanguageOrder, id: \.self) { lang in
-                                Section(lang) {
-                                    ForEach(Self.kokoroVoices(in: lang), id: \.self) { name in
-                                        Text(Self.kokoroVoiceLabel(name)).tag(name)
-                                    }
-                                }
-                            }
-                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
-                    } else {
-                        Picker("", selection: $model.speaker) {
-                            ForEach(controls.presetSpeakers, id: \.self) { name in
-                                Text(Self.speakerLabel(name)).tag(name)
-                            }
-                        }.labelsHidden().frame(maxWidth: 260, alignment: .leading)
-                    }
-                    if model.backend == .kokoro {
-                        if let info = Self.kokoroVoiceInfo[model.speaker] {
-                            Text("\(info.language) · \(info.gender) · Grade \(info.grade)")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                        Text("A fixed pretrained voicepack — grade is the model author's own "
-                             + "quality rating (A best, F+ weakest). No cloning or Direction here.")
-                            .font(.caption2).foregroundStyle(Brand.fgFaint)
-                    } else if model.backend == .supertonic {
-                        Text("A fixed preset voice style (M1–M5 male, F1–F5 female) shipped "
-                             + "with the model. No cloning, emotion, or Direction here.")
-                            .font(.caption2).foregroundStyle(Brand.fgFaint)
-                    } else {
-                        // Description of the currently-selected speaker (names alone are opaque).
-                        if let info = Self.speakerInfo[model.speaker] {
-                            Text("\(info.desc) · \(info.lang)")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                        Text("A built-in voice identity (fixed timbre) you can't change — only Ryan and "
-                             + "Aiden are English. Your Direction below shapes how it speaks.")
-                            .font(.caption2).foregroundStyle(Brand.fgFaint)
-                    }
-                }
-            }
             // Direction (instruct)
             if controls.instruct != .none {
                 VStack(alignment: .leading, spacing: 3) {

@@ -336,7 +336,7 @@ struct ChatInspectorView: View {
 
     private func loadPersonaDrafts() {
         guard let slug = model.selectedVoiceSlug,
-              let meta = try? model.voices.get(slug).meta else {
+              let meta = try? model.voices.meta(slug) else {
             personaDraft = ""; greetingDraft = ""
             return
         }

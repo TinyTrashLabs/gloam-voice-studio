@@ -270,12 +270,22 @@ public enum APIRouter {
             // (e.g. Billie Frost's engines/supertonic/style.json) renders that
             // voice instead of a house preset. Variant rendition first, then
             // the voice's own (renditionStyleURL also walks variantOf → base).
-            let styleURL: URL? = effectiveVoice.flatMap { voice in
+            let rendition: VoiceRendition? = effectiveVoice.flatMap { voice in
                 let emo = req.emotion?.lowercased()
                 let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
-                return variant.flatMap { deps.voices.renditionStyleURL($0, engine: backend.rawValue) }
-                    ?? deps.voices.renditionStyleURL(voice, engine: backend.rawValue)
+                return variant.flatMap { deps.voices.rendition($0, engine: backend.rawValue) }
+                    ?? deps.voices.rendition(voice, engine: backend.rawValue)
             }
+            let styleURL: URL? = { if case .style(let u)? = rendition { return u }; return nil }()
+            // A pack that names the engine's own speaker gets it, ahead of the
+            // OpenAI-compat fallback below. That is what makes `"voice":
+            // "kokoro-af-heart"` (a built-in preset, now an ordinary pack)
+            // address the right voice over the wire, and what stops a personal
+            // pack's declared kokoro pointer being quietly replaced by the
+            // house default.
+            let packSpeaker: String? = {
+                if case .builtinSpeaker(let s)? = rendition { return s }; return nil
+            }()
             // Preset-speaker backends (kokoro/supertonic/qwen-custom) and
             // instruct-only ones (qwen-design) have `voiceClone == .none`: their
             // `voice` field is not a library slug at all, so an unknown one keeps
@@ -348,7 +358,7 @@ public enum APIRouter {
                                     temperatureOverride: req.temperature,
                                     exaggerationOverride: req.exaggeration,
                                     exaggerationCeiling: req.exaggeration_ceiling,
-                                    instruct: req.instruct, speaker: effectiveSpeaker,
+                                    instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
                                     styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
                         }

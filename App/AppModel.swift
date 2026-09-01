@@ -99,14 +99,12 @@ final class AppModel {
             if backend.spec.needsLicenseAck && !didAck(backend) {
                 licensePromptBackend = backend
             }
-            // Two backends now have presetSpeakers (Qwen CustomVoice, Kokoro) with
-            // disjoint name sets — a stale speaker from the previous backend would
-            // silently fail generation instead of tripping RequestPlanner's
-            // speakerRequired check (the string is non-empty, just wrong).
-            let presets = backend.controls.presetSpeakers
-            if !presets.isEmpty && !presets.contains(speaker) {
-                speaker = presets[0]
-            }
+            // No speaker to reconcile any more. A preset IS a voice now, so
+            // switching to an engine that cannot speak the selected one is
+            // caught by the capability gate in `synthesizeLine` and shown in the
+            // pack bar — instead of being papered over by quietly swapping in a
+            // house preset, which is precisely how a take could come out
+            // labelled "Wizard" in somebody else's voice.
         }
     }
     /// Persisted: a relaunch must bring the API server back in whatever state
@@ -357,7 +355,13 @@ final class AppModel {
     var loadingBackend: BackendID?
 
     // Studio state
-    var selectedVoiceSlug: String?
+    /// Persisted: who speaks is now the only thing that decides the voice, so
+    /// losing it on relaunch would mean re-picking every session.
+    var selectedVoiceSlug: String? {
+        didSet {
+            UserDefaults.standard.set(selectedVoiceSlug, forKey: "selectedVoiceSlug")
+        }
+    }
     var text = ""
     var emotion: Emotion = .neutral
     var speed: Float = 1.0
@@ -377,7 +381,6 @@ final class AppModel {
 
     // Qwen natural-language controls
     var instruct: String = ""
-    var speaker: String = BackendID.qwenPresetSpeakers.first ?? "Vivian"
     var language: String = "auto"
     var qwenTopP: Float = AppModel.knobDefaults.topP
     var qwenTopK: Int = AppModel.knobDefaults.topK
@@ -610,6 +613,31 @@ final class AppModel {
             let engine = engine
             let acks = ackedLicenses
             Task { for b in acks { await engine.acknowledgeLicense(for: b) } }
+        }
+        // Every engine's built-in voices exist as ordinary packs, so the sidebar
+        // and the synthesis path have one notion of identity between them.
+        // Cheap to re-run and it never touches a pack the user has edited, but
+        // the version check keeps the usual launch off the filesystem entirely.
+        let seededVersion = defaults.integer(forKey: "presetVoicesSeedVersion")
+        if uiTest || seededVersion != PresetVoiceCatalog.version {
+            PresetVoiceSeeder.seed(into: voices)
+            defaults.set(PresetVoiceCatalog.version, forKey: "presetVoicesSeedVersion")
+        }
+        // Onboarding needs something selected: with presets as voices, a preset
+        // backend no longer speaks without one, so a fresh install would reach a
+        // blocked Generate instead of a working one.
+        let restored = defaults.string(forKey: "selectedVoiceSlug")
+        if let restored, voices.capabilities(restored).supports(backend) {
+            selectedVoiceSlug = restored
+        } else {
+            // The engine's own best-first preset where it has one (kokoro's
+            // af_heart is its top-graded voice), else anything it can speak.
+            let preferred = backend.controls.presetSpeakers.first.map {
+                PresetVoiceCatalog.slug(engine: backend.rawValue, speaker: $0)
+            }
+            selectedVoiceSlug = preferred.flatMap {
+                voices.capabilities($0).supports(backend) ? $0 : nil
+            } ?? voices.list().first { voices.capabilities($0.slug).supports(backend) }?.slug
         }
         installMemoryPressureHandler()
         // didSet observers don't fire during init — if the server was left on,
@@ -980,18 +1008,43 @@ final class AppModel {
             throw AppGenerationError(
                 message: "Acknowledge the \(backend.rawValue) license in Settings → Models first.")
         }
+        let controls = backend.controls
+        // Never speak as somebody else. Without this the planner quietly drops
+        // the reference audio for a non-cloning backend and falls through to a
+        // house preset, so picking "Wizard" on supertonic used to produce a
+        // perfectly good take — in a stranger's voice, labelled Wizard, in the
+        // sidebar, the pack bar and history alike. The API route closed this
+        // hole in 2026-08 (APIRouter's "silence about it is worse than a failed
+        // request"); this is the same rule for the app.
+        if let slug = voiceSlug {
+            guard voices.capabilities(slug).supports(backend) else {
+                let name = (try? voices.meta(slug).name) ?? slug
+                throw AppGenerationError(
+                    message: "\(backend.rawValue) can't speak “\(name)”. "
+                        + "Switch engine, or pick a voice it can render.")
+            }
+        } else if !controls.presetSpeakers.isEmpty {
+            // Preset backends used to need no selection because they defaulted
+            // to a house voice. Now every preset is a voice, so there is no such
+            // thing as "no voice picked" that still speaks.
+            throw AppGenerationError(
+                message: "Pick a voice — \(backend.rawValue)'s presets are in the sidebar.")
+        }
         var refPath: String?
         var refText: String?
         var resolvedVoice: String?
-        // Baked engine rendition (e.g. a pack's supertonic style tensors):
-        // when the selected voice carries assets for THIS backend, they render
-        // the voice instead of a house preset. Emotion-variant slug first;
-        // renditionStyleURL itself falls back variant → base.
-        let styleURL: URL? = voiceSlug.flatMap { slug in
+        // How this voice renders on this backend: baked style tensors in the
+        // pack, or the name of a preset the engine already ships. Emotion-variant
+        // slug first; `rendition` itself falls back variant → base.
+        let rendition: VoiceRendition? = voiceSlug.flatMap { slug in
             let variant = emotion != .neutral ? "\(slug)-\(emotion.rawValue)" : nil
-            return variant.flatMap { voices.renditionStyleURL($0, engine: backend.rawValue) }
-                ?? voices.renditionStyleURL(slug, engine: backend.rawValue)
+            return variant.flatMap { voices.rendition($0, engine: backend.rawValue) }
+                ?? voices.rendition(slug, engine: backend.rawValue)
         }
+        let styleURL: URL? = { if case .style(let u)? = rendition { return u }; return nil }()
+        let presetSpeaker: String? = {
+            if case .builtinSpeaker(let s)? = rendition { return s }; return nil
+        }()
         // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
         // the BASE voice — so resolve to the base clip, not an acted `-emotion`
         // variant (that path is for the variant-clip backends).
@@ -1001,17 +1054,21 @@ final class AppModel {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
-            } else if styleURL == nil {
+            } else if rendition == nil {
                 // A rendition-only pack (no ref.wav) is fine when this backend
-                // has a baked style to render; otherwise the voice is unusable.
+                // has a style to render or a preset name to speak as; otherwise
+                // the voice is unusable.
                 throw AppGenerationError(message: "Voice '\(slug)' is missing.")
+            } else {
+                // Rendition-only: still the identity that spoke, so takes,
+                // history and the loudness trim name it rather than nothing.
+                resolvedVoice = slug
             }
         }
         if backend.spec.needsRefAudio && refPath == nil {
             throw AppGenerationError(
                 message: "This backend needs a voice — pick or create one in the sidebar.")
         }
-        let controls = backend.controls
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
             emotion: emotion, speed: speed,
@@ -1019,14 +1076,11 @@ final class AppModel {
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
             instruct: controls.instruct != .none ? instruct : nil,
-            // The stored `speaker` tracks the STUDIO backend's preset set; when a
-            // different preset backend renders (e.g. Kokoro as the chat voice
-            // engine while the Studio runs Chatterbox) that name isn't in this
-            // backend's set — fall back to its best-first preset instead of
-            // failing, mirroring the API route's fallback.
-            speaker: controls.presetSpeakers.isEmpty ? nil
-                : (controls.presetSpeakers.contains(speaker) ? speaker
-                   : controls.presetSpeakers.first),
+            // Straight from the pack. No `contains` check and no best-first
+            // fallback: the gate above already established this backend can
+            // speak this voice, so a mismatch here would be a bug worth hearing
+            // about (RequestPlanner's speakerRequired) rather than papering over.
+            speaker: controls.presetSpeakers.isEmpty ? nil : presetSpeaker,
             styleURL: styleURL,
             language: controls.language ? language : nil,
             topP: controls.knobs.topP != nil ? qwenTopP : nil,

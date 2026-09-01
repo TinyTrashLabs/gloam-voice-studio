@@ -39,7 +39,7 @@ struct ChatView: View {
     var body: some View {
         @Bindable var chat = model.chat
         Group {
-            if let slug = model.selectedVoiceSlug, let meta = try? model.voices.get(slug).meta {
+            if let slug = model.selectedVoiceSlug, let meta = try? model.voices.meta(slug) {
                 // Fixed side panes + one flexible middle column. NOT an
                 // HSplitView: split panes keep their sizes when the window
                 // shrinks, overflow the window, and NavigationSplitView then
@@ -509,7 +509,7 @@ struct ChatView: View {
     }
 
     private func voiceName() -> String {
-        model.selectedVoiceSlug.flatMap { try? model.voices.get($0).meta.name } ?? "voice"
+        model.selectedVoiceSlug.flatMap { try? model.voices.meta($0).name } ?? "voice"
     }
 }
 

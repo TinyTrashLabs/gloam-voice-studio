@@ -394,7 +394,7 @@ struct CreateVoiceView: View {
     /// (just-saved voice) and Edit.
     private func manageVariantsPanel(targetSlug: String, note: Bool) -> some View {
         let _ = model.voicesVersion   // re-render after a variant is baked / deleted
-        let name = (try? model.voices.get(targetSlug).meta.name) ?? targetSlug
+        let name = (try? model.voices.meta(targetSlug).name) ?? targetSlug
         // Every existing variant — the new Fish-marker set AND legacy emotion names,
         // deduped — so nothing a voice already has disappears from this list.
         var seen = Set<String>()
@@ -486,7 +486,7 @@ struct CreateVoiceView: View {
                 }.font(.caption).buttonStyle(.bordered).disabled(model.foundryBaking)
             } else if let emo = Emotion(rawValue: suffix) {
                 Button("Re-record") {
-                    let baseName = (try? model.voices.get(targetSlug).meta.name) ?? targetSlug
+                    let baseName = (try? model.voices.meta(targetSlug).name) ?? targetSlug
                     recordingVariant = RecordVariantTarget(
                         baseSlug: targetSlug, baseName: baseName, emotion: emo)
                 }.font(.caption).buttonStyle(.bordered)
