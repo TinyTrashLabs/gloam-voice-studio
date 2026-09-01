@@ -21,6 +21,10 @@ struct GloamVoiceStudioApp: App {
                 .environment(model)
                 .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
+                // Explicit so controls match the icon whatever the user's
+                // system accent is set to; the AccentColor asset covers the
+                // rest of AppKit.
+                .tint(Brand.accent)
                 // Empty the window title — the GLOAM.FM lockup in the sidebar is
                 // the brand, so the OS title text is redundant. (navigationTitle
                 // empties the text but keeps the titlebar layout, so the toolbar
@@ -59,12 +63,14 @@ struct GloamVoiceStudioApp: App {
         Window("Documentation", id: "docs") {
             DocsWindow()
                 .preferredColorScheme(.dark)
+                .tint(Brand.accent)
         }
         .defaultSize(width: 900, height: 640)
         Settings {
             SettingsView()
                 .environment(model)
                 .preferredColorScheme(.dark)
+                .tint(Brand.accent)
         }
     }
 }

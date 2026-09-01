@@ -23,20 +23,23 @@ struct WindowGlass: NSViewRepresentable {
 }
 
 enum Brand {
-    // Night palette
-    static let ink   = Color(red: 4/255,  green: 20/255,  blue: 26/255)   // #04141a
-    static let ink2  = Color(red: 6/255,  green: 26/255,  blue: 34/255)   // #061a22
+    // Night palette — the app icon's ground: violet-black, not teal-black.
+    static let ink   = Color(red: 3/255,  green: 2/255,   blue: 9/255)    // #030209
+    static let ink2  = Color(red: 10/255, green: 6/255,   blue: 22/255)   // #0a0616
     // Foreground
-    static let fg     = Color(red: 246/255, green: 249/255, blue: 255/255) // #f6f9ff
+    static let fg     = Color(red: 246/255, green: 246/255, blue: 255/255) // #f6f6ff
     static let fgDim  = fg.opacity(0.62)
     static let fgFaint = fg.opacity(0.34)
-    // Accents
-    static let accent = Color(red: 122/255, green: 223/255, blue: 230/255) // #7adfe6
-    static let peak   = Color(red: 255/255, green: 51/255,  blue: 128/255) // #ff3380
+    // Accents — the icon's bars, bottom to top: cyan → violet → hot pink.
+    static let accent = Color(red: 63/255,  green: 220/255, blue: 255/255) // #3fdcff
+    static let violet = Color(red: 138/255, green: 60/255,  blue: 255/255) // #8a3cff
+    static let peak   = Color(red: 255/255, green: 42/255,  blue: 138/255) // #ff2a8a
+    /// The bar tips catch a warm highlight in the icon.
+    static let ember  = Color(red: 255/255, green: 122/255, blue: 80/255)  // #ff7a50
     // Brand gradient (simulating 120° as topLeading → bottomTrailing)
     static var gradient: LinearGradient {
         LinearGradient(
-            colors: [accent, peak],
+            colors: [accent, violet, peak],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -45,56 +48,52 @@ enum Brand {
 
 // MARK: - BrandMark
 
+/// The app icon's five glowing bars, drawn live so it stays crisp at any size
+/// and picks up Brand's colours rather than a baked PNG's.
 struct BrandMark: View {
     var size: CGFloat = 32
 
     var body: some View {
         Canvas { ctx, _ in
             let scale = size / 32
-            let cornerRadius = 8.0 * scale
-
-            // Outer rounded rect (near-transparent fill, gradient stroke)
-            let outerRect = CGRect(x: 1.5 * scale, y: 1.5 * scale,
-                                   width: 29 * scale, height: 29 * scale)
-            let outerPath = Path(roundedRect: outerRect, cornerRadius: cornerRadius)
-
-            // Fill with very slight tint
-            ctx.fill(outerPath, with: .color(.white.opacity(0.04)))
-
-            // Draw gradient stroke by clipping a wide stroke
-            ctx.stroke(outerPath,
-                       with: .linearGradient(
-                           Gradient(colors: [Brand.accent, Brand.peak]),
-                           startPoint: CGPoint(x: 0, y: 0),
-                           endPoint: CGPoint(x: size, y: size)),
-                       lineWidth: 1.5 * scale)
-
-            // 4 EQ bars: (x, width, height, y) in 32-grid
-            // x positions: 7.5, 12.5, 17.5, 22.5
-            // heights: 8, 18, 12, 5
-            // y: 12, 7, 10, 13.5 (top of bar)
-            // width: 2.6, corner radius 1.3
-            let bars: [(x: Double, h: Double, y: Double)] = [
-                (7.5, 8,  12),
-                (12.5, 18, 7),
-                (17.5, 12, 10),
-                (22.5, 5,  13.5)
+            // Bars in a 32-grid: x centre and height, all standing on one
+            // baseline at y = 26 like the icon.
+            let bars: [(x: Double, h: Double)] = [
+                (5.5, 9), (11, 15), (16.5, 21), (22, 14), (27.5, 8),
             ]
-            let barW = 2.6 * scale
-            let barR = 1.3 * scale
+            let baseline = 26.0 * scale
+            let barW = 3.6 * scale
+
+            // Baseline glow: a soft cyan lit strip the bars stand on.
+            let glowRect = CGRect(x: 1 * scale, y: baseline - 0.6 * scale,
+                                  width: 30 * scale, height: 1.2 * scale)
+            var glow = ctx
+            glow.addFilter(.blur(radius: 1.2 * scale))
+            glow.fill(Path(roundedRect: glowRect, cornerRadius: 0.6 * scale),
+                      with: .color(Brand.accent.opacity(0.9)))
 
             for bar in bars {
                 let barRect = CGRect(
-                    x: (bar.x - 1.3) * scale,
-                    y: bar.y * scale,
+                    x: (bar.x * scale) - barW / 2,
+                    y: baseline - bar.h * scale,
                     width: barW,
                     height: bar.h * scale)
-                let barPath = Path(roundedRect: barRect, cornerRadius: barR)
-                ctx.fill(barPath,
-                         with: .linearGradient(
-                             Gradient(colors: [Brand.accent, Brand.peak]),
-                             startPoint: CGPoint(x: barRect.midX, y: barRect.minY),
-                             endPoint: CGPoint(x: barRect.midX, y: barRect.maxY)))
+                let barPath = Path(roundedRect: barRect, cornerRadius: barW / 2)
+                let fill = GraphicsContext.Shading.linearGradient(
+                    Gradient(stops: [
+                        .init(color: Brand.ember,  location: 0.0),
+                        .init(color: Brand.peak,   location: 0.18),
+                        .init(color: Brand.violet, location: 0.58),
+                        .init(color: Brand.accent, location: 1.0),
+                    ]),
+                    startPoint: CGPoint(x: barRect.midX, y: barRect.minY),
+                    endPoint: CGPoint(x: barRect.midX, y: barRect.maxY))
+                // Halo first, then the solid pill on top.
+                var halo = ctx
+                halo.addFilter(.blur(radius: 1.6 * scale))
+                halo.opacity = 0.55
+                halo.fill(barPath, with: fill)
+                ctx.fill(barPath, with: fill)
             }
         }
         .frame(width: size, height: size)
