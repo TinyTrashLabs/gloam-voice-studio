@@ -99,6 +99,14 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fm.gloam.studio
+        # Apple Silicon only, deliberately. Every engine here runs on MLX, which
+        # is Metal-backed and has no Intel path -- a universal build would let an
+        # Intel Mac install the app from the store and then fail at the first
+        # generate, which reads as a broken app rather than an unsupported one.
+        # An arm64-only binary makes the store say "Requires a Mac with Apple
+        # silicon" up front and refuse the install.
+        ARCHS: arm64
+        EXCLUDED_ARCHS[sdk=macosx*]: x86_64
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "9"
