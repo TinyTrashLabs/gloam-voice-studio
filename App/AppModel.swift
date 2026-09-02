@@ -1169,7 +1169,8 @@ final class AppModel {
                 var prefixes: [DialoguePrefix?] = []
                 for slug in scene.voices {
                     do {
-                        prefixes.append(try await prefix(for: slug, aligner: aligner, rate: rate))
+                        prefixes.append(
+                            try await dialoguePrefix(for: slug, aligner: aligner, rate: rate))
                     } catch {
                         prefixes.append(nil)
                         let name = (try? voices.meta(slug).name) ?? slug
@@ -1218,9 +1219,21 @@ final class AppModel {
         await refreshEngineStatus()
     }
 
+    /// The chat voice's conditioning clip, capped so Dia2's two-minute context
+    /// keeps room for the reply itself. Returns nil rather than throwing: an
+    /// unconditioned reply is still a reply.
+    func dia2ChatPrefix(for slug: String) async -> DialoguePrefix? {
+        let rate = Double(BackendID.dia2.spec.defaultSampleRate)
+        guard let prefix = try? await dialoguePrefix(for: slug, aligner: await makeAligner(),
+                                                     rate: rate)
+        else { return nil }
+        return ChatPrefixBudget.trim(prefix.words, samples: prefix.samples,
+                                     sampleRate: Int(rate), maxSeconds: 15)
+    }
+
     /// One speaker's conditioning clip: the pack's reference decoded at Mimi's
     /// rate, with the cached word timings that tell Dia2 when each word lands.
-    private func prefix(for slug: String, aligner: any WordAligning,
+    func dialoguePrefix(for slug: String, aligner: any WordAligning,
                         rate: Double) async throws -> DialoguePrefix {
         let words = try await Dia2Alignment.resolve(slug, in: voices, using: aligner)
         guard let refURL = try voices.entry(slug).refURL else {

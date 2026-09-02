@@ -125,3 +125,25 @@ public extension DialoguePlanner {
         return SceneReport(sceneCount: all.count, splitAfterLines: Array(splits))
     }
 }
+
+/// Caps a conditioning clip so the 2-minute context keeps room for the reply.
+/// Trimming takes the tail, because a reply should follow the most recent
+/// speech, and rebases the timings so the model does not wait out the offset.
+public enum ChatPrefixBudget {
+    public static func trim(_ words: [AlignedWordTiming], samples: [Float],
+                            sampleRate: Int, maxSeconds: Double) -> DialoguePrefix {
+        let duration = Double(samples.count) / Double(sampleRate)
+        guard duration > maxSeconds, sampleRate > 0 else {
+            return DialoguePrefix(samples: samples, words: words)
+        }
+        let cutoff = duration - maxSeconds
+        let firstSample = Int(cutoff * Double(sampleRate))
+        let kept = Array(samples[min(firstSample, samples.count)...])
+        let rebased = words
+            .filter { $0.end > cutoff }
+            .map { AlignedWordTiming(text: $0.text,
+                                     start: max(0, $0.start - cutoff),
+                                     end: max(0, $0.end - cutoff)) }
+        return DialoguePrefix(samples: kept, words: rebased)
+    }
+}
