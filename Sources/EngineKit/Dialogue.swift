@@ -107,3 +107,21 @@ public enum DialoguePlanner {
         return request.turns.map { "[S\($0.speaker)] \($0.text)" }
     }
 }
+
+/// How a script divides into Dia2 passes, so the UI can say so before generating.
+public struct SceneReport: Sendable, Equatable {
+    public let sceneCount: Int
+    /// Line indices after which a new scene begins, for the UI to point at.
+    public let splitAfterLines: [Int]
+    public init(sceneCount: Int, splitAfterLines: [Int]) {
+        self.sceneCount = sceneCount; self.splitAfterLines = splitAfterLines
+    }
+}
+
+public extension DialoguePlanner {
+    static func report(for lines: [(index: Int, voiceSlug: String?)]) -> SceneReport {
+        let all = scenes(for: lines)
+        let splits = all.dropLast().compactMap(\.lines.last)
+        return SceneReport(sceneCount: all.count, splitAfterLines: Array(splits))
+    }
+}

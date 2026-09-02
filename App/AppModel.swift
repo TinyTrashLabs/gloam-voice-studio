@@ -1126,6 +1126,114 @@ final class AppModel {
         return result
     }
 
+    // MARK: - Dialogue scenes
+
+    /// The word aligner Dia2 prefixes are built from. Lazy because it pulls in
+    /// the transcriber, which the single-voice path never needs.
+    private func makeAligner() async -> any WordAligning {
+        WhisperWordAligner(transcriber: await speech.makeTranscriber())
+    }
+
+    /// Renders the whole script as Dia2 scenes: consecutive lines grouped into
+    /// at most two voices each, one pass and one take per scene.
+    ///
+    /// A voice with no recorded reference does not fail the scene — the prefix
+    /// is simply dropped and the take says so, because an unconditioned Dia2
+    /// pass is still a usable read.
+    func generateDialogueScenes() async {
+        guard backend == .dia2 else {
+            script.setStatus(script.session.lines.map(\.id),
+                             .failed("Scenes need the dia2 engine."))
+            return
+        }
+        guard downloads.state(for: backend) == .ready else {
+            script.setStatus(script.session.lines.map(\.id),
+                             .failed("Download the dia2 model in Settings → Models first."))
+            return
+        }
+        guard !script.isBatchRunning else { return }
+        script.isBatchRunning = true
+        defer { script.isBatchRunning = false }
+
+        let lines = script.dialogueLines
+        let scenes = DialoguePlanner.scenes(for: lines)
+        guard !scenes.isEmpty else { return }
+        let aligner = await makeAligner()
+        let rate = Double(backend.spec.defaultSampleRate)
+
+        for scene in scenes {
+            let ids = scene.lines.map { script.session.lines[$0].id }
+            script.setStatus(ids, .generating)
+            do {
+                var notes: [String] = []
+                var prefixes: [DialoguePrefix?] = []
+                for slug in scene.voices {
+                    do {
+                        prefixes.append(try await prefix(for: slug, aligner: aligner, rate: rate))
+                    } catch {
+                        prefixes.append(nil)
+                        let name = (try? voices.meta(slug).name) ?? slug
+                        notes.append("\(name) generated without its voice: \(describeAny(error))")
+                    }
+                }
+                // Dia2 cannot condition speaker 2 alone, so a missing first
+                // prefix drops the second too rather than misassigning it.
+                if case .some(nil) = prefixes.first {
+                    prefixes = Array(repeating: nil, count: prefixes.count)
+                }
+
+                let turns = scene.lines.map { index -> DialogueTurn in
+                    let line = script.session.lines[index]
+                    let slug = line.voiceSlug ?? selectedVoiceSlug
+                    let speaker = slug.flatMap { scene.voices.firstIndex(of: $0) }.map { $0 + 1 } ?? 1
+                    return DialogueTurn(speaker: speaker, text: line.text)
+                }
+                let text = try DialoguePlanner.script(
+                    for: DialogueRequest(turns: turns, voices: scene.voices.map { $0 }),
+                    knownTags: [])
+
+                await ttsResidency.willUse(engine)
+                let started = Date()
+                let chunk = try await engine.synthesizeDialogue(
+                    backend: backend,
+                    request: ProviderDialogueRequest(script: text, prefixes: prefixes))
+                let wall = Date().timeIntervalSince(started)
+                recordTTSSpeed(backend: backend,
+                               audioSeconds: Double(chunk.samples.count) / rate,
+                               wallSeconds: wall)
+                try script.appendSceneTake(
+                    lineID: ids[0],
+                    samples: AudioAssembler.normalizePeak(floats: chunk.samples),
+                    sampleRate: backend.spec.defaultSampleRate, wallSeconds: wall,
+                    voices: scene.voices,
+                    words: chunk.words.map {
+                        ScriptWordTiming(text: $0.text, start: $0.start, end: $0.end)
+                    },
+                    note: notes.isEmpty ? nil : notes.joined(separator: " "))
+                script.setStatus(ids, .idle)
+            } catch {
+                script.setStatus(ids, .failed(describeAny(error)))
+            }
+        }
+        await refreshEngineStatus()
+    }
+
+    /// One speaker's conditioning clip: the pack's reference decoded at Mimi's
+    /// rate, with the cached word timings that tell Dia2 when each word lands.
+    private func prefix(for slug: String, aligner: any WordAligning,
+                        rate: Double) async throws -> DialoguePrefix {
+        let words = try await Dia2Alignment.resolve(slug, in: voices, using: aligner)
+        guard let refURL = try voices.entry(slug).refURL else {
+            throw Dia2AlignmentError.noReferenceAudio(slug)
+        }
+        let samples = try RefAudioCombiner.decodeMono(try Data(contentsOf: refURL),
+                                                      sampleRate: rate)
+        return DialoguePrefix(samples: samples,
+                              words: words.map {
+                                  AlignedWordTiming(text: $0.w, start: $0.start, end: $0.end)
+                              })
+    }
+
     // MARK: - Voice Foundry
 
     /// Generate one qwen3-design candidate speaking the audition line and prepend it

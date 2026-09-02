@@ -14,8 +14,8 @@ final class ScriptModel {
     private(set) var status: [UUID: LineStatus] = [:]
     var isBatchRunning = false
 
-    private let store: SessionStore
-    private unowned let app: AppModel
+    let store: SessionStore
+    unowned let app: AppModel
 
     init(app: AppModel, store: SessionStore) {
         self.app = app
@@ -27,6 +27,13 @@ final class ScriptModel {
 
     func addLine() {
         session.lines.append(ScriptLine(text: ""))
+        autosave()
+    }
+
+    /// A beat of silence between lines. It generates nothing — it is spent at
+    /// export, where the gap actually has to exist.
+    func addPause(seconds: Double = 1.0) {
+        session.lines.append(ScriptLine(text: "", kind: .pause(seconds: seconds)))
         autosave()
     }
 
@@ -71,7 +78,8 @@ final class ScriptModel {
     // MARK: generation
 
     func generate(lineID: UUID) async {
-        guard let line = session.lines.first(where: { $0.id == lineID }) else { return }
+        guard let line = session.lines.first(where: { $0.id == lineID }),
+              line.pauseSeconds == nil else { return }
         status[lineID] = .generating
         do {
             let result = try await app.synthesizeLine(
@@ -94,7 +102,8 @@ final class ScriptModel {
         isBatchRunning = true
         defer { isBatchRunning = false }
         let pending = session.lines.filter {
-            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            $0.pauseSeconds == nil
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         pending.forEach { status[$0.id] = .queued }
         for line in pending {
@@ -106,15 +115,66 @@ final class ScriptModel {
 
     /// Best take per line: starred, else newest. Lines with no takes are skipped.
     func exportPCMs() -> (pcms: [Data], sampleRate: Int)? {
-        var pcms: [Data] = []
+        // Silence can only be sized once a take has told us the rate, so the
+        // pass collects intents first and materialises them after.
+        enum Part { case audio(Data), silence(Double) }
+        var parts: [Part] = []
         var rate = 0
+        var spokeAnything = false
         for line in session.lines {
+            if let seconds = line.pauseSeconds {
+                parts.append(.silence(seconds))
+                continue
+            }
             let take = line.takes.first { $0.id == line.starredTakeID }
                 ?? line.takes.last
             guard let take, let pcm = try? store.takePCM(take.id) else { continue }
-            pcms.append(Data(pcm))
+            parts.append(.audio(Data(pcm)))
             rate = take.sampleRate
+            spokeAnything = true
         }
-        return pcms.isEmpty ? nil : (pcms, rate)
+        guard spokeAnything else { return nil }
+        let pcms = parts.map { part -> Data in
+            switch part {
+            case .audio(let data): data
+            case .silence(let seconds): Data(count: Int(Double(rate) * seconds) * 2)
+            }
+        }
+        return (pcms, rate)
+    }
+}
+
+// MARK: - Dialogue scenes
+
+extension ScriptModel {
+    /// Lines that have something to say, paired with the voice that will say
+    /// it. Indices are positions in `session.lines`, so a scene split can be
+    /// reported as a line number.
+    var dialogueLines: [(index: Int, voiceSlug: String?)] {
+        session.lines.enumerated().compactMap { index, line in
+            guard line.pauseSeconds == nil,
+                  !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return (index, line.voiceSlug ?? app.selectedVoiceSlug)
+        }
+    }
+
+    /// How many Dia2 passes this script needs, and where it breaks.
+    var sceneReport: SceneReport { DialoguePlanner.report(for: dialogueLines) }
+
+    func setStatus(_ ids: [UUID], _ status: LineStatus) {
+        ids.forEach { self.status[$0] = status }
+    }
+
+    /// A whole scene renders as one take, hung off the line it starts at —
+    /// splitting it back into per-line takes would cut the overlaps and
+    /// turn-taking that are the reason to use Dia2 at all.
+    func appendSceneTake(lineID: UUID, samples: [Float], sampleRate: Int,
+                         wallSeconds: Double, voices: [String],
+                         words: [ScriptWordTiming], note: String?) throws {
+        let take = try store.saveTake(pcm: PCM16.data(from: samples),
+                                      sampleRate: sampleRate, wallSeconds: wallSeconds,
+                                      voices: voices, words: words, note: note)
+        update(lineID) { $0.takes.append(take) }
     }
 }
