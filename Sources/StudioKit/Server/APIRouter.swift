@@ -396,6 +396,82 @@ public enum APIRouter {
             }
         }
 
+        // Dialogue: two voices in one pass. Gloam Radio drives two-host
+        // segments over this, so it cannot be Studio-only.
+        router.get("v1/audio/dialogue/tags") { _, _ in
+            // Clients render these as chips; free text would be spoken aloud,
+            // which is why the list comes from the model and not a table here.
+            DialogueTagsResponse(tags: try await deps.engine.nonverbalTags(backend: .dia2))
+        }
+
+        router.post("v1/audio/dialogue") { request, context -> Response in
+            let start = Date()
+            let body = try await request.decode(as: DialogueBody.self, context: context)
+            // Same contract as /v1/audio/speech since #28: an unusable request
+            // is an explicit 4xx, never a quietly wrong take.
+            let dialogue = DialogueRequest(
+                turns: body.turns.map { DialogueTurn(speaker: $0.speaker, text: $0.text) },
+                voices: body.voices ?? [],
+                temperature: body.temperature, topK: body.top_k, cfgScale: body.cfg_scale)
+            let tags = Set(try await deps.engine.nonverbalTags(backend: .dia2))
+            let script: [String]
+            do {
+                script = try DialoguePlanner.script(for: dialogue, knownTags: tags)
+            } catch {
+                throw APIError(status: .badRequest,
+                               detail: error.localizedDescription)
+            }
+
+            let prefixes = try await dialoguePrefixes(dialogue.voices, deps: deps)
+            let providerRequest = ProviderDialogueRequest(
+                script: script, prefixes: prefixes,
+                temperature: dialogue.temperature, topK: dialogue.topK,
+                cfgScale: dialogue.cfgScale)
+            let rate = BackendID.dia2.spec.defaultSampleRate
+
+            do {
+                if body.stream == true {
+                    let session = try await Task(priority: GloamEngine.modelWorkPriority) {
+                        try await deps.gate.run {
+                            await deps.prepareTTS()
+                            return try await deps.engine.openDialogueSession(
+                                backend: .dia2, request: providerRequest)
+                        }
+                    }.value
+                    deps.log.record(.init(
+                        method: "POST", path: "/v1/audio/dialogue", status: 200,
+                        model: BackendID.dia2.rawValue, voice: nil, instruct: nil,
+                        durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                    return streamingWAVResponse(session: session, sampleRate: rate)
+                }
+                let chunk: DialogueChunk
+                do {
+                    chunk = try await Task(priority: GloamEngine.modelWorkPriority) {
+                        try await deps.gate.run {
+                            await deps.prepareTTS()
+                            return try await deps.engine.synthesizeDialogue(
+                                backend: .dia2, request: providerRequest)
+                        }
+                    }.value
+                } catch is RequestGate.Busy {
+                    throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+                }
+                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: chunk.samples),
+                                            sampleRate: rate)
+                deps.log.record(.init(
+                    method: "POST", path: "/v1/audio/dialogue", status: 200,
+                    model: BackendID.dia2.rawValue, voice: nil, instruct: nil,
+                    durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                return Response(status: .ok,
+                                headers: [.contentType: "audio/wav"],
+                                body: .init(byteBuffer: ByteBuffer(data: wav)))
+            } catch EngineError.licenseAckRequired(let b) {
+                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
+            } catch let error as EngineError {
+                throw APIError(status: .internalServerError, detail: "\(error)")
+            }
+        }
+
         router.post("listen") { request, context in
             let req = try await request.decode(as: ListenRequest.self, context: context)
             do {
@@ -496,4 +572,60 @@ struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
             throw error
         }
     }
+}
+
+/// The tag vocabulary, as chips a client can offer rather than free text.
+struct DialogueTagsResponse: ResponseEncodable {
+    let tags: [String]
+}
+
+/// A speaker's conditioning clip, or nil. A voice with no reference audio —
+/// or no word timings for it — conditions nothing rather than failing the
+/// request: unconditioned Dia2 is valid, it just varies.
+private func dialoguePrefixes(_ voices: [String?],
+                              deps: APIDependencies) async throws -> [DialoguePrefix?] {
+    var prefixes: [DialoguePrefix?] = []
+    var aligner: (any WordAligning)?
+    for slug in voices.prefix(2) {
+        guard let slug else { prefixes.append(nil); continue }
+        guard let entry = try? deps.voices.entry(slug) else {
+            throw APIError(status: .badRequest, detail: "Unknown voice: \(slug)")
+        }
+        guard let refURL = entry.refURL else { prefixes.append(nil); continue }
+        if aligner == nil { aligner = await deps.makeAligner() }
+        let words = (try? await Dia2Alignment.resolve(slug, in: deps.voices,
+                                                      using: aligner!)) ?? []
+        guard !words.isEmpty,
+              let samples = try? RefAudioCombiner.decodeMono(
+                  try Data(contentsOf: refURL),
+                  sampleRate: Double(BackendID.dia2.spec.defaultSampleRate))
+        else { prefixes.append(nil); continue }
+        prefixes.append(DialoguePrefix(
+            samples: samples,
+            words: words.map { AlignedWordTiming(text: $0.w, start: $0.start, end: $0.end) }))
+    }
+    // Dia2 cannot condition speaker 2 alone, so a missing first prefix drops
+    // the second rather than misassigning it.
+    if case .some(nil) = prefixes.first {
+        prefixes = Array(repeating: nil, count: prefixes.count)
+    }
+    return prefixes
+}
+
+/// Streams a WAV whose length is not known up front: a 44-byte header with
+/// 0xFFFFFFFF sizes (the convention players accept for an open-ended stream),
+/// then each chunk's samples as little-endian 16-bit PCM as they arrive.
+private func streamingWAVResponse(session: any DialogueStreaming,
+                                  sampleRate: Int) -> Response {
+    Response(
+        status: .ok,
+        headers: [.contentType: "audio/wav"],
+        body: ResponseBody { writer in
+            try await writer.write(ByteBuffer(data: WAVEncoder.streamingHeader(
+                sampleRate: sampleRate)))
+            for try await chunk in session.audio {
+                try await writer.write(ByteBuffer(data: PCM16.data(from: chunk.samples)))
+            }
+            try await writer.finish(nil)
+        })
 }

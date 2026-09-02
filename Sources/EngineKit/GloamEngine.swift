@@ -297,6 +297,20 @@ public actor GloamEngine {
         return try await work.value
     }
 
+    /// The nonverbal tags this backend actually knows. Clients render them as
+    /// chips; free text would simply be read aloud, which is the whole reason
+    /// the list has to come from the model rather than a hardcoded table.
+    public func nonverbalTags(backend: BackendID) async throws -> [String] {
+        let previous = tail
+        let work = Task<[String], Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            let model = try await self.residentModel(for: backend)
+            return (model as? any DialogueSpeechModel)?.nonverbalTags ?? []
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
     /// Opens a streaming dialogue session. The load is serialised; the session
     /// itself then runs on its own, so `append` can keep feeding it script
     /// while audio is already flowing.

@@ -1463,6 +1463,11 @@ final class AppModel {
             // residency exactly like the in-app render paths do.
             prepareTTS: { [ttsResidency, engine] in
                 await ttsResidency.willUse(engine)
+            },
+            // Dia2 prefixes need word timings, from the same transcriber the
+            // RECORD button uses.
+            makeAligner: { [speech] in
+                WhisperWordAligner(transcriber: await speech.makeTranscriber())
             })
     }
 
