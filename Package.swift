@@ -150,6 +150,9 @@ let package = Package(
             name: "StudioKit",
             dependencies: [
                 "EngineKit",
+                // Dia2 needs word timings for a conditioning clip, and the
+                // transcriber that produces them lives in SpeechKit.
+                "SpeechKit",
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
