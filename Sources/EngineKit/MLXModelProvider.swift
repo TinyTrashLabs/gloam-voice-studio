@@ -57,6 +57,12 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
         }
         let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
         let model = try await TTS.loadModel(modelRepo: source)
+        // Dia2 goes through the same loader — it is registered in the fork's
+        // TTS factory — but needs the dialogue-capable adapter rather than the
+        // single-voice one.
+        if let dia2 = model as? Dia2Model {
+            return Dia2SpeechModel(model: dia2)
+        }
         return MLXSpeechModel(model: model, backend: backend)
     }
 
@@ -176,6 +182,89 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
             throw error
         } catch {
             throw EngineError.generationFailed(backend: backend, message: "\(error)")
+        }
+    }
+}
+
+/// Dia2's adapter. Separate from `MLXSpeechModel` because Dia2 is the only
+/// backend that speaks two voices in one pass, and the dialogue entry points
+/// have no meaning for the others — giving them a default would let a
+/// single-voice engine silently answer a two-voice request.
+final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
+    private let model: Dia2Model
+
+    init(model: Dia2Model) { self.model = model }
+
+    var sampleRate: Int { model.sampleRate }
+    var nonverbalTags: [String] { model.nonverbalTags }
+
+    private func config(_ r: ProviderDialogueRequest) -> Dia2GenerationConfig {
+        var c = Dia2GenerationConfig()
+        if let t = r.temperature { c.audioTemperature = t }
+        if let k = r.topK { c.audioTopK = k }
+        if let s = r.cfgScale { c.cfgScale = s }
+        return c
+    }
+
+    private func prefixes(_ r: ProviderDialogueRequest)
+        -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
+    {
+        func convert(_ p: DialoguePrefix?) -> Dia2PrefixInput? {
+            guard let p else { return nil }
+            return Dia2PrefixInput(
+                samples: p.samples,
+                words: p.words.map { Dia2Word(text: $0.text, start: $0.start, end: $0.end) })
+        }
+        return (convert(r.prefixes.first ?? nil),
+                convert(r.prefixes.count > 1 ? r.prefixes[1] : nil))
+    }
+
+    func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
+        let (samples, words) = try await model.generateDialogue(
+            script: request.script, prefixes: prefixes(request), config: config(request))
+        return DialogueChunk(
+            samples: samples,
+            words: words.map { AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1) })
+    }
+
+    func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
+        Dia2StreamingSession(session: try model.streamDialogue(
+            script: request.script, prefixes: prefixes(request), config: config(request)))
+    }
+
+    /// A one-turn dialogue, so the ordinary single-voice path still works.
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        let (samples, _) = try await model.generateDialogue(script: [request.text])
+        return samples
+    }
+}
+
+/// Bridges Dia2's actor session onto EngineKit's streaming protocol.
+struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
+    let session: Dia2Session
+
+    func append(_ lines: [String]) async { await session.append(lines) }
+    func finish() async { await session.finish() }
+    func cancel() async { await session.cancel() }
+
+    var audio: AsyncThrowingStream<DialogueChunk, Error> {
+        let upstream = session.audio
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await c in upstream {
+                        continuation.yield(DialogueChunk(
+                            samples: c.samples,
+                            words: c.words.map {
+                                AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1)
+                            }))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }
