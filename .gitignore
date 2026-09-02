@@ -47,3 +47,7 @@ mc-*.png
 # Keep them in handoffs/ locally; see CLAUDE.md.
 HANDOFF*.md
 handoffs/
+
+# `swift package edit` override — a local symlink to a sibling checkout.
+# Machine-specific; never committed.
+Packages/
