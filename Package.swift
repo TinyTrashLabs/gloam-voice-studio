@@ -28,9 +28,12 @@ let package = Package(
         // Bumped 2026-08-25 to the custom-style-path merge (our #7): supertonic
         // accepts an absolute {style_ttl, style_dp} .json path as `voice`, so
         // .gvoice packs' baked supertonic renditions actually drive synthesis.
+        // Bumped 2026-09-02 to the Dia2 merge (our #8): Nari Labs' streaming
+        // two-speaker dialogue model (model_type "dia2"), English only, Mimi
+        // codec at 24 kHz, with prefix conditioning driven by word timings.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "a987e6a517bcf29f474692967919df6c289c551d"),
+            revision: "ca3f3981d5a5a54a7b1a271de16d9aba3ebef436"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
