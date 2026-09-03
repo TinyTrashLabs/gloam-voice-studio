@@ -33,9 +33,12 @@ let package = Package(
         // codec at 24 kHz, with prefix conditioning driven by word timings.
         // Includes our #9: the 8-bit tier — the one this app downloads by
         // default — did not load at all before it.
+        // Bumped 2026-09-03 to the Dia2 parity fix (our #10): top-k sampling
+        // now retains the complete candidate set, BOS fallback matches the
+        // reference, and delayed codebooks are gathered from the right frame.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "8bf74c541b186ba36791bc23a7b7fd5d15ad2882"),
+            revision: "0717c6d675dc28a3b393d7c4e18f0130612979c8"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
