@@ -31,9 +31,11 @@ let package = Package(
         // Bumped 2026-09-02 to the Dia2 merge (our #8): Nari Labs' streaming
         // two-speaker dialogue model (model_type "dia2"), English only, Mimi
         // codec at 24 kHz, with prefix conditioning driven by word timings.
+        // Includes our #9: the 8-bit tier — the one this app downloads by
+        // default — did not load at all before it.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "ca3f3981d5a5a54a7b1a271de16d9aba3ebef436"),
+            revision: "8bf74c541b186ba36791bc23a7b7fd5d15ad2882"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
