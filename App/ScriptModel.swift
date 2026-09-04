@@ -150,16 +150,19 @@ extension ScriptModel {
     /// Lines that have something to say, paired with the voice that will say
     /// it. Indices are positions in `session.lines`, so a scene split can be
     /// reported as a line number.
-    var dialogueLines: [(index: Int, voiceSlug: String?)] {
+    var dialogueLines: [DialogueLine] {
         session.lines.enumerated().compactMap { index, line in
             guard line.pauseSeconds == nil,
                   !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
-            return (index, line.voiceSlug ?? app.selectedVoiceSlug)
+            return DialogueLine(index: index,
+                                voiceSlug: line.voiceSlug ?? app.selectedVoiceSlug,
+                                text: line.text)
         }
     }
 
-    /// How many Dia2 passes this script needs, and where it breaks.
+    /// How many Dia2 passes this script needs, where it breaks, and how long
+    /// each pass runs — the planner splits on length as well as voice count.
     var sceneReport: SceneReport { DialoguePlanner.report(for: dialogueLines) }
 
     func setStatus(_ ids: [UUID], _ status: LineStatus) {

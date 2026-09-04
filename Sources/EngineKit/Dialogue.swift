@@ -91,27 +91,95 @@ public struct DialogueScene: Sendable, Equatable {
     }
 }
 
+/// One line of script, as the planner sees it: who says it, and what.
+public struct DialogueLine: Sendable, Equatable {
+    /// Position in the caller's own list, so a split can be reported as a line.
+    public var index: Int
+    public var voiceSlug: String?
+    public var text: String
+    /// Who is speaking, for seam placement. Defaults to the voice slug, which
+    /// is right whenever voices are assigned; the Dialogue composer passes
+    /// "S1"/"S2" so an unvoiced two-hander still has turns to break at.
+    public var speakerID: String
+
+    public init(index: Int, voiceSlug: String?, text: String, speakerID: String? = nil) {
+        self.index = index; self.voiceSlug = voiceSlug; self.text = text
+        self.speakerID = speakerID ?? voiceSlug ?? ""
+    }
+}
+
 public enum DialoguePlanner {
-    /// Groups consecutive lines into scenes of at most two distinct voices.
+    /// Measured across clean Dia2 2B renders. Close enough to plan with: the
+    /// budget below has enough headroom to absorb a slow or fast reader.
+    public static let wordsPerSecond = 2.7
+
+    /// How much audio one Dia2 pass may plan for. Dia2 2B has three ceilings
+    /// and only the first is the context window:
+    ///
+    /// - **~118s** is hard. `max_context_steps` is 1500 and Mimi runs at
+    ///   12.5 Hz, so a pass stops after ~1482 generated frames. (The limit
+    ///   covers generation only — prefix frames are extra and cost nothing
+    ///   against it.)
+    /// - **~95-100s** is where the text state machine breaks: the two
+    ///   speakers' identities merge (the measured speaker-similarity margin
+    ///   fell to 0.000) and the model starts repeating lines it already said.
+    /// - **~45s** is where quality leaves its plateau. Similarity to the
+    ///   reference measured 0.81 over 0-45s, 0.76 at 45-75s, 0.68 at 75-90s
+    ///   and 0.48 at 105-120s.
+    ///
+    /// So the budget is the quality ceiling, not the hard one: generating to
+    /// 118s technically succeeds and sounds progressively less like the voice
+    /// the user picked. Splitting costs a seam and nothing else, because each
+    /// pass re-conditions from the original reference audio and so resets the
+    /// drift completely.
+    public static let sceneBudgetSeconds = 45.0
+
+    /// A turn's duration, estimated from its word count. An estimate is enough:
+    /// the alternative is generating the take to find out how long it is.
+    public static func estimatedSeconds(of text: String) -> Double {
+        let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+        return Double(words.count) / wordsPerSecond
+    }
+
+    /// Groups consecutive lines into scenes one Dia2 pass can carry: at most
+    /// two distinct voices, and at most `budgetSeconds` of estimated audio.
+    ///
     /// A third voice starts a new scene rather than being dropped, so a
     /// three-person script renders as several exchanges instead of losing one.
-    public static func scenes(for lines: [(index: Int, voiceSlug: String?)]) -> [DialogueScene] {
+    ///
+    /// The duration split only ever lands where the speaker changes. Every
+    /// split is an audible seam, and a seam between two speakers reads as an
+    /// ordinary cut where one inside a single speaker's turn reads as damage.
+    /// One speaker holding the floor past the budget therefore runs long
+    /// on purpose — `SceneReport.overBudgetScenes` is how the UI says so.
+    public static func scenes(for lines: [DialogueLine],
+                              budgetSeconds: Double = sceneBudgetSeconds) -> [DialogueScene] {
         var scenes: [DialogueScene] = []
         var voices: [String] = []
         var current: [Int] = []
+        var seconds = 0.0
+        var previousSpeaker: String?
 
         func flush() {
             guard !current.isEmpty else { return }
             scenes.append(DialogueScene(voices: voices, lines: current))
-            voices = []; current = []
+            voices = []; current = []; seconds = 0
         }
 
         for line in lines {
-            if let slug = line.voiceSlug, !voices.contains(slug) {
-                if voices.count == 2 { flush() }
-                voices.append(slug)
+            let duration = estimatedSeconds(of: line.text)
+            let needsASlot = line.voiceSlug.map { !voices.contains($0) } ?? false
+            let speakerChanged = previousSpeaker.map { $0 != line.speakerID } ?? false
+
+            if needsASlot, voices.count == 2 {
+                flush()
+            } else if speakerChanged, !current.isEmpty, seconds + duration > budgetSeconds {
+                flush()
             }
+            if let slug = line.voiceSlug, !voices.contains(slug) { voices.append(slug) }
             current.append(line.index)
+            seconds += duration
+            previousSpeaker = line.speakerID
         }
         flush()
         return scenes
@@ -152,16 +220,35 @@ public struct SceneReport: Sendable, Equatable {
     public let sceneCount: Int
     /// Line indices after which a new scene begins, for the UI to point at.
     public let splitAfterLines: [Int]
-    public init(sceneCount: Int, splitAfterLines: [Int]) {
+    /// Estimated audio per pass, in order.
+    public let sceneSeconds: [Double]
+    /// Scene indices that could not be split down to the budget — a single
+    /// speaker talking past it. They will still render; they will drift.
+    public let overBudgetScenes: [Int]
+
+    /// The whole script's estimated duration.
+    public var estimatedSeconds: Double { sceneSeconds.reduce(0, +) }
+
+    public init(sceneCount: Int, splitAfterLines: [Int],
+                sceneSeconds: [Double] = [], overBudgetScenes: [Int] = []) {
         self.sceneCount = sceneCount; self.splitAfterLines = splitAfterLines
+        self.sceneSeconds = sceneSeconds; self.overBudgetScenes = overBudgetScenes
     }
 }
 
 public extension DialoguePlanner {
-    static func report(for lines: [(index: Int, voiceSlug: String?)]) -> SceneReport {
-        let all = scenes(for: lines)
-        let splits = all.dropLast().compactMap(\.lines.last)
-        return SceneReport(sceneCount: all.count, splitAfterLines: Array(splits))
+    static func report(for lines: [DialogueLine],
+                       budgetSeconds: Double = sceneBudgetSeconds) -> SceneReport {
+        let all = scenes(for: lines, budgetSeconds: budgetSeconds)
+        let texts = Dictionary(lines.map { ($0.index, $0.text) }, uniquingKeysWith: { a, _ in a })
+        let seconds = all.map { scene in
+            scene.lines.reduce(0.0) { $0 + estimatedSeconds(of: texts[$1] ?? "") }
+        }
+        return SceneReport(
+            sceneCount: all.count,
+            splitAfterLines: Array(all.dropLast().compactMap(\.lines.last)),
+            sceneSeconds: seconds,
+            overBudgetScenes: seconds.indices.filter { seconds[$0] > budgetSeconds })
     }
 }
 

@@ -2,8 +2,10 @@ import XCTest
 @testable import EngineKit
 
 final class DialogueTests: XCTestCase {
-    private func lines(_ slugs: [String?]) -> [(index: Int, voiceSlug: String?)] {
-        slugs.enumerated().map { ($0.offset, $0.element) }
+    private func lines(_ slugs: [String?]) -> [DialogueLine] {
+        slugs.enumerated().map {
+            DialogueLine(index: $0.offset, voiceSlug: $0.element, text: "a line")
+        }
     }
 
     /// Two voices in a row is one scene — that is the whole point.
