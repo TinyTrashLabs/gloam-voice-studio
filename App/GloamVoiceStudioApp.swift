@@ -75,7 +75,7 @@ struct GloamVoiceStudioApp: App {
     }
 }
 
-/// View-menu items for the three main sections (⌘1/⌘2/⌘3). Writes the same
+/// View-menu items for the main sections (⌘1/⌘2/⌘3/⌘4). Writes the same
 /// AppStorage key the toolbar picker reads, so the two stay in lockstep.
 private struct SectionMenuButtons: View {
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
@@ -86,6 +86,8 @@ private struct SectionMenuButtons: View {
             .keyboardShortcut("2", modifiers: .command)
         Button("Chat") { sectionRaw = StudioSection.chat.rawValue }
             .keyboardShortcut("3", modifiers: .command)
+        Button("Dialogue") { sectionRaw = StudioSection.dialogue.rawValue }
+            .keyboardShortcut("4", modifiers: .command)
     }
 }
 

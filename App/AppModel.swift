@@ -470,6 +470,10 @@ final class AppModel {
     // API request console (shared with the server)
     let apiLog = APILog()
 
+    /// Dialogue mode's own state. Lazy for the same reason `script` is: a
+    /// session that never opens Dialogue never builds it.
+    @ObservationIgnored lazy var dialogue: DialogueComposer = DialogueComposer(app: self)
+
     @ObservationIgnored lazy var script: ScriptModel = ScriptModel(
         app: self,
         store: SessionStore(directory: UITestMode.isActive
@@ -1130,7 +1134,7 @@ final class AppModel {
 
     /// The word aligner Dia2 prefixes are built from. Lazy because it pulls in
     /// the transcriber, which the single-voice path never needs.
-    private func makeAligner() async -> any WordAligning {
+    func makeAligner() async -> any WordAligning {
         WhisperWordAligner(transcriber: await speech.makeTranscriber())
     }
 

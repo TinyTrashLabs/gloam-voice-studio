@@ -3,8 +3,9 @@ import SwiftUI
 
 /// Top-level main-pane section. `Studio` speaks with reusable voices; `createVoice`
 /// is the Voice Foundry where `qwen3-design` mints new ones; `chat` converses with
-/// a voice's persona through a local LLM.
-enum StudioSection: String { case studio, createVoice, chat }
+/// a voice's persona through a local LLM; `dialogue` writes a two-speaker exchange
+/// for Dia2, which is the one engine that speaks both voices in a single pass.
+enum StudioSection: String { case studio, createVoice, chat, dialogue }
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
@@ -34,6 +35,7 @@ struct ContentView: View {
                     case .studio: StudioView()
                     case .createVoice: CreateVoiceView()
                     case .chat: ChatView()
+                    case .dialogue: DialogueView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -92,7 +94,7 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
         // Section switcher — the standard toolbar-level scope control (was a
-        // custom segmented picker buried in the sidebar header). ⌘1/2/3 via
+        // custom segmented picker buried in the sidebar header). ⌘1/2/3/4 via
         // the View menu (SectionCommands).
         ToolbarItem(placement: .navigation) {
             Picker("Section", selection: Binding(
@@ -106,11 +108,13 @@ struct ContentView: View {
                 Text("Studio").tag(StudioSection.studio)
                 Text("Create Voice").tag(StudioSection.createVoice)
                 Text("Chat").tag(StudioSection.chat)
+                Text("Dialogue").tag(StudioSection.dialogue)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .accessibilityIdentifier("studio-section-picker")
-            .help("Switch between the studio, the voice foundry, and voice chat (⌘1/⌘2/⌘3)")
+            .help("Switch between the studio, the voice foundry, voice chat, and "
+                  + "two-speaker dialogue (⌘1/⌘2/⌘3/⌘4)")
         }
 
         // 0. Global download progress — appears only while a model is downloading,
