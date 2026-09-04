@@ -499,4 +499,32 @@ final class SmokeTests: XCTestCase {
                        "the legacy New Emotion Variant… menu item should be gone")
         app.typeKey(.escape, modifierFlags: [])
     }
+
+    @MainActor
+    func testDialogueVoicePickerSearchFiltersVoices() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        // Dialogue is the fourth top-level section. Its model gate uses the
+        // fake provider in UI-test mode, so loading is immediate.
+        app.typeKey("4", modifierFlags: .command)
+        let loadDia2 = app.buttons["dialogue-load-dia2"].firstMatch
+        XCTAssertTrue(loadDia2.waitForExistence(timeout: 5))
+        loadDia2.click()
+
+        let picker = app.buttons["dialogue-voice-picker-1"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.click()
+
+        let search = app.textFields["dialogue-voice-search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5),
+                      "the dialogue voice popover should expose a search field")
+        search.click()
+        search.typeText("Aiden")
+
+        XCTAssertTrue(app.staticTexts["Aiden · Qwen"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Dylan · Qwen"].exists,
+                       "non-matching voices should be filtered out")
+    }
 }

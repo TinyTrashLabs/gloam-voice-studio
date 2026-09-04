@@ -44,8 +44,26 @@ final class PackOpenHandler {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// SwiftUI owns the model, while AppKit owns the termination handshake.
+    /// The app installs this closure once its scene exists so Cmd-Q can wait
+    /// for in-flight Metal work before the process starts destroying models.
+    var shutdown: (() async -> Void)?
+    private var terminationPending = false
+
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated { PackOpenHandler.shared.open(urls) }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let shutdown else { return .terminateNow }
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        Task { @MainActor in
+            await shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

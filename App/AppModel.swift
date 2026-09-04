@@ -1512,9 +1512,17 @@ final class AppModel {
         }
     }
 
-    /// Stops the server for a clean process exit (SIGINT/SIGTERM in `--serve`).
+    /// Stops producers, waits for queued accelerator work, then releases the
+    /// models. Both the GUI termination handshake and headless signals use
+    /// this path so process teardown never races an in-flight Metal command.
     func shutdownForExit() async {
+        chat.stop()
         await server?.stop()
+        await engine.quiesce()
+        await chatSpeechEngine.quiesce()
+        await engine.unload()
+        await engine.unloadLLM()
+        await chatSpeechEngine.unload()
     }
 
     // MARK: memory pressure

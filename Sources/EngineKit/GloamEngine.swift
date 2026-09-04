@@ -284,6 +284,8 @@ public actor GloamEngine {
         let previous = tail
         let work = Task<DialogueChunk, Error>(priority: Self.modelWorkPriority) { [self] in
             await previous?.value
+            self.ttsBusy = true
+            defer { self.ttsWorkEnded() }
             let model = try await self.residentModel(for: backend)
             guard let dialogue = model as? any DialogueSpeechModel else {
                 throw EngineError.generationFailed(

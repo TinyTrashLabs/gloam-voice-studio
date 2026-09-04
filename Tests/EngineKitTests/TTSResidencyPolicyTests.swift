@@ -27,6 +27,32 @@ private final class GatedLanguageProvider: LanguageModelProviding, @unchecked Se
     func didEvictModel() {}
 }
 
+private final class GatedDialogueModel: DialogueSpeechModel, @unchecked Sendable {
+    let sampleRate = 44_100
+    let nonverbalTags: [String] = []
+    private let started = AsyncStream<Void>.makeStream()
+    private let releaseGate = AsyncStream<Void>.makeStream()
+
+    func waitUntilStarted() async {
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+
+    func release() { releaseGate.continuation.finish() }
+
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] { [0] }
+
+    func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
+        started.continuation.yield()
+        for await _ in releaseGate.stream {}
+        return DialogueChunk(samples: [0], words: [])
+    }
+
+    func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
+        fatalError("unused")
+    }
+}
+
 final class TTSResidencyPolicyTests: XCTestCase {
     private let req = SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav")
 
@@ -118,5 +144,32 @@ final class TTSResidencyPolicyTests: XCTestCase {
         XCTAssertFalse(result.samples.isEmpty)
         let mainAfter = await main.loadedBackend()
         XCTAssertNil(mainAfter)
+    }
+
+    func testEvictionWaitsForInFlightDialogueBeforeDestroyingModel() async throws {
+        let provider = FakeProvider()
+        let dialogue = GatedDialogueModel()
+        provider.models[.dia2] = dialogue
+        let engine = GloamEngine(provider: provider)
+        let request = ProviderDialogueRequest(
+            DialogueRequest(turns: [DialogueTurn(speaker: 1, text: "hello")], voices: []),
+            script: ["[S1] hello"], prefixes: [])
+
+        let rendering = Task {
+            try await engine.synthesizeDialogue(backend: .dia2, request: request)
+        }
+        await dialogue.waitUntilStarted()
+
+        let eviction = Task { await engine.evictTTSWhenIdle() }
+        try await Task.sleep(for: .milliseconds(20))
+        let stillLoaded = await engine.loadedBackend()
+        XCTAssertEqual(stillLoaded, .dia2,
+                       "eviction must not destroy Dia2 while its Metal work is running")
+
+        dialogue.release()
+        _ = try await rendering.value
+        await eviction.value
+        let after = await engine.loadedBackend()
+        XCTAssertNil(after)
     }
 }

@@ -16,6 +16,8 @@ struct DialogueView: View {
     @State private var player = PreviewPlayer()
     @State private var exportDoc: DataDocument?
     @State private var voicePickerSpeaker: Int?
+    @State private var voiceSearch = ""
+    @FocusState private var voiceSearchFocused: Bool
     @AppStorage("dialogueInspectorVisible") private var inspectorVisible = true
 
     private var composer: DialogueComposer { model.dialogue }
@@ -191,6 +193,7 @@ struct DialogueView: View {
                 // the avatars collapse to bare monograms (same reason StudioView
                 // uses one).
                 Button {
+                    voiceSearch = ""
                     voicePickerSpeaker = voicePickerSpeaker == speaker ? nil : speaker
                 } label: {
                     HStack(spacing: 6) {
@@ -214,7 +217,12 @@ struct DialogueView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("dialogue-voice-picker-\(speaker)")
                 .popover(isPresented: .init(get: { voicePickerSpeaker == speaker },
-                                            set: { if !$0 { voicePickerSpeaker = nil } }),
+                                            set: {
+                                                if !$0 {
+                                                    voiceSearch = ""
+                                                    voicePickerSpeaker = nil
+                                                }
+                                            }),
                          arrowEdge: .bottom) {
                     voicePickerList(voices, speaker: speaker)
                 }
@@ -263,46 +271,76 @@ struct DialogueView: View {
 
     @ViewBuilder
     private func voicePickerList(_ voices: [VoiceMeta], speaker: Int) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                Button {
-                    composer.setVoice(nil, forSpeaker: speaker)
-                    voicePickerSpeaker = nil
-                } label: {
-                    Text("No voice (unconditioned)")
-                        .foregroundStyle(Brand.fgDim)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                ForEach(voices, id: \.slug) { voice in
+        let matchingVoices = filteredVoices(voices, query: voiceSearch)
+        VStack(spacing: 0) {
+            TextField("Search voices", text: $voiceSearch)
+                .textFieldStyle(.roundedBorder)
+                .focused($voiceSearchFocused)
+                .accessibilityIdentifier("dialogue-voice-search")
+                .padding(8)
+                .onAppear { voiceSearchFocused = true }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
                     Button {
-                        composer.setVoice(voice.slug, forSpeaker: speaker)
+                        composer.setVoice(nil, forSpeaker: speaker)
+                        voiceSearch = ""
                         voicePickerSpeaker = nil
                     } label: {
-                        HStack(spacing: 8) {
-                            VoiceAvatarView(slug: voice.slug, name: voice.name,
-                                            avatarURL: model.voices.avatarURL(voice.slug),
-                                            size: 22)
-                            Text(voice.name).foregroundStyle(Brand.fg)
-                            Spacer(minLength: 12)
-                            if composer.voices[speaker - 1] == voice.slug {
-                                Image(systemName: "checkmark")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Brand.accent)
-                            }
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                        Text("No voice (unconditioned)")
+                            .foregroundStyle(Brand.fgDim)
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    ForEach(matchingVoices, id: \.slug) { voice in
+                        Button {
+                            composer.setVoice(voice.slug, forSpeaker: speaker)
+                            voiceSearch = ""
+                            voicePickerSpeaker = nil
+                        } label: {
+                            HStack(spacing: 8) {
+                                VoiceAvatarView(slug: voice.slug, name: voice.name,
+                                                avatarURL: model.voices.avatarURL(voice.slug),
+                                                size: 22)
+                                Text(voice.name).foregroundStyle(Brand.fg)
+                                Spacer(minLength: 12)
+                                if composer.voices[speaker - 1] == voice.slug {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(Brand.accent)
+                                }
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if matchingVoices.isEmpty {
+                        Text("No voices match “\(voiceSearch)”")
+                            .font(.callout)
+                            .foregroundStyle(Brand.fgDim)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("dialogue-voice-search-empty")
+                    }
                 }
+                .padding(6)
             }
-            .padding(6)
         }
         .frame(width: 260, height: 320)
+    }
+
+    private func filteredVoices(_ voices: [VoiceMeta], query: String) -> [VoiceMeta] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return voices }
+        return voices.filter {
+            $0.name.localizedCaseInsensitiveContains(needle)
+                || $0.slug.localizedCaseInsensitiveContains(needle)
+        }
     }
 
     @ViewBuilder

@@ -48,8 +48,14 @@ final class ModelDownloadManager {
     init(root: URL, uiTest: Bool) {
         self.root = root
         self.uiTest = uiTest
-        Self.migrateLegacyQwenDir(root: root)
-        refresh()
+        // UI tests report every model ready and use in-memory fakes. Touching
+        // the real multi-GB model library here defeats that isolation and can
+        // stall the test app on a slow or unavailable volume before it has a
+        // process/window for XCTest to attach to.
+        if !uiTest {
+            Self.migrateLegacyQwenDir(root: root)
+            refresh()
+        }
     }
 
     /// The first model currently downloading (TTS first, then LLM), with its
@@ -108,6 +114,7 @@ final class ModelDownloadManager {
     }
 
     func refresh() {
+        guard !uiTest else { return }
         for backend in BackendID.allCases {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded

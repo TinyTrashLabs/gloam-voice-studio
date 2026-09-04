@@ -19,6 +19,9 @@ struct GloamVoiceStudioApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .task {
+                    appDelegate.shutdown = { await model.shutdownForExit() }
+                }
                 .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
                 // Explicit so controls match the icon whatever the user's
