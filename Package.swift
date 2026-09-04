@@ -36,9 +36,15 @@ let package = Package(
         // Bumped 2026-09-03 to the Dia2 parity fix (our #10): top-k sampling
         // now retains the complete candidate set, BOS fallback matches the
         // reference, and delayed codebooks are gathered from the right frame.
+        // Then to our #11, which is what makes prefix conditioning usable:
+        // local Dia2 directories load at all, the reference audio no longer
+        // bleeds into the opening, and Mimi stays warm across that boundary
+        // so the continuation does not start with a cold-start burst.
+        // NOTE: this is #11's branch head, not main. Repin to the merge
+        // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "0717c6d675dc28a3b393d7c4e18f0130612979c8"),
+            revision: "b980942dc3d3a4ab20b8da5a308e1b46feb00141"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
