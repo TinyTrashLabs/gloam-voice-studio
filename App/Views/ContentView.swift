@@ -204,18 +204,13 @@ struct ContentView: View {
         }
     }
 
-    // Models offered in the chooser, in priority order.
-    // Qwen3 (multilingual cloning) and turbo/Fish up top; regular chatterbox is
-    // demoted to last for historical reasons (it used to double the line —
-    // fixed 2026-07-02: CFG uncond-stream position embeddings, missing [SPACE]
-    // tokenization, and uninitialized S3Gen attention biases, all in the vendored
-    // mlx-audio-swift fork).
-    private var pickerBackends: [BackendID] {
-        // qwen3-design is intentionally absent — it's Creation-only, in the Voice
-        // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
-         .supertonic, .luxTTS, .pocketTTS]
-    }
+    // Models offered in the chooser, in `BackendID` declaration order. Never a
+    // curated list: a backend appears here because it declares `.studio` in
+    // `BackendID.surfaces`, so a newly added model can't go missing from the
+    // picker without someone deciding it should. (qwen3-design declares
+    // `.creation` instead — it lives in the Voice Foundry, and has its own row
+    // below.)
+    private var pickerBackends: [BackendID] { BackendID.on(.studio) }
 
     private func modelDisplayName(_ b: BackendID) -> String {
         switch b {
@@ -595,8 +590,7 @@ struct ContentView: View {
 struct ModelManagerView: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .luxTTS]
+    private let backends: [BackendID] = BackendID.on(.downloadable)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

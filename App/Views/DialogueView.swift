@@ -91,9 +91,11 @@ struct DialogueView: View {
                 }
                 Label("Loading Dia2 takes a while — minutes on a cold start.",
                       systemImage: "clock")
-                Label("Switching back to \(resident?.rawValue ?? "another engine") "
-                      + "later costs the same again.",
-                      systemImage: "arrow.uturn.left")
+                // Only meaningful when there IS something to switch back to.
+                if let resident {
+                    Label("Switching back to \(resident.rawValue) later costs the same again.",
+                          systemImage: "arrow.uturn.left")
+                }
             }
             .font(.callout)
             .foregroundStyle(Brand.fgDim)

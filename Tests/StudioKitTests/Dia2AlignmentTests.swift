@@ -38,15 +38,24 @@ final class Dia2AlignmentTests: XCTestCase {
         XCTAssertEqual(aligner.calls.value, 1, "second call must hit the cache")
     }
 
-    /// The cache lives in the pack's engine directory, so the pack now declares
-    /// dia2 support through the existing capability rule.
-    func testCachingMarksThePackAsDia2Capable() async throws {
+    /// Source audio is enough: callers build the alignment cache on demand, so
+    /// a pack with a reference clip supports dia2 before it has ever been
+    /// aligned — and still does afterwards.
+    func testSourceAudioIsEnoughForDia2BeforeAndAfterAligning() async throws {
         _ = try lib.save(name: "Ava", refWav: Data([1]), refText: "hi")
-        XCTAssertFalse(lib.capabilities("ava").supports(.dia2))
+        XCTAssertTrue(lib.capabilities("ava").supports(.dia2))
         _ = try await Dia2Alignment.resolve("ava", in: lib,
                                             using: CountingAligner(words: [
                                                 AlignedWord(w: "hi", start: 0, end: 0.3)]))
         XCTAssertTrue(lib.capabilities("ava").supports(.dia2))
+    }
+
+    /// ...but a pack with no clip still can't: there is nothing to align, so
+    /// dia2 would run unconditioned under this voice's name.
+    func testPackWithoutSourceAudioDoesNotSupportDia2() throws {
+        _ = try lib.save(name: "Bea", refWav: nil, refText: "",
+                         engines: ["supertonic": ["style.json": Data([1])]])
+        XCTAssertFalse(lib.capabilities("bea").supports(.dia2))
     }
 
     func testCorruptCacheRealignsRatherThanFailing() async throws {

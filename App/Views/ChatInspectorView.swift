@@ -83,14 +83,13 @@ struct ChatInspectorView: View {
 
     // MARK: voice engine
 
-    /// Every backend that can speak a chat reply unattended. Only qwen3-design
-    /// is excluded: it requires a typed Direction per line, so it can't render
-    /// replies automatically. Preset-voicepack backends (custom/kokoro/
-    /// supertonic) speak in their preset voice rather than the conversation's
-    /// cloned voice; the measured speed labels flag the slow ones (Fish).
-    static let chatVoiceBackends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro,
-         .chatterbox, .kokoro, .supertonic, .luxTTS, .pocketTTS]
+    /// Every backend declaring `.chatVoice` — those that can speak a reply
+    /// unattended. qwen3-design can't (it needs a typed Direction per line);
+    /// dia2 can't (a reply needs its prefix aligned first). Preset-voicepack
+    /// backends (custom/kokoro/supertonic) speak in their preset voice rather
+    /// than the conversation's cloned voice; the measured speed labels flag the
+    /// slow ones (Fish).
+    static let chatVoiceBackends: [BackendID] = BackendID.on(.chatVoice)
 
     private var voiceSection: some View {
         @Bindable var appModel = model

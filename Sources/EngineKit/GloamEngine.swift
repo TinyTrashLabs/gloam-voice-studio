@@ -367,7 +367,29 @@ public actor GloamEngine {
         let plan = try RequestPlanner.plan(backend: backend, request: request)
         let model = try await self.residentModel(for: backend)
         let start = Date()
-        let raw = try await model.synthesize(plan)
+        let raw: [Float]
+        if backend.surfaces.contains(.dialogue), let dialogue = model as? any DialogueSpeechModel {
+            // A two-speaker engine asked for one line still goes through the
+            // dialogue entry point, because that is the ONLY one that accepts a
+            // word-aligned prefix. `SpeechModel.synthesize` would run the pass
+            // unconditioned and hand back a stranger's voice under the selected
+            // voice's name — the exact failure the app refuses everywhere else.
+            let script = try DialoguePlanner.script(
+                for: DialogueRequest(turns: [DialogueTurn(speaker: 1, text: plan.text)],
+                                     voices: []),
+                knownTags: [])
+            let chunk = try await dialogue.synthesizeDialogue(ProviderDialogueRequest(
+                script: script,
+                prefixes: [request.dialoguePrefix],
+                // Temperature and topK come from the Studio bench's knobs. CFG
+                // scale does not: `Knobs.cfgScale` has no bench control (the
+                // Dialogue composer owns that slider), so the model default
+                // stands rather than a silently-zero override.
+                temperature: plan.temperature, topK: plan.topK))
+            raw = chunk.samples
+        } else {
+            raw = try await model.synthesize(plan)
+        }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
         // If the plan carries a native `speed` (LuxTTS: applied inside the

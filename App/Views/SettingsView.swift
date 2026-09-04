@@ -61,15 +61,18 @@ struct AboutSettings: View {
 struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro, .supertonic, .luxTTS, .pocketTTS]
+    /// Everything installable, in `BackendID` declaration order — derived, not
+    /// curated, so a new model shows up here the day it's added.
+    private let downloadable: [BackendID] = BackendID.on(.downloadable)
+    /// Studio speak-backends. A subset: qwen3-design is downloadable but not
+    /// selectable here.
+    private let generators: [BackendID] = BackendID.on(.studio)
 
     var body: some View {
         @Bindable var model = model
         Form {
             Picker("Generate with", selection: $model.backend) {
-                ForEach(backends, id: \.self) { backend in
+                ForEach(generators, id: \.self) { backend in
                     Text(model.hasSufficientRAM(for: backend)
                          ? backend.rawValue
                          : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))")
@@ -78,7 +81,7 @@ struct BackendsSettings: View {
                 }
             }
             Section("Downloads") {
-                ForEach(backends, id: \.self) { backend in
+                ForEach(downloadable, id: \.self) { backend in
                     backendRow(backend)
                 }
                 Toggle("Keep models loaded under memory pressure", isOn: $model.keepModelsResident)
@@ -438,12 +441,10 @@ struct ServerSettings: View {
         }
     }
 
-    /// Same curated order as `ModelSettings.backends`. qwen3-design is offered
-    /// deliberately even though the Studio picker redirects away from it — an
-    /// API caller that always sends `instruct` may want the design model.
-    private let serverModelChoices: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .luxTTS]
+    /// Backends declaring `.apiServer`. qwen3-design is among them deliberately
+    /// even though the Studio picker redirects away from it — an API caller that
+    /// always sends `instruct` may want the design model.
+    private let serverModelChoices: [BackendID] = BackendID.on(.apiServer)
 
     /// Voice library for the Default voice picker — re-reads on library
     /// mutations elsewhere in the app (bumps `voicesVersion`), same guard

@@ -1,16 +1,25 @@
 /// TTS backends, raw values identical to the Python engine's backend strings
 /// so .gvoice metadata and API payloads interoperate.
 public enum BackendID: String, CaseIterable, Sendable, Codable {
+    // Declaration order IS presentation order: every picker derives from
+    // `allCases.filter { $0.surfaces.contains(...) }` (see `surfaces`), so this
+    // list is the one place model ordering is decided. Raw values are the
+    // Python engine's backend strings and are what persists, so reordering here
+    // is safe for stored settings and .gvoice metadata.
     case qwen06B = "qwen3-0.6b"
     case qwen17B = "qwen3-1.7b"
     case qwenDesign = "qwen3-design"
     case qwenCustom = "qwen3-custom"
-    case chatterbox
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
+    // Demoted below turbo/Fish for historical reasons (it used to double the
+    // line — fixed 2026-07-02 in the vendored mlx-audio-swift fork: CFG
+    // uncond-stream position embeddings, missing [SPACE] tokenization, and
+    // uninitialized S3Gen attention biases).
+    case chatterbox
     case kokoro
-    case luxTTS = "lux-tts"
     case supertonic
+    case luxTTS = "lux-tts"
     case pocketTTS = "pocket-tts"
     case dia2
 
@@ -447,5 +456,67 @@ extension BackendID {
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 16_000_000_000)
         }
+    }
+}
+
+/// The places in the app a backend can show up. See `BackendID.surfaces`.
+public struct BackendSurfaces: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    /// The Studio engine chooser: the toolbar model popover and Settings →
+    /// Models "Generate with".
+    public static let studio = BackendSurfaces(rawValue: 1 << 0)
+    /// The Dialogue composer's two-speaker engine.
+    public static let dialogue = BackendSurfaces(rawValue: 1 << 1)
+    /// Voice Foundry (Create Voice) — loaded for creation without becoming the
+    /// Studio speak-backend.
+    public static let creation = BackendSurfaces(rawValue: 1 << 2)
+    /// Can speak a chat reply unattended (no per-line human input required).
+    public static let chatVoice = BackendSurfaces(rawValue: 1 << 3)
+    /// Offered as the HTTP API's "Default model".
+    public static let apiServer = BackendSurfaces(rawValue: 1 << 4)
+    /// Listed in Settings → Models with a Download button.
+    public static let downloadable = BackendSurfaces(rawValue: 1 << 5)
+}
+
+extension BackendID {
+    /// Where this backend appears in the UI.
+    ///
+    /// Deliberately a standalone exhaustive switch rather than a `BackendSpec`
+    /// field: a field needs a default, and a default is exactly what let `dia2`
+    /// ship invisible — downloadable nowhere, pickable nowhere, while the
+    /// Dialogue screen pointed at a Settings list it wasn't in. Adding a case to
+    /// `BackendID` now fails to compile until someone answers this question.
+    ///
+    /// Every picker derives from `BackendID.allCases.filter`, so declaration
+    /// order in the enum IS presentation order. Curated lists are gone.
+    public var surfaces: BackendSurfaces {
+        switch self {
+        case .qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox:
+            [.studio, .chatVoice, .apiServer, .downloadable]
+        case .qwenDesign:
+            // Creation-only: it needs a typed Direction per line, so it can
+            // neither be the Studio speak-backend nor answer chat unattended.
+            // Still offered to the API, where a caller always sends `instruct`.
+            [.creation, .apiServer, .downloadable]
+        case .luxTTS:
+            [.studio, .chatVoice, .apiServer, .downloadable]
+        case .kokoro, .supertonic, .pocketTTS:
+            // NOTE: absent from `.apiServer` only because the curated list this
+            // replaced never listed them — preserved verbatim rather than
+            // silently widened. Likely drift worth revisiting.
+            [.studio, .chatVoice, .downloadable]
+        case .dia2:
+            // Two voices in one pass. `.studio` speaks a single turn through the
+            // dialogue path (see Dia2SpeechModel.synthesize); not a chat voice —
+            // a reply needs its prefix aligned first, which is not unattended.
+            [.studio, .dialogue, .downloadable]
+        }
+    }
+
+    /// Backends appearing on `surface`, in declaration order.
+    public static func on(_ surface: BackendSurfaces) -> [BackendID] {
+        allCases.filter { $0.surfaces.contains(surface) }
     }
 }

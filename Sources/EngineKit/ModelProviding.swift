@@ -30,7 +30,7 @@ public extension SpeechModel {
     }
 }
 
-public struct DialoguePrefix: Sendable {
+public struct DialoguePrefix: Sendable, Equatable {
     public var samples: [Float]
     public var words: [AlignedWordTiming]
     public init(samples: [Float], words: [AlignedWordTiming]) {

@@ -1073,6 +1073,29 @@ final class AppModel {
             throw AppGenerationError(
                 message: "This backend needs a voice — pick or create one in the sidebar.")
         }
+        // Dia2 speaks from a word-aligned prefix, never from `refAudioPath` —
+        // and only the app can build one (it owns the transcriber). Alignment is
+        // cached per voice in the pack, so this is a one-off cost per voice, not
+        // per line.
+        //
+        // Failure throws rather than degrading. The script view can fall back to
+        // an unconditioned pass because each take carries a `note` saying whose
+        // voice is missing; a bench take has nowhere to put that, so an
+        // unconditioned pass here would be a stranger's voice filed under the
+        // selected voice's name — the same substitution the guard above refuses.
+        var dialoguePrefix: DialoguePrefix?
+        if backend.surfaces.contains(.dialogue), let slug = resolvedVoice {
+            do {
+                dialoguePrefix = try await self.dialoguePrefix(
+                    for: slug, aligner: await makeAligner(),
+                    rate: Double(backend.spec.defaultSampleRate))
+            } catch {
+                let name = (try? voices.meta(slug).name) ?? slug
+                throw AppGenerationError(
+                    message: "Couldn't align “\(name)” for \(backend.rawValue): "
+                        + "\(describeAny(error))")
+            }
+        }
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
             emotion: emotion, speed: speed,
@@ -1093,7 +1116,8 @@ final class AppModel {
             numStepsOverride: controls.knobs.numSteps != nil ? luxNumSteps : nil,
             guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
             tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
-            returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil)
+            returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil,
+            dialoguePrefix: dialoguePrefix)
         // Must precede queuing work on `engine` (see TTSResidencyPolicy's
         // deadlock-safety contract).
         await ttsResidency.willUse(engine)

@@ -127,14 +127,14 @@ public struct VoiceCapabilities: Sendable, Equatable {
     public func supports(_ backend: BackendID) -> Bool {
         guard backend != .qwenDesign else { return false }
         if engines.contains(backend.rawValue) { return true }
-        // Dia2 conditions on a word-aligned prefix, not on raw audio, so a
-        // reference clip alone is not enough: without the alignment cache in
-        // engines/dia2/ there is no prefix and generation would run
-        // unconditioned — a different voice, under this voice's name. That is
-        // the same silent substitution the preset work removed, so dia2 is
-        // deliberately excluded from the generic clone fallback below and must
-        // declare itself through the cache.
-        guard backend != .dia2 else { return false }
+        // Dia2 conditions on a word-aligned prefix, not on raw audio. It used
+        // to be excluded here, because a pack without the alignment cache in
+        // engines/dia2/ had no prefix and would generate unconditioned — a
+        // different voice under this voice's name. That exclusion is gone: the
+        // callers now BUILD the cache on demand from the source clip (see
+        // AppModel.dialoguePrefix / APIRouter.dialoguePrefixes), so source audio
+        // is genuinely sufficient. The clip still has to exist, which the
+        // generic clone rule below already requires.
         guard backend.controls.voiceClone != .none else { return false }
         return hasSource && (!backend.needsRefText || hasRefText)
     }

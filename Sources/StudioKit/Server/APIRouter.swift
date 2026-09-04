@@ -338,6 +338,21 @@ public enum APIRouter {
             }
             let knobEmotion = usedVariant ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
+            // Dia2 conditions on a word-aligned prefix, not on `refAudioPath`, so
+            // the single-voice route has to build one too — otherwise a request
+            // that named a voice would come back unconditioned, which is the
+            // "randomly invented speaker" this route refuses above.
+            let speechPrefix: DialoguePrefix? = try await {
+                guard backend.surfaces.contains(.dialogue), let slug = trimSlug else { return nil }
+                guard let prefix = try await dialoguePrefixes([slug], deps: deps).first ?? nil
+                else {
+                    logError("/v1/audio/speech: no dia2 prefix for voice '\(slug)'"
+                        + " — refusing to synthesize an unconditioned speaker")
+                    throw APIError(status: .badRequest,
+                                   detail: "voice '\(slug)' can't be aligned for dia2")
+                }
+                return prefix
+            }()
             do {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
@@ -360,7 +375,9 @@ public enum APIRouter {
                                     exaggerationCeiling: req.exaggeration_ceiling,
                                     instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
                                     styleURL: styleURL, language: req.language,
-                                    topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
+                                    topP: req.top_p, topK: req.top_k,
+                                    repetitionPenalty: req.repetition_penalty,
+                                    dialoguePrefix: speechPrefix))
                         }
                     }.value
                 } catch is RequestGate.Busy {
