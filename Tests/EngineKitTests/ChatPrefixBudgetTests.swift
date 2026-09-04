@@ -27,6 +27,20 @@ final class ChatPrefixBudgetTests: XCTestCase {
         XCTAssertEqual(prefix.words.first?.start ?? -1, 0, accuracy: 0.001)
     }
 
+    /// Starting halfway through the first retained word gives Dia2 audio that
+    /// contradicts its timing grid and weakens voice conditioning.
+    func testLongPrefixStartsAtAWholeWordBoundary() {
+        let sampleRate = 10
+        let samples = (0 ..< 40).map(Float.init)
+        let prefix = ChatPrefixBudget.trim(words(4), samples: samples,
+                                           sampleRate: sampleRate, maxSeconds: 1.6)
+
+        XCTAssertEqual(prefix.samples.first, 30,
+                       "the first PCM frame must match the retained word at 3 seconds")
+        XCTAssertEqual(prefix.words.first?.text, "w3")
+        XCTAssertEqual(prefix.words.first?.start ?? -1, 0, accuracy: 0.001)
+    }
+
     func testShortPrefixIsUnchanged() {
         let samples = [Float](repeating: 0.1, count: 24000 * 3)
         let prefix = ChatPrefixBudget.trim(words(3), samples: samples,

@@ -136,11 +136,16 @@ public enum ChatPrefixBudget {
         guard duration > maxSeconds, sampleRate > 0 else {
             return DialoguePrefix(samples: samples, words: words)
         }
-        let cutoff = duration - maxSeconds
+        let rawCutoff = duration - maxSeconds
+        // A prefix is a paired audio/timing grid. Cutting PCM in the middle of
+        // the first retained word while rebasing that word to zero makes the
+        // two disagree, which weakens conditioning and can create a rough
+        // handoff. Prefer the next complete word boundary when timings exist.
+        let cutoff = words.first(where: { $0.start >= rawCutoff })?.start ?? rawCutoff
         let firstSample = Int(cutoff * Double(sampleRate))
         let kept = Array(samples[min(firstSample, samples.count)...])
         let rebased = words
-            .filter { $0.end > cutoff }
+            .filter { $0.start >= cutoff }
             .map { AlignedWordTiming(text: $0.text,
                                      start: max(0, $0.start - cutoff),
                                      end: max(0, $0.end - cutoff)) }
