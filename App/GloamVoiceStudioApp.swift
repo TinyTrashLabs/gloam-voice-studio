@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct GloamVoiceStudioApp: App {
@@ -7,6 +8,12 @@ struct GloamVoiceStudioApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        // Force the running Dock icon from the bundled four-bar artwork. This
+        // makes local builds update immediately even when LaunchServices still
+        // has an older icon cached for the stable bundle identifier.
+        if let icon = Brand.appIcon {
+            NSApplication.shared.applicationIconImage = icon
+        }
         // In UI-test mode, reset persisted UI state so tests start from a clean
         // known state regardless of what previous runs left behind.
         if UITestMode.isActive {

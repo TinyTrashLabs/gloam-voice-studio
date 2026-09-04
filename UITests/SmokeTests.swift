@@ -506,11 +506,17 @@ final class SmokeTests: XCTestCase {
         app.launchArguments = ["--uitest"]
         app.launch()
 
-        // Dialogue is the fourth top-level section. Its model gate uses the
-        // fake provider in UI-test mode, so loading is immediate.
-        app.typeKey("4", modifierFlags: .command)
+        // Use the visible scope control instead of the menu shortcut: a newly
+        // launched macOS app is not guaranteed to own keyboard focus yet.
+        let dialogueSection = app.radioButtons["Dialogue"].firstMatch
+        XCTAssertTrue(dialogueSection.waitForExistence(timeout: 5))
+        dialogueSection.click()
+
+        // The model gate uses the fake provider in UI-test mode, so loading is
+        // immediate.
         let loadDia2 = app.buttons["dialogue-load-dia2"].firstMatch
-        XCTAssertTrue(loadDia2.waitForExistence(timeout: 5))
+        XCTAssertTrue(loadDia2.waitForExistence(timeout: 5),
+                      "Dia2 load gate should appear. debugDescription:\n\(app.debugDescription)")
         loadDia2.click()
 
         let picker = app.buttons["dialogue-voice-picker-1"].firstMatch
@@ -523,8 +529,9 @@ final class SmokeTests: XCTestCase {
         search.click()
         search.typeText("Aiden")
 
-        XCTAssertTrue(app.staticTexts["Aiden · Qwen"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Dylan · Qwen"].exists,
+        let aiden = app.buttons["dialogue-voice-option-qwen3-custom-aiden"].firstMatch
+        XCTAssertTrue(aiden.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["dialogue-voice-option-qwen3-custom-dylan"].exists,
                        "non-matching voices should be filtered out")
     }
 }

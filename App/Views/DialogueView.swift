@@ -129,7 +129,6 @@ struct DialogueView: View {
         .padding(28)
         .frame(maxWidth: 520, alignment: .leading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityIdentifier("dialogue-model-gate")
     }
 
     // MARK: - Composer
@@ -317,6 +316,7 @@ struct DialogueView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("dialogue-voice-option-\(voice.slug)")
                     }
                     if matchingVoices.isEmpty {
                         Text("No voices match “\(voiceSearch)”")
