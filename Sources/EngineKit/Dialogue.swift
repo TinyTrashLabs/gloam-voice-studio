@@ -120,18 +120,24 @@ public enum DialoguePlanner {
     ///   12.5 Hz, so a pass stops after ~1482 generated frames. (The limit
     ///   covers generation only — prefix frames are extra and cost nothing
     ///   against it.)
-    /// - **~95-100s** is where the text state machine breaks: the two
-    ///   speakers' identities merge (the measured speaker-similarity margin
-    ///   fell to 0.000) and the model starts repeating lines it already said.
-    /// - **~45s** is where quality leaves its plateau. Similarity to the
-    ///   reference measured 0.81 over 0-45s, 0.76 at 45-75s, 0.68 at 75-90s
-    ///   and 0.48 at 105-120s.
+    /// - **~95-100s** is where a single long pass was seen to break: the two
+    ///   speakers' identities merged (measured speaker-similarity margin fell
+    ///   to 0.000) and the model repeated lines it had already said. OBSERVED
+    ///   ONCE, on one 118s render. Not established as a general threshold.
+    /// - **~45s** is where similarity to the reference left its plateau in
+    ///   that same render (0.81 over 0-45s, 0.76 at 45-75s, 0.68 at 75-90s,
+    ///   0.48 at 105-120s).
     ///
-    /// So the budget is the quality ceiling, not the hard one: generating to
-    /// 118s technically succeeds and sounds progressively less like the voice
-    /// the user picked. Splitting costs a seam and nothing else, because each
-    /// pass re-conditions from the original reference audio and so resets the
-    /// drift completely.
+    /// UNVERIFIED: both figures were measured before two changes that affect
+    /// them directly -- the prefix scheduler fix (prefix words were being
+    /// dropped from the text stream, so conditioning was weaker than it should
+    /// have been) and the discovery that the takes were running at a
+    /// compressed pace. 45 is therefore a conservative placeholder, not a
+    /// derived value, and it wants re-measuring before it is trusted.
+    ///
+    /// The reasoning behind budgeting at all still holds: generating to 118s
+    /// technically succeeds, and splitting costs a seam, because each pass
+    /// re-conditions from the original reference audio.
     public static let sceneBudgetSeconds = 45.0
 
     /// A turn's duration, estimated from its word count. An estimate is enough:
