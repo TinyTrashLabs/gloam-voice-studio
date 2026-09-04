@@ -78,4 +78,60 @@ final class DialogueTests: XCTestCase {
         let request = DialogueRequest(turns: [], voices: [])
         XCTAssertThrowsError(try DialoguePlanner.script(for: request, knownTags: []))
     }
+
+    /// Dia2 has separate text/action and audio samplers. Collapsing them back
+    /// into one temperature/top-k pair would make the parity controls lie.
+    func testProviderControlsMapToIndependentDia2Samplers() {
+        let request = ProviderDialogueRequest(
+            script: ["[S1] Hello"], prefixes: [],
+            cfgScale: 6.5,
+            textTemperature: 0.45, textTopK: 31,
+            audioTemperature: 0.85, audioTopK: 67,
+            maxPadding: 5, keepPrefixAudio: true)
+
+        let config = Dia2RequestAdapter.config(request)
+
+        XCTAssertEqual(config.textTemperature, 0.45)
+        XCTAssertEqual(config.textTopK, 31)
+        XCTAssertEqual(config.audioTemperature, 0.85)
+        XCTAssertEqual(config.audioTopK, 67)
+        XCTAssertEqual(config.cfgScale, 6.5)
+        XCTAssertEqual(config.maxPadding, 5)
+    }
+
+    /// "Keep prefix" means actual prefix PCM and correctly shifted timings,
+    /// not the delayed tail leak that originally appeared before generation.
+    func testKeepingPrefixesPrependsBothVoicesAndShiftsGeneratedWords() {
+        let prefixes = [
+            DialoguePrefix(samples: [0.1, 0.2],
+                           words: [AlignedWordTiming(text: "one", start: 0, end: 0.5)]),
+            DialoguePrefix(samples: [0.3],
+                           words: [AlignedWordTiming(text: "two", start: 0, end: 0.25)]),
+        ]
+        let result = DialogueOutputAssembler.assemble(
+            generated: DialogueChunk(
+                samples: [0.9],
+                words: [AlignedWordTiming(text: "hello", start: 0.1, end: 0.2)]),
+            prefixes: prefixes, sampleRate: 2, keepPrefixAudio: true)
+
+        XCTAssertEqual(result.samples, [0.1, 0.2, 0.3, 0.9])
+        XCTAssertEqual(result.words, [
+            AlignedWordTiming(text: "one", start: 0, end: 0.5),
+            AlignedWordTiming(text: "two", start: 1, end: 1.25),
+            AlignedWordTiming(text: "hello", start: 1.6, end: 1.7),
+        ])
+    }
+
+    func testDiscardingPrefixesLeavesGeneratedOutputUntouched() {
+        let generated = DialogueChunk(
+            samples: [0.9],
+            words: [AlignedWordTiming(text: "hello", start: 0.1, end: 0.2)])
+        let result = DialogueOutputAssembler.assemble(
+            generated: generated,
+            prefixes: [DialoguePrefix(samples: [0.1], words: [])],
+            sampleRate: 2, keepPrefixAudio: false)
+
+        XCTAssertEqual(result.samples, generated.samples)
+        XCTAssertEqual(result.words, generated.words)
+    }
 }

@@ -199,32 +199,25 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
     var nonverbalTags: [String] { model.nonverbalTags }
 
     private func config(_ r: ProviderDialogueRequest) -> Dia2GenerationConfig {
-        var c = Dia2GenerationConfig()
-        if let t = r.temperature { c.audioTemperature = t }
-        if let k = r.topK { c.audioTopK = k }
-        if let s = r.cfgScale { c.cfgScale = s }
-        return c
+        Dia2RequestAdapter.config(r)
     }
 
     private func prefixes(_ r: ProviderDialogueRequest)
         -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
     {
-        func convert(_ p: DialoguePrefix?) -> Dia2PrefixInput? {
-            guard let p else { return nil }
-            return Dia2PrefixInput(
-                samples: p.samples,
-                words: p.words.map { Dia2Word(text: $0.text, start: $0.start, end: $0.end) })
-        }
-        return (convert(r.prefixes.first ?? nil),
-                convert(r.prefixes.count > 1 ? r.prefixes[1] : nil))
+        Dia2RequestAdapter.prefixes(r)
     }
 
     func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
         let (samples, words) = try await model.generateDialogue(
             script: request.script, prefixes: prefixes(request), config: config(request))
-        return DialogueChunk(
-            samples: samples,
-            words: words.map { AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1) })
+        return DialogueOutputAssembler.assemble(
+            generated: DialogueChunk(
+                samples: samples,
+                words: words.map { AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1) }),
+            prefixes: request.prefixes,
+            sampleRate: sampleRate,
+            keepPrefixAudio: request.keepPrefixAudio)
     }
 
     func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
@@ -237,6 +230,33 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
         let (samples, _) = try await model.generateDialogue(script: [request.text])
         return samples
     }
+}
+
+enum Dia2RequestAdapter {
+    static func config(_ r: ProviderDialogueRequest) -> Dia2GenerationConfig {
+        var c = Dia2GenerationConfig()
+        if let t = r.textTemperature { c.textTemperature = t }
+        if let k = r.textTopK { c.textTopK = k }
+        if let t = r.audioTemperature ?? r.temperature { c.audioTemperature = t }
+        if let k = r.audioTopK ?? r.topK { c.audioTopK = k }
+        if let s = r.cfgScale { c.cfgScale = s }
+        if let p = r.maxPadding { c.maxPadding = p }
+        return c
+    }
+
+    static func prefixes(_ r: ProviderDialogueRequest)
+        -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
+    {
+        func convert(_ p: DialoguePrefix?) -> Dia2PrefixInput? {
+            guard let p else { return nil }
+            return Dia2PrefixInput(
+                samples: p.samples,
+                words: p.words.map { Dia2Word(text: $0.text, start: $0.start, end: $0.end) })
+        }
+        return (convert(r.prefixes.first ?? nil),
+                convert(r.prefixes.count > 1 ? r.prefixes[1] : nil))
+    }
+
 }
 
 /// Bridges Dia2's actor session onto EngineKit's streaming protocol.
