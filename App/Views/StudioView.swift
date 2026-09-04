@@ -414,6 +414,10 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
+        case .dialogueTags:
+            // Delivery comes from the model's own inline (laughs)-style vocabulary.
+            // The chips that insert them arrive with Script mode; nothing to render yet.
+            EmptyView()
         case .textDriven, .none:
             EmptyView()
         }
@@ -598,6 +602,9 @@ struct StudioView: View {
         case .pocketTTS:
             "Clones a voice from a reference clip (first ~10s) — the prosody comes from that "
             + "clip. No free-text Direction and no delivery knobs; each take samples fresh."
+        case .dia2:
+            "Two-speaker dialogue in one pass, English only. Delivery comes from inline "
+            + "(laughs)-style tags; an optional reference clip conditions the voice."
         }
     }
 

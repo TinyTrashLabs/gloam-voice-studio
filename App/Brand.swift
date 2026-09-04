@@ -44,59 +44,42 @@ enum Brand {
             endPoint: .bottomTrailing
         )
     }
+
+    /// One source of truth for the artwork shown by macOS and inside the app.
+    /// Loading the bundle resource directly also avoids a stale LaunchServices
+    /// icon being reflected back through `NSApplication.applicationIconImage`.
+    static var appIcon: NSImage? {
+        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }
 }
 
 // MARK: - BrandMark
 
-/// The app icon's five glowing bars, drawn live so it stays crisp at any size
-/// and picks up Brand's colours rather than a baked PNG's.
+/// The exact four-bar app artwork, shared with the Dock icon so the lockup can
+/// never drift to a hand-drawn approximation of the current logo.
 struct BrandMark: View {
     var size: CGFloat = 32
 
     var body: some View {
-        Canvas { ctx, _ in
-            let scale = size / 32
-            // Bars in a 32-grid: x centre and height, all standing on one
-            // baseline at y = 26 like the icon.
-            let bars: [(x: Double, h: Double)] = [
-                (5.5, 9), (11, 15), (16.5, 21), (22, 14), (27.5, 8),
-            ]
-            let baseline = 26.0 * scale
-            let barW = 3.6 * scale
-
-            // Baseline glow: a soft cyan lit strip the bars stand on.
-            let glowRect = CGRect(x: 1 * scale, y: baseline - 0.6 * scale,
-                                  width: 30 * scale, height: 1.2 * scale)
-            var glow = ctx
-            glow.addFilter(.blur(radius: 1.2 * scale))
-            glow.fill(Path(roundedRect: glowRect, cornerRadius: 0.6 * scale),
-                      with: .color(Brand.accent.opacity(0.9)))
-
-            for bar in bars {
-                let barRect = CGRect(
-                    x: (bar.x * scale) - barW / 2,
-                    y: baseline - bar.h * scale,
-                    width: barW,
-                    height: bar.h * scale)
-                let barPath = Path(roundedRect: barRect, cornerRadius: barW / 2)
-                let fill = GraphicsContext.Shading.linearGradient(
-                    Gradient(stops: [
-                        .init(color: Brand.ember,  location: 0.0),
-                        .init(color: Brand.peak,   location: 0.18),
-                        .init(color: Brand.violet, location: 0.58),
-                        .init(color: Brand.accent, location: 1.0),
-                    ]),
-                    startPoint: CGPoint(x: barRect.midX, y: barRect.minY),
-                    endPoint: CGPoint(x: barRect.midX, y: barRect.maxY))
-                // Halo first, then the solid pill on top.
-                var halo = ctx
-                halo.addFilter(.blur(radius: 1.6 * scale))
-                halo.opacity = 0.55
-                halo.fill(barPath, with: fill)
-                ctx.fill(barPath, with: fill)
+        Group {
+            if let icon = Brand.appIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "waveform")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Brand.gradient)
+                    .padding(size * 0.18)
             }
         }
         .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 

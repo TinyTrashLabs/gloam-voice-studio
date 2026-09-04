@@ -127,6 +127,14 @@ public struct VoiceCapabilities: Sendable, Equatable {
     public func supports(_ backend: BackendID) -> Bool {
         guard backend != .qwenDesign else { return false }
         if engines.contains(backend.rawValue) { return true }
+        // Dia2 conditions on a word-aligned prefix, not on raw audio, so a
+        // reference clip alone is not enough: without the alignment cache in
+        // engines/dia2/ there is no prefix and generation would run
+        // unconditioned — a different voice, under this voice's name. That is
+        // the same silent substitution the preset work removed, so dia2 is
+        // deliberately excluded from the generic clone fallback below and must
+        // declare itself through the cache.
+        guard backend != .dia2 else { return false }
         guard backend.controls.voiceClone != .none else { return false }
         return hasSource && (!backend.needsRefText || hasRefText)
     }

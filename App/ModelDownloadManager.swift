@@ -48,8 +48,14 @@ final class ModelDownloadManager {
     init(root: URL, uiTest: Bool) {
         self.root = root
         self.uiTest = uiTest
-        Self.migrateLegacyQwenDir(root: root)
-        refresh()
+        // UI tests report every model ready and use in-memory fakes. Touching
+        // the real multi-GB model library here defeats that isolation and can
+        // stall the test app on a slow or unavailable volume before it has a
+        // process/window for XCTest to attach to.
+        if !uiTest {
+            Self.migrateLegacyQwenDir(root: root)
+            refresh()
+        }
     }
 
     /// The first model currently downloading (TTS first, then LLM), with its
@@ -86,7 +92,14 @@ final class ModelDownloadManager {
     }
 
     func directory(for backend: BackendID) -> URL {
-        root.appendingPathComponent(backend.diskFolder(quantRaw: quant(for: backend).rawValue))
+        // Only Qwen folders are quant-suffixed from `quant(for:)`. dia2 encodes
+        // size with its precision and supplies its own default, and handing it
+        // a bare "8bit" pointed this at `dia2@8bit` while AppModel's loader
+        // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
+        // reported the model ready somewhere the loader never looked, and the
+        // load fell through to the HF repo id and failed with a 401.
+        let quantRaw = backend.isQwen ? quant(for: backend).rawValue : nil
+        return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 
     /// The retired `.qwen3` backend (0.6B-Base-8bit) downloaded to `Models/qwen3`.
@@ -101,6 +114,7 @@ final class ModelDownloadManager {
     }
 
     func refresh() {
+        guard !uiTest else { return }
         for backend in BackendID.allCases {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
@@ -119,11 +133,41 @@ final class ModelDownloadManager {
     /// confusing `modelNotInitialized`. Require weights so the UI honestly
     /// offers a (re)download instead.
     private func isComplete(dir: URL) -> Bool {
-        guard FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("config.json").path) else { return false }
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil)) ?? []
-        return contents.contains { $0.pathExtension == "safetensors" }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
+            return false
+        }
+
+        // Hugging Face checkpoints are either one canonical weight file or a
+        // sharded set named by model.safetensors.index.json. Avoid enumerating
+        // multi-GB model directories here: directory enumeration can block in
+        // FileProvider/CoreServices even while direct file lookups are healthy,
+        // which used to freeze the app before its first window appeared.
+        if fm.fileExists(atPath: dir.appendingPathComponent("model.safetensors").path) {
+            return true
+        }
+
+        // The remaining supported layouts use fixed filenames. Checking these
+        // directly is equivalent to the old "any safetensors exists" rule but
+        // does not open the directory stream.
+        for name in [
+            "kokoro-v1_0.safetensors",
+            "lux_model.safetensors",
+            "duration_predictor.safetensors",
+        ] where fm.fileExists(atPath: dir.appendingPathComponent(name).path) {
+            return true
+        }
+
+        // Sharded HF checkpoints use model-00001-of-000NN.safetensors. All
+        // models supported here are comfortably below 64 shards; requiring the
+        // first shard retains the previous interrupted-download protection.
+        for count in 2...64 {
+            let name = String(format: "model-%05d-of-%05d.safetensors", 1, count)
+            if fm.fileExists(atPath: dir.appendingPathComponent(name).path) {
+                return true
+            }
+        }
+        return false
     }
     private func isComplete(_ backend: BackendID) -> Bool {
         // Pocket isn't an HF snapshot (no config.json/safetensors) — its own

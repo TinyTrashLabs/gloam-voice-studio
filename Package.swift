@@ -28,9 +28,28 @@ let package = Package(
         // Bumped 2026-08-25 to the custom-style-path merge (our #7): supertonic
         // accepts an absolute {style_ttl, style_dp} .json path as `voice`, so
         // .gvoice packs' baked supertonic renditions actually drive synthesis.
+        // Bumped 2026-09-02 to the Dia2 merge (our #8): Nari Labs' streaming
+        // two-speaker dialogue model (model_type "dia2"), English only, Mimi
+        // codec at 24 kHz, with prefix conditioning driven by word timings.
+        // Includes our #9: the 8-bit tier — the one this app downloads by
+        // default — did not load at all before it.
+        // Bumped 2026-09-03 to the Dia2 parity fix (our #10): top-k sampling
+        // now retains the complete candidate set, BOS fallback matches the
+        // reference, and delayed codebooks are gathered from the right frame.
+        // Then to our #11, which is what makes prefix conditioning work at
+        // all: local Dia2 directories load, the reference audio no longer
+        // bleeds into the opening, Mimi stays warm across that boundary, and
+        // -- the one that mattered -- the forced new-word schedule is derived
+        // from the same clamped word start the entry is built from. Without
+        // that clamp a fifth of a prefix's words were dropped from the text
+        // stream while their audio was still being teacher-forced, so a
+        // speaker never bound firmly to its voice: an 8s male reference came
+        // back at 200 Hz, or as the other speaker outright.
+        // NOTE: this is #11's branch head, not main. Repin to the merge
+        // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "a987e6a517bcf29f474692967919df6c289c551d"),
+            revision: "d84bcca8f74d0db24cc8ecb542c4cbb6c54a8d6c"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -150,6 +169,9 @@ let package = Package(
             name: "StudioKit",
             dependencies: [
                 "EngineKit",
+                // Dia2 needs word timings for a conditioning clip, and the
+                // transcriber that produces them lives in SpeechKit.
+                "SpeechKit",
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],

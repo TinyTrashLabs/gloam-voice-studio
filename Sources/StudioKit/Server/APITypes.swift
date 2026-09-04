@@ -190,6 +190,11 @@ public struct APIDependencies: Sendable {
     /// server-triggered synthesis must honor the same invariant as in-app
     /// renders. Defaults to a no-op.
     public let prepareTTS: @Sendable () async -> Void
+    /// Builds the word aligner Dia2 prefixes need. A closure because the real
+    /// one owns a transcriber the app makes on demand; defaults to one that
+    /// finds no timings, which the dialogue route reads as "no prefix" and
+    /// generates unconditioned rather than failing.
+    public let makeAligner: @Sendable () async -> any WordAligning
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
@@ -202,7 +207,9 @@ public struct APIDependencies: Sendable {
                     = { _, _ in throw STTUnavailable() },
                 listen: @escaping @Sendable (Double, Double, String?) async throws -> String
                     = { _, _, _ in throw STTUnavailable() },
-                prepareTTS: @escaping @Sendable () async -> Void = {}) {
+                prepareTTS: @escaping @Sendable () async -> Void = {},
+                makeAligner: @escaping @Sendable () async -> any WordAligning
+                    = { UntimedWordAligner() }) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
@@ -215,7 +222,42 @@ public struct APIDependencies: Sendable {
         self.transcribe = transcribe
         self.listen = listen
         self.prepareTTS = prepareTTS
+        self.makeAligner = makeAligner
     }
+}
+
+/// Stand-in aligner for a server with no transcriber wired up. It reports no
+/// timings, and a prefix with no timings is no prefix at all — Dia2 then
+/// generates unconditioned, which varies the voice but still answers.
+public struct UntimedWordAligner: WordAligning {
+    public init() {}
+    public func align(audioURL: URL, transcript: String?) async throws -> [AlignedWord] { [] }
+}
+
+/// `POST /v1/audio/dialogue`.
+public struct DialogueBody: Codable, Sendable {
+    public struct Turn: Codable, Sendable {
+        public var speaker: Int
+        public var text: String
+    }
+    public var turns: [Turn]
+    /// Voice slug per speaker index; a null or a missing entry conditions
+    /// nothing for that speaker.
+    public var voices: [String?]?
+    public var stream: Bool?
+    /// Legacy aliases for the audio sampler, kept for clients written before
+    /// the split. The explicit `audio_*` fields below win when both are sent.
+    public var temperature: Float?
+    public var top_k: Int?
+    public var cfg_scale: Float?
+    /// Dia2 samples the text/action state machine separately from the audio
+    /// codebooks, so the two halves take their own settings.
+    public var text_temperature: Float?
+    public var text_top_k: Int?
+    public var audio_temperature: Float?
+    public var audio_top_k: Int?
+    public var max_padding: Int?
+    public var keep_prefix_audio: Bool?
 }
 
 // Make VoiceMeta ResponseEncodable so handlers can return it directly.

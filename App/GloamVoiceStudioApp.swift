@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct GloamVoiceStudioApp: App {
@@ -7,6 +8,12 @@ struct GloamVoiceStudioApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        // Force the running Dock icon from the bundled four-bar artwork. This
+        // makes local builds update immediately even when LaunchServices still
+        // has an older icon cached for the stable bundle identifier.
+        if let icon = Brand.appIcon {
+            NSApplication.shared.applicationIconImage = icon
+        }
         // In UI-test mode, reset persisted UI state so tests start from a clean
         // known state regardless of what previous runs left behind.
         if UITestMode.isActive {
@@ -19,6 +26,9 @@ struct GloamVoiceStudioApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .task {
+                    appDelegate.shutdown = { await model.shutdownForExit() }
+                }
                 .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
                 // Explicit so controls match the icon whatever the user's
@@ -75,7 +85,7 @@ struct GloamVoiceStudioApp: App {
     }
 }
 
-/// View-menu items for the three main sections (⌘1/⌘2/⌘3). Writes the same
+/// View-menu items for the main sections (⌘1/⌘2/⌘3/⌘4). Writes the same
 /// AppStorage key the toolbar picker reads, so the two stay in lockstep.
 private struct SectionMenuButtons: View {
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
@@ -86,6 +96,8 @@ private struct SectionMenuButtons: View {
             .keyboardShortcut("2", modifiers: .command)
         Button("Chat") { sectionRaw = StudioSection.chat.rawValue }
             .keyboardShortcut("3", modifiers: .command)
+        Button("Dialogue") { sectionRaw = StudioSection.dialogue.rawValue }
+            .keyboardShortcut("4", modifiers: .command)
     }
 }
 

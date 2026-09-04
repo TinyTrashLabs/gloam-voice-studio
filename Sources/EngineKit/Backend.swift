@@ -12,6 +12,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case luxTTS = "lux-tts"
     case supertonic
     case pocketTTS = "pocket-tts"
+    case dia2
 
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
@@ -69,9 +70,16 @@ extension BackendID {
         return spec.modelRepo
     }
 
-    /// On-disk folder name. Qwen embeds the quant so precisions coexist.
+    /// On-disk folder name. Qwen embeds the quant so precisions coexist; Dia2
+    /// embeds both size and quant (e.g. "dia2@2b-8bit") since it ships two sizes.
+    /// dia2's folder encodes size as well as precision (`dia2@2b-8bit`), so a
+    /// bare Qwen quant like "8bit" is not a valid value for it — callers pass
+    /// nil and take the default. See `ModelDownloadManager.directory(for:)`.
     public func diskFolder(quantRaw: String?) -> String {
-        isQwen ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)" : rawValue
+        switch self {
+        case .dia2: "dia2@\(quantRaw ?? "2b-8bit")"
+        default: isQwen ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)" : rawValue
+        }
     }
 }
 
@@ -142,18 +150,51 @@ public struct Knobs: Sendable, Equatable {
     /// slightly noisier 48k path; `false` = the smoother 24k-resampled path. Not
     /// a range — nil hides the toggle, same as every other knob here.
     public var returnSmooth: Bool?
+    /// Dia2: classifier-free guidance scale. Higher tracks the text more closely at
+    /// the cost of naturalness.
+    public var cfgScale: ClosedRange<Float>?
 
     public init(temperature: ClosedRange<Float>? = nil, topP: ClosedRange<Float>? = nil,
                 topK: ClosedRange<Int>? = nil, repetitionPenalty: ClosedRange<Float>? = nil,
                 exaggeration: ClosedRange<Float>? = nil, cfgWeight: ClosedRange<Float>? = nil,
                 numSteps: ClosedRange<Int>? = nil, guidanceScale: ClosedRange<Float>? = nil,
                 tShift: ClosedRange<Float>? = nil, speed: ClosedRange<Float>? = nil,
-                returnSmooth: Bool? = nil) {
+                returnSmooth: Bool? = nil, cfgScale: ClosedRange<Float>? = nil) {
         self.temperature = temperature; self.topP = topP; self.topK = topK
         self.repetitionPenalty = repetitionPenalty; self.exaggeration = exaggeration
         self.cfgWeight = cfgWeight
         self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.speed = speed; self.returnSmooth = returnSmooth
+        self.cfgScale = cfgScale
+    }
+}
+
+/// Dia2 ships in two sizes rather than one model at several quants, so the
+/// disk folder and repo carry both.
+public enum Dia2Size: String, Sendable, CaseIterable, Codable {
+    case b2 = "2b"
+    case b1 = "1b"
+
+    public var displayName: String {
+        switch self {
+        case .b2: "2B — best quality"
+        case .b1: "1B — lighter, faster"
+        }
+    }
+
+    /// 2B fp32 is 7.7GB; bf16 halves that and 8-bit halves it again. These are
+    /// the floors below which the model and a chat LLM stop coexisting.
+    public var minRAMBytes: Int64 {
+        switch self {
+        case .b2: 16_000_000_000
+        case .b1: 8_000_000_000
+        }
+    }
+}
+
+public extension BackendID {
+    static func dia2Repo(size: Dia2Size, quant: QwenQuant?) -> String {
+        "tinytrashlabs/dia2-\(size.rawValue)-mlx-\((quant ?? .q8).rawValue)"
     }
 }
 
@@ -180,6 +221,9 @@ public enum EmotionMechanism: Sendable, Equatable {
     /// No emotion control at all — a fixed preset-voicepack model (Kokoro) with no
     /// clone, no knob, and no acted-variant convention to fall back on.
     case none
+    /// Delivery is steered by inline `(laughs)`-style tags drawn from the model's
+    /// own vocabulary; the app offers them as chips rather than free text.
+    case dialogueTags
 }
 
 /// Data-driven description of a backend's Direct-pane controls. The UI renders
@@ -255,6 +299,15 @@ extension BackendID {
             // guidance are fixed inside the runtime.
             ControlSurface(voiceClone: .required, instruct: .none,
                            language: false, knobs: Knobs())
+        case .dia2:
+            ControlSurface(
+                voiceClone: .optional,      // unconditioned works; voices then vary
+                presetSpeakers: [],
+                instruct: .none,            // delivery comes from inline tags
+                language: false,            // English only
+                knobs: Knobs(temperature: 0.1 ... 1.5,
+                             topK: 1 ... 200,
+                             cfgScale: 1.0 ... 8.0))
         }
     }
 }
@@ -273,6 +326,7 @@ extension BackendID {
     public var needsRefText: Bool {
         switch self {
         case .qwen06B, .qwen17B, .luxTTS: true
+        case .dia2: false   // optional reference clip is prefix conditioning, not a transcript pair
         default: false
         }
     }
@@ -291,6 +345,7 @@ extension BackendID {
         case .luxTTS: .variantClipOnly               // prosody comes entirely from the ref clip
         case .supertonic: .none                      // no emotion knob, no clone (Slice 1)
         case .pocketTTS: .variantClipOnly            // prosody comes entirely from the ref clip
+        case .dia2: .dialogueTags
         }
     }
 }
@@ -383,6 +438,14 @@ extension BackendID {
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 2_000_000_000)
+        case .dia2:
+            // Apache 2.0, English only, two speakers. Tags are the emotion
+            // control, so honorsTags is true. RAM floor is the 2B default;
+            // choosing 1B relaxes it via Dia2Size.minRAMBytes.
+            BackendSpec(modelRepo: "tinytrashlabs/dia2-2b-mlx-8bit",
+                        defaultSampleRate: 24000, honorsTags: true,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 16_000_000_000)
         }
     }
 }

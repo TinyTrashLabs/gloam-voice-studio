@@ -12,6 +12,7 @@ Gloam Voice Studio is a SwiftUI macOS app that clones voices using optimized ML 
 - **Chatterbox-Turbo** — Higher quality, RTF ~1–2×
 - **Fish S2-Pro** — Premium quality, research/personal use license
 - **Qwen3-TTS** — A multilingual family: clone a voice (`qwen3-0.6b` / `qwen3-1.7b`), invent one from a natural-language description (`qwen3-design`), or direct a preset speaker with natural-language instructions (`qwen3-custom`). See [`docs/gloam-fm-qwen-controls-handoff.md`](docs/gloam-fm-qwen-controls-handoff.md) for the API control surface.
+- **Dia2** — Two speakers in one streaming pass: a whole exchange with real turn-taking, overlaps and nonverbal tags like `(laughs)`, rather than two single-voice takes stitched together. English only, 24 kHz, Apache-2.0. Defaults to the 2B tier with a lighter 1B tier for smaller machines. Reachable over the [HTTP API](docs/api.md) as well as Script mode and Chat.
 
 Chatterbox and Chatterbox-Turbo use MIT-licensed weights. Fish S2-Pro weights are under the Fish Audio Research License; the app downloads them from HuggingFace under your own acceptance of the license terms.
 
@@ -132,6 +133,7 @@ Model weights are licensed separately:
 - **Qwen3-TTS:** [Apache-2.0](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) (commercial use permitted)
 - **Fish S2-Pro:** [Fish Audio Research License](https://huggingface.co/fishaudio/fish-speech-1.5) (personal/research use; commercial use requires a license from business@fish.audio)
 - **Kokoro:** [Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M) (commercial use permitted)
+- **Dia2:** [Apache-2.0](https://huggingface.co/nari-labs/Dia2) (commercial use permitted)
 - **SuperTonic:** [BigScience Open RAIL-M](https://huggingface.co/Supertone/supertonic-3) — permissive on IP, but carries use-based restrictions (no impersonation/deepfakes without consent, no harassment or disinformation, and more); the app requires an explicit in-app acknowledgement before downloading. See [`docs/supertonic-licensing.md`](docs/supertonic-licensing.md).
 - **pocket-tts (Kyutai Pocket TTS):** weights are CC-BY-4.0; the bundled sherpa-onnx runtime library that runs them (`App/Vendor/sherpa-onnx/`) is Apache-2.0 and ships inside the app bundle — see [`App/Vendor/sherpa-onnx/README.md`](App/Vendor/sherpa-onnx/README.md).
 - **LuxTTS:** not currently downloadable in-app (requires pre-converted local weights).

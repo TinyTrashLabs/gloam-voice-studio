@@ -15,12 +15,23 @@ struct ScriptView: View {
                 Button("Add Line") { script.addLine() }
                     .accessibilityIdentifier("add-line")
                     .help("Add a new script line")
-                Button(script.isBatchRunning ? "Generating…" : "Generate All") {
-                    Task { await script.generateAll() }
+                Button("Add Pause") { script.addPause() }
+                    .accessibilityIdentifier("add-pause")
+                    .help("Add a beat of silence between lines")
+                Button(script.isBatchRunning ? "Generating…" : generateAllTitle) {
+                    Task {
+                        if model.backend == .dia2 {
+                            await model.generateDialogueScenes()
+                        } else {
+                            await script.generateAll()
+                        }
+                    }
                 }
                 .disabled(script.isBatchRunning)
                 .accessibilityIdentifier("generate-all")
-                .help("Generate all lines in the script")
+                .help(model.backend == .dia2
+                      ? "Generate every scene as a two-voice pass"
+                      : "Generate all lines in the script")
                 if script.isBatchRunning { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Export…") { exportSheet = true }
@@ -28,6 +39,7 @@ struct ScriptView: View {
                     .accessibilityIdentifier("script-export")
                     .help("Export all lines as a stitched WAV")
             }
+            sceneBanner
             List {
                 ForEach(script.session.lines) { line in
                     LineRow(line: line, playingTake: Binding(get: { player.playingID }, set: { _ in }), play: { id in
@@ -43,6 +55,26 @@ struct ScriptView: View {
         .sheet(isPresented: $exportSheet) { ScriptExportSheet() }
     }
 
+    private var generateAllTitle: String {
+        model.backend == .dia2 ? "Generate Scenes" : "Generate All"
+    }
+
+    /// Dia2 speaks two voices per pass, so a three-person script is split. Say
+    /// so before the button is pressed rather than explaining it afterwards.
+    @ViewBuilder private var sceneBanner: some View {
+        if model.backend == .dia2 {
+            let report = model.script.sceneReport
+            if report.sceneCount > 1 {
+                let numbers = report.splitAfterLines.map { String($0 + 1) }
+                Text("This script needs \(report.sceneCount) passes — Dia2 speaks two "
+                     + "voices at a time. New scenes start after line "
+                     + numbers.joined(separator: ", ") + ".")
+                    .font(.caption)
+                    .foregroundStyle(Brand.fgDim)
+                    .accessibilityIdentifier("dialogue-scene-report")
+            }
+        }
+    }
 }
 
 private struct LineRow: View {
@@ -53,8 +85,40 @@ private struct LineRow: View {
     @State private var expanded = false
 
     var body: some View {
+        if let seconds = line.pauseSeconds {
+            pauseRow(seconds)
+        } else {
+            speechRow
+        }
+    }
+
+    private func pauseRow(_ seconds: Double) -> some View {
         let script = model.script
-        VStack(alignment: .leading, spacing: 6) {
+        return HStack(spacing: 8) {
+            Image(systemName: "pause.circle")
+                .foregroundStyle(Brand.fgDim)
+                .accessibilityHidden(true)
+            Text("Pause").foregroundStyle(Brand.fgDim)
+            Stepper(String(format: "%.1fs", seconds),
+                    value: Binding(
+                        get: { seconds },
+                        set: { v in script.update(line.id) { $0.kind = .pause(seconds: v) } }),
+                    in: 0.1...10, step: 0.1)
+                .frame(maxWidth: 160)
+                .accessibilityIdentifier("pause-seconds")
+            Spacer()
+            Button(role: .destructive) { script.removeLine(line.id) } label: {
+                Image(systemName: "trash")
+            }
+            .help("Delete this pause")
+            .accessibilityLabel("Delete Line")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var speechRow: some View {
+        let script = model.script
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
                 Button { expanded.toggle() } label: {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
