@@ -523,9 +523,9 @@ struct DialogueView: View {
                 Divider().overlay(Color.white.opacity(0.06))
                 Text("A pass is capped at "
                      + String(format: "%.0f", DialoguePlanner.sceneBudgetSeconds)
-                     + " seconds. Dia2 can generate to about two minutes, but the two "
-                     + "speakers start merging around 95s and the voices stop matching their "
-                     + "references well before that.")
+                     + " seconds. Dia2 stops generating at about two minutes. In one long "
+                     + "test the two speakers began merging near the end, so the cap is "
+                     + "deliberately conservative — it has not been tuned.")
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
             }

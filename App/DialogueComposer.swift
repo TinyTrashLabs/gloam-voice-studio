@@ -38,15 +38,25 @@ final class DialogueComposer {
 
     // MARK: controls
     //
-    // Defaults are the checkpoint's own, except CFG: 6 is what the measured
-    // renders held their voice at. Below ~4 the take drifts off the reference;
-    // above ~8 it clips and shouts.
+    // These are the reference implementation's own defaults -- text 0.6/50,
+    // audio 0.8/50, max padding 6 -- and a Swift render at them matched a
+    // Python render word for word (101 words, 34.7s vs 34.4s) on the same
+    // script and prefixes. Diverging from them needs a reason and a listen.
+    //
+    // CFG is the one deliberate exception. The reference defaults to 2.0, but
+    // with two prefixed speakers 2.0 produced a 17-second silence and then
+    // repeated itself, and 3.0 collapsed into babble 30 seconds in. 6 held.
+    // Each of those is a single observation, so treat the number as "6 works,
+    // low values were seen to fail", not as a tuned optimum.
     var cfgScale: Float = 6
-    var textTemperature: Float = 0.8
-    var textTopK: Int = 40
-    var audioTemperature: Float = 0.9
+    var textTemperature: Float = 0.6
+    var textTopK: Int = 50
+    var audioTemperature: Float = 0.8
     var audioTopK: Int = 50
-    var maxPadding: Int = 4
+    /// 6 is the reference's `StateMachine.max_padding`, not the checkpoint's
+    /// `max_pad` of 8. Raising it to 8 stretched the same pass from 35s to 57s
+    /// with 2-5s holes between turns; lowering it presses the delivery on.
+    var maxPadding: Int = 6
     /// Debug aid: prepends the conditioning clips to the take so you can hear
     /// exactly what the model was given. Never right for a shipped take.
     var keepPrefixAudio = false
