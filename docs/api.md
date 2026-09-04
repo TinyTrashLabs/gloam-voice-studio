@@ -63,7 +63,12 @@ curl -s http://127.0.0.1:8790/v1/audio/dialogue \
 | `turns` | array, required | `{"speaker": 1\|2, "text": "…"}` in order. Dia2 speaks exactly two speakers |
 | `voices` | array of string\|null | Voice slug per speaker index. Omit, or send `null`, to generate unconditioned — the voice then varies between requests |
 | `stream` | bool | Stream the WAV as it generates (open-ended header, then PCM frames) instead of buffering the whole take |
-| `temperature`, `top_k`, `cfg_scale` | number | Sampler overrides |
+| `cfg_scale` | number | Classifier-free guidance. 6 is the Dia2 default; lower drifts off the reference, higher gets clipped and shouty |
+| `text_temperature`, `text_top_k` | number | Sampler over the text/action state machine — what gets said, and when the speaker changes |
+| `audio_temperature`, `audio_top_k` | number | Sampler over the audio codebooks — how it is said |
+| `temperature`, `top_k` | number | Legacy aliases for `audio_temperature` / `audio_top_k`; the explicit fields win when both are sent |
+| `max_padding` | int | Frames of silence the model may pad a turn with before moving on |
+| `keep_prefix_audio` | bool | Return the conditioning clips ahead of the take. For hearing what the model was given while debugging — not for anything you ship |
 
 Errors are 400s: a speaker other than 1 or 2, an empty script, a `(tag)` the
 model does not know (it would be read aloud), or a `voices` entry naming no
@@ -72,6 +77,14 @@ error — that speaker simply conditions nothing.
 
 Because Dia2 cannot condition speaker 2 alone, a missing first prefix drops the
 second as well rather than misassigning it.
+
+One request is one Dia2 pass, and a pass has three ceilings: it stops hard at
+~118s of audio, the two speakers' identities merge from ~95s, and the
+similarity to the reference starts falling from ~45s. Keep a request under
+about 45 seconds of speech and split longer material into separate requests at
+a speaker change — each request re-conditions from the reference, so splitting
+resets the drift entirely. Studio's Dialogue mode does this planning for you;
+over HTTP it is the client's job.
 
 ### `GET /v1/audio/dialogue/tags`
 

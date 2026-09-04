@@ -245,9 +245,19 @@ public struct DialogueBody: Codable, Sendable {
     /// nothing for that speaker.
     public var voices: [String?]?
     public var stream: Bool?
+    /// Legacy aliases for the audio sampler, kept for clients written before
+    /// the split. The explicit `audio_*` fields below win when both are sent.
     public var temperature: Float?
     public var top_k: Int?
     public var cfg_scale: Float?
+    /// Dia2 samples the text/action state machine separately from the audio
+    /// codebooks, so the two halves take their own settings.
+    public var text_temperature: Float?
+    public var text_top_k: Int?
+    public var audio_temperature: Float?
+    public var audio_top_k: Int?
+    public var max_padding: Int?
+    public var keep_prefix_audio: Bool?
 }
 
 // Make VoiceMeta ResponseEncodable so handlers can return it directly.

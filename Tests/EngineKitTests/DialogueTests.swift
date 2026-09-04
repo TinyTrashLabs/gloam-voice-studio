@@ -74,6 +74,43 @@ final class DialogueTests: XCTestCase {
         XCTAssertEqual(script, ["[S1] well (laughs) ok"])
     }
 
+    /// Every control has to survive the trip from the caller's request to the
+    /// provider's. They were declared on both sides and connected on neither,
+    /// which is indistinguishable from the model ignoring them.
+    func testEveryControlReachesTheProviderRequest() {
+        let dialogue = DialogueRequest(
+            turns: [DialogueTurn(speaker: 1, text: "Hello")],
+            voices: ["ava"],
+            temperature: 0.7, topK: 42, cfgScale: 6,
+            textTemperature: 0.45, textTopK: 31,
+            audioTemperature: 0.85, audioTopK: 67,
+            maxPadding: 5, keepPrefixAudio: true)
+
+        let provider = ProviderDialogueRequest(dialogue, script: ["[S1] Hello"], prefixes: [nil])
+
+        XCTAssertEqual(provider.script, ["[S1] Hello"])
+        XCTAssertEqual(provider.temperature, 0.7)
+        XCTAssertEqual(provider.topK, 42)
+        XCTAssertEqual(provider.cfgScale, 6)
+        XCTAssertEqual(provider.textTemperature, 0.45)
+        XCTAssertEqual(provider.textTopK, 31)
+        XCTAssertEqual(provider.audioTemperature, 0.85)
+        XCTAssertEqual(provider.audioTopK, 67)
+        XCTAssertEqual(provider.maxPadding, 5)
+        XCTAssertTrue(provider.keepPrefixAudio)
+    }
+
+    /// A request that sets nothing must not invent settings — the model's own
+    /// defaults are better than any this layer could guess.
+    func testUnsetControlsStayUnset() {
+        let provider = ProviderDialogueRequest(
+            DialogueRequest(turns: [], voices: []), script: [], prefixes: [])
+        XCTAssertNil(provider.textTemperature)
+        XCTAssertNil(provider.audioTopK)
+        XCTAssertNil(provider.maxPadding)
+        XCTAssertFalse(provider.keepPrefixAudio)
+    }
+
     func testEmptyScriptIsRejected() {
         let request = DialogueRequest(turns: [], voices: [])
         XCTAssertThrowsError(try DialoguePlanner.script(for: request, knownTags: []))

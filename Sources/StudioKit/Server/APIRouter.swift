@@ -412,7 +412,11 @@ public enum APIRouter {
             let dialogue = DialogueRequest(
                 turns: body.turns.map { DialogueTurn(speaker: $0.speaker, text: $0.text) },
                 voices: body.voices ?? [],
-                temperature: body.temperature, topK: body.top_k, cfgScale: body.cfg_scale)
+                temperature: body.temperature, topK: body.top_k, cfgScale: body.cfg_scale,
+                textTemperature: body.text_temperature, textTopK: body.text_top_k,
+                audioTemperature: body.audio_temperature, audioTopK: body.audio_top_k,
+                maxPadding: body.max_padding,
+                keepPrefixAudio: body.keep_prefix_audio ?? false)
             let tags = Set(try await deps.engine.nonverbalTags(backend: .dia2))
             let script: [String]
             do {
@@ -424,9 +428,7 @@ public enum APIRouter {
 
             let prefixes = try await dialoguePrefixes(dialogue.voices, deps: deps)
             let providerRequest = ProviderDialogueRequest(
-                script: script, prefixes: prefixes,
-                temperature: dialogue.temperature, topK: dialogue.topK,
-                cfgScale: dialogue.cfgScale)
+                dialogue, script: script, prefixes: prefixes)
             let rate = BackendID.dia2.spec.defaultSampleRate
 
             do {

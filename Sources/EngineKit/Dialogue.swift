@@ -13,14 +13,53 @@ public struct DialogueRequest: Sendable, Equatable {
     public var turns: [DialogueTurn]
     /// Voice slug per speaker index; nil means unconditioned (voice will vary).
     public var voices: [String?]
+    /// Legacy aliases for the audio sampler, kept so callers written before the
+    /// text/audio split still compile. `audioTemperature`/`audioTopK` win when
+    /// both are set, because they say which sampler they mean.
     public var temperature: Float?
     public var topK: Int?
     public var cfgScale: Float?
+    /// Dia2 runs two samplers: one over the text/action state machine that
+    /// decides what is said and when a speaker changes, one over the audio
+    /// codebooks. They want different settings, so the request carries both.
+    public var textTemperature: Float?
+    public var textTopK: Int?
+    public var audioTemperature: Float?
+    public var audioTopK: Int?
+    public var maxPadding: Int?
+    /// Return the conditioning audio ahead of the take. Useful for hearing
+    /// exactly what the model was given; wrong for anything shipped.
+    public var keepPrefixAudio: Bool
 
     public init(turns: [DialogueTurn], voices: [String?],
-                temperature: Float? = nil, topK: Int? = nil, cfgScale: Float? = nil) {
+                temperature: Float? = nil, topK: Int? = nil, cfgScale: Float? = nil,
+                textTemperature: Float? = nil, textTopK: Int? = nil,
+                audioTemperature: Float? = nil, audioTopK: Int? = nil,
+                maxPadding: Int? = nil, keepPrefixAudio: Bool = false) {
         self.turns = turns; self.voices = voices
         self.temperature = temperature; self.topK = topK; self.cfgScale = cfgScale
+        self.textTemperature = textTemperature; self.textTopK = textTopK
+        self.audioTemperature = audioTemperature; self.audioTopK = audioTopK
+        self.maxPadding = maxPadding; self.keepPrefixAudio = keepPrefixAudio
+    }
+}
+
+public extension ProviderDialogueRequest {
+    /// Carries every control from the caller's request to the model. Written
+    /// once, here, so the HTTP route and the Studio UI cannot drift apart on
+    /// which knobs actually reach Dia2 — that drift is why the controls were
+    /// silently inert before.
+    init(_ dialogue: DialogueRequest, script: [String], prefixes: [DialoguePrefix?]) {
+        self.init(script: script, prefixes: prefixes,
+                  temperature: dialogue.temperature,
+                  topK: dialogue.topK,
+                  cfgScale: dialogue.cfgScale,
+                  textTemperature: dialogue.textTemperature,
+                  textTopK: dialogue.textTopK,
+                  audioTemperature: dialogue.audioTemperature,
+                  audioTopK: dialogue.audioTopK,
+                  maxPadding: dialogue.maxPadding,
+                  keepPrefixAudio: dialogue.keepPrefixAudio)
     }
 }
 
