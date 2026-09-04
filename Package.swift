@@ -36,15 +36,20 @@ let package = Package(
         // Bumped 2026-09-03 to the Dia2 parity fix (our #10): top-k sampling
         // now retains the complete candidate set, BOS fallback matches the
         // reference, and delayed codebooks are gathered from the right frame.
-        // Then to our #11, which is what makes prefix conditioning usable:
-        // local Dia2 directories load at all, the reference audio no longer
-        // bleeds into the opening, and Mimi stays warm across that boundary
-        // so the continuation does not start with a cold-start burst.
+        // Then to our #11, which is what makes prefix conditioning work at
+        // all: local Dia2 directories load, the reference audio no longer
+        // bleeds into the opening, Mimi stays warm across that boundary, and
+        // -- the one that mattered -- the forced new-word schedule is derived
+        // from the same clamped word start the entry is built from. Without
+        // that clamp a fifth of a prefix's words were dropped from the text
+        // stream while their audio was still being teacher-forced, so a
+        // speaker never bound firmly to its voice: an 8s male reference came
+        // back at 200 Hz, or as the other speaker outright.
         // NOTE: this is #11's branch head, not main. Repin to the merge
         // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "b980942dc3d3a4ab20b8da5a308e1b46feb00141"),
+            revision: "d84bcca8f74d0db24cc8ecb542c4cbb6c54a8d6c"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
