@@ -118,6 +118,24 @@ final class DialogueTests: XCTestCase {
         XCTAssertThrowsError(try DialoguePlanner.script(for: request, knownTags: []))
     }
 
+    /// The download manager resolves the folder with quant "8bit" and the
+    /// loader resolves it with nil. If those disagree the UI reports a model
+    /// ready that the loader cannot find, and the load falls through to a
+    /// remote fetch that 401s.
+    func testDia2DiskFolderIsTheSameForBothResolvers() {
+        // Both the download manager and AppModel's loader resolver pass nil for
+        // anything that isn't Qwen, so both must land on the size-qualified
+        // default. Feeding dia2 a bare Qwen quant is the bug this guards.
+        let downloadManagerStyle = BackendID.dia2.isQwen ? "8bit" : nil
+        let loaderStyle: String? = BackendID.dia2.isQwen ? "8bit" : nil
+        XCTAssertEqual(BackendID.dia2.diskFolder(quantRaw: downloadManagerStyle),
+                       BackendID.dia2.diskFolder(quantRaw: loaderStyle))
+        XCTAssertEqual(BackendID.dia2.diskFolder(quantRaw: loaderStyle), "dia2@2b-8bit")
+        XCTAssertNotEqual(BackendID.dia2.diskFolder(quantRaw: nil),
+                          BackendID.dia2.diskFolder(quantRaw: "8bit"),
+                          "a bare Qwen quant must not silently name a real folder")
+    }
+
     /// Dia2 has separate text/action and audio samplers. Collapsing them back
     /// into one temperature/top-k pair would make the parity controls lie.
     func testProviderControlsMapToIndependentDia2Samplers() {

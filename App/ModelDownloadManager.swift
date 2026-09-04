@@ -86,7 +86,14 @@ final class ModelDownloadManager {
     }
 
     func directory(for backend: BackendID) -> URL {
-        root.appendingPathComponent(backend.diskFolder(quantRaw: quant(for: backend).rawValue))
+        // Only Qwen folders are quant-suffixed from `quant(for:)`. dia2 encodes
+        // size with its precision and supplies its own default, and handing it
+        // a bare "8bit" pointed this at `dia2@8bit` while AppModel's loader
+        // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
+        // reported the model ready somewhere the loader never looked, and the
+        // load fell through to the HF repo id and failed with a 401.
+        let quantRaw = backend.isQwen ? quant(for: backend).rawValue : nil
+        return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 
     /// The retired `.qwen3` backend (0.6B-Base-8bit) downloaded to `Models/qwen3`.

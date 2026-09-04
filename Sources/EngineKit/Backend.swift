@@ -72,6 +72,9 @@ extension BackendID {
 
     /// On-disk folder name. Qwen embeds the quant so precisions coexist; Dia2
     /// embeds both size and quant (e.g. "dia2@2b-8bit") since it ships two sizes.
+    /// dia2's folder encodes size as well as precision (`dia2@2b-8bit`), so a
+    /// bare Qwen quant like "8bit" is not a valid value for it — callers pass
+    /// nil and take the default. See `ModelDownloadManager.directory(for:)`.
     public func diskFolder(quantRaw: String?) -> String {
         switch self {
         case .dia2: "dia2@\(quantRaw ?? "2b-8bit")"
