@@ -51,4 +51,4 @@ cat "$WORK.icns" > "$DEST"
 
 # Fail the build rather than silently ship a truncated icon again: ic09 is the
 # 512 and ic10 the 1024.
-"$SRCROOT/scripts/verify-appicon-icns.py" "$DEST"
+"$SRCROOT/scripts/verify-appicon-icns.py" "$DEST" "$SRC/icon-1024.png"
