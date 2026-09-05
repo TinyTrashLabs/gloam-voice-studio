@@ -223,11 +223,50 @@ final class ArticleImportModel {
                     + "them below.")
             }
             reviewLines = parsed.turns.map { ReviewLine(speaker: $0.speaker, text: $0.text) }
+            // Saved here, not at "Use & Generate". A script costs a whole LLM
+            // run; discarding it because the user closed the sheet to think
+            // about it would throw away the expensive part of the work.
+            save(parsed.turns, from: article)
             phase = .review
         } catch {
             guard !Task.isCancelled else { return }
             phase = .failed(app.describeAny(error))
         }
+    }
+
+    /// Record the script with the article it came from.
+    ///
+    /// Failing to write history must never fail the script the user is looking
+    /// at, so this reports rather than throws.
+    private func save(_ turns: [ScriptedTurn], from article: Article) {
+        do {
+            try app.scriptHistory.record(
+                sourceKind: mode.rawValue,
+                title: article.title,
+                url: article.url?.absoluteString,
+                siteName: article.siteName,
+                byline: article.byline,
+                articleWords: article.wordCount,
+                targetMinutes: targetMinutes,
+                model: app.chatLLM.rawValue,
+                turns: turns.map { .init(speaker: $0.speaker, text: $0.text) })
+            app.scriptHistoryVersion += 1
+        } catch {
+            warnings.append("Couldn't save this script to history: \(app.describeAny(error))")
+        }
+    }
+
+    /// Reopen a saved script in the review sheet, source and all, so it can be
+    /// re-cast and re-rendered without paying for the model run again.
+    func reopen(_ entry: ScriptHistoryEntry) {
+        cancel()
+        warnings = []
+        rawReply = nil
+        article = Article(title: entry.title, byline: entry.byline, siteName: entry.siteName,
+                          text: "", url: entry.url.flatMap(URL.init(string:)))
+        targetMinutes = entry.targetMinutes
+        reviewLines = entry.turns.map { ReviewLine(speaker: $0.speaker, text: $0.text) }
+        phase = .review
     }
 
     /// The cast's own names when they have been chosen, so the script is

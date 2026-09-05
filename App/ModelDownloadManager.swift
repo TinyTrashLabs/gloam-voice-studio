@@ -4,6 +4,17 @@ import HuggingFace
 import Observation
 import StudioKit
 
+/// `ProgressThrottle` behind a lock, because a download consults it from its
+/// own loop and from URLSession's delegate queue at the same time.
+private final class ProgressGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var throttle = ProgressThrottle()
+
+    func allows(_ fraction: Double, force: Bool = false) -> Bool {
+        lock.withLock { throttle.shouldReport(fraction, force: force) }
+    }
+}
+
 @MainActor @Observable
 final class ModelDownloadManager {
     enum State: Equatable {
@@ -223,7 +234,9 @@ final class ModelDownloadManager {
     // app scroll badly while a model downloads.
     nonisolated private func downloadRepoSnapshot(
         repo: String, to dir: URL,
-        onProgress: @MainActor @Sendable (Double) -> Void
+        // `@escaping` because the streaming download reports from URLSession's
+        // delegate queue, after this function has already suspended.
+        onProgress: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws {
         struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
         guard let treeURL = URL(
@@ -245,12 +258,14 @@ final class ModelDownloadManager {
         // every reported fraction is clamped to 1.0 to keep progress sane.
         let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
         var done: Int64 = 0
-        var throttle = ProgressThrottle()
-        // Local, so the loop below reads as "report progress" and the rate
-        // limiting is not something a future edit can forget to apply.
+        // Consulted from TWO places on two different threads: this loop, and
+        // URLSession's delegate queue inside the streaming download. Checking
+        // it BEFORE hopping to the MainActor is the point — an unthrottled hop
+        // per network chunk is hundreds of thousands of tasks over a 4GB file.
+        let gate = ProgressGate()
         func report(_ fraction: Double, force: Bool = false) async {
             let clamped = min(1.0, fraction)
-            guard throttle.shouldReport(clamped, force: force) else { return }
+            guard gate.allows(clamped, force: force) else { return }
             await onProgress(clamped)
         }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -279,63 +294,36 @@ final class ModelDownloadManager {
             // which on a slow link or a nearly-full disk is the difference
             // between "retry" and "give up".
             let tmp = target.appendingPathExtension("part")
-            let resumeFrom = (try? FileManager.default.attributesOfItem(
+            let onDisk = (try? FileManager.default.attributesOfItem(
                 atPath: tmp.path)[.size] as? Int64) ?? 0
+            // Only a partial SHORTER than the file we expect is a prefix worth
+            // resuming; one at or past that length is stale or corrupt.
+            let resumeFrom = (file.size.map { onDisk < $0 } ?? true) ? onDisk : 0
             var request = URLRequest(url: src)
-            // Only ask to resume when the partial is a genuine prefix: shorter
-            // than the file we are expecting. A .part at or past the expected
-            // size is corrupt or stale, so it is discarded rather than trusted.
-            let canResume = resumeFrom > 0 && (file.size.map { resumeFrom < $0 } ?? true)
-            if canResume {
+            if resumeFrom > 0 {
                 request.setValue("bytes=\(resumeFrom)-", forHTTPHeaderField: "Range")
             }
-            let (bytes, response) = try await URLSession.shared.bytes(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-            guard status == 200 || status == 206 else {
-                throw DownloadError(message: "\(file.path): HTTP \(status)")
+
+            let base = done
+            let fileSize = file.size
+            let written = try await StreamingFileDownload.run(
+                request, to: tmp, resumeFrom: resumeFrom, name: file.path
+            ) { bytesOnDisk in
+                let fraction = min(1.0, Double(base + bytesOnDisk) / Double(total))
+                guard gate.allows(fraction) else { return }
+                Task { @MainActor in onProgress(fraction) }
             }
-            // 206 means the server honoured the range and is sending the
-            // remainder; 200 means it ignored it and is sending the whole
-            // file, so whatever is on disk has to go.
-            let appending = status == 206 && canResume
-            if !appending {
-                try? FileManager.default.removeItem(at: tmp)
-                FileManager.default.createFile(atPath: tmp.path, contents: nil)
+            try Task.checkCancellation()
+            if let fileSize, written != fileSize {
+                throw DownloadError(
+                    message: "\(file.path): got \(written) bytes, expected \(fileSize)")
             }
-            let handle = try FileHandle(forWritingTo: tmp)
-            do {
-                var buffer = Data()
-                buffer.reserveCapacity(1 << 20)
-                var fileDone: Int64 = appending ? resumeFrom : 0
-                if appending {
-                    // Append rather than overwrite; a resumed body starts at
-                    // the offset we asked for, not at zero.
-                    try handle.seekToEnd()
-                    await report(Double(done + fileDone) / Double(total))
-                }
-                for try await byte in bytes {
-                    buffer.append(byte)
-                    if buffer.count >= 1 << 20 {
-                        try handle.write(contentsOf: buffer)
-                        fileDone += Int64(buffer.count)   // includes the resumed prefix
-                        buffer.removeAll(keepingCapacity: true)
-                        await report(Double(done + fileDone) / Double(total))
-                        try Task.checkCancellation()
-                    }
-                }
-                try handle.write(contentsOf: buffer)
-                fileDone += Int64(buffer.count)
-                try handle.close()
-                try? FileManager.default.removeItem(at: target)
-                try FileManager.default.moveItem(at: tmp, to: target)
-                done += file.size ?? fileDone
-                // Forced: a finished file is a real milestone, and the last
-                // one must land on 1.0 rather than stopping just short.
-                await report(Double(done) / Double(total), force: true)
-            } catch {
-                try? handle.close()
-                throw error
-            }
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.moveItem(at: tmp, to: target)
+            done += fileSize ?? written
+            // Forced: a finished file is a real milestone, and the last one
+            // must land on 1.0 rather than stopping just short.
+            await report(Double(done) / Double(total), force: true)
         }
     }
 

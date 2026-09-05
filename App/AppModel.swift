@@ -570,6 +570,16 @@ final class AppModel {
             ? UITestMode.tempRoot.appendingPathComponent("Chats")
             : StoragePaths.appSupport.appendingPathComponent("Chats")))
 
+    /// Generated scripts, kept with the article each came from. Beside the
+    /// chats rather than inside the audio history: a script is worth keeping
+    /// before any audio exists, and often instead of it.
+    @ObservationIgnored lazy var scriptHistory: ScriptHistoryStore = ScriptHistoryStore(
+        directory: UITestMode.isActive
+            ? UITestMode.tempRoot.appendingPathComponent("Scripts")
+            : StoragePaths.appSupport.appendingPathComponent("Scripts"))
+    /// Bumped when a script is saved or deleted, so the list refreshes.
+    var scriptHistoryVersion = 0
+
     @ObservationIgnored lazy var foundryCandidateStore: FoundryCandidateStore = FoundryCandidateStore(
         directory: UITestMode.isActive
             ? UITestMode.tempRoot.appendingPathComponent("FoundryCandidates")

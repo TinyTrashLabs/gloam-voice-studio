@@ -46,6 +46,7 @@ struct ArticleSourceView: View {
                 Button(scriptButtonTitle) { importer.scriptIt() }
                     .disabled(!importer.canScript)
                     .accessibilityIdentifier("article-script-it")
+                savedScriptsMenu
                 if importer.phase.isBusy {
                     ProgressView().controlSize(.small)
                     Text(busyLabel)
@@ -77,6 +78,39 @@ struct ArticleSourceView: View {
                                   set: { if !$0 { model.articleImport.discardReview() } })) {
             ArticleReviewSheet()
                 .environment(model)
+        }
+    }
+
+    /// Scripts already written, newest first. A script costs a full model run,
+    /// so getting one back has to be cheaper than making it again.
+    @ViewBuilder
+    private var savedScriptsMenu: some View {
+        // Read through the version counter so the menu refreshes when a script
+        // is saved, rather than showing whatever was on disk at first draw.
+        let saved = { _ = model.scriptHistoryVersion; return model.scriptHistory.list() }()
+        if !saved.isEmpty {
+            Menu {
+                ForEach(saved) { entry in
+                    Button {
+                        model.articleImport.reopen(entry)
+                    } label: {
+                        // Source first: it is what tells two scripts apart.
+                        Text("\(entry.title) — \(entry.sourceLabel), "
+                             + "\(entry.turns.count) lines, \(entry.model)")
+                    }
+                }
+                Divider()
+                Button("Clear saved scripts", role: .destructive) {
+                    _ = try? model.scriptHistory.clear()
+                    model.scriptHistoryVersion += 1
+                }
+            } label: {
+                Label("Saved (\(saved.count))", systemImage: "clock.arrow.circlepath")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Reopen a script you already generated, with the article it came from")
+            .accessibilityIdentifier("article-saved-scripts")
         }
     }
 
@@ -197,8 +231,15 @@ struct ArticleReviewSheet: View {
                     .foregroundStyle(Brand.fgDim)
             }
             if let article = importer.article {
-                Text(article.title).font(.callout).foregroundStyle(Brand.fgDim)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(article.title).font(.callout).foregroundStyle(Brand.fgDim)
+                        .lineLimit(2)
+                    // Where it came from and who wrote it — the things you
+                    // check when a line sounds wrong.
+                    Text([article.siteName, article.byline, article.url?.host()]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption2).foregroundStyle(Brand.fgFaint)
+                }
             }
             ForEach(importer.warnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle")
