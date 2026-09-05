@@ -503,10 +503,11 @@ extension BackendID {
         case .luxTTS:
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .kokoro, .supertonic, .pocketTTS:
-            // NOTE: absent from `.apiServer` only because the curated list this
-            // replaced never listed them — preserved verbatim rather than
-            // silently widened. Likely drift worth revisiting.
-            [.studio, .chatVoice, .downloadable]
+            // These were absent from `.apiServer` only because the curated
+            // array this switch replaced never listed them. Nothing about them
+            // is unfit to serve over HTTP, so the omission was drift rather
+            // than a rule — added 2026-09-05.
+            [.studio, .chatVoice, .apiServer, .downloadable]
         case .dia2:
             // Two voices in one pass. `.studio` speaks a single turn through the
             // dialogue path (see Dia2SpeechModel.synthesize); not a chat voice —

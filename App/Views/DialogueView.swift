@@ -139,6 +139,9 @@ struct DialogueView: View {
     private var composerColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                zoneLabel("SOURCE")
+                ArticleSourceView()
+
                 zoneLabel("CAST")
                 HStack(alignment: .top, spacing: 12) {
                     speakerCard(1)

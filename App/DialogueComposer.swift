@@ -89,6 +89,15 @@ final class DialogueComposer {
 
     func removeTurn(_ id: UUID) { turns.removeAll { $0.id == id } }
 
+    /// Swap the whole script out — what the article importer applies once the
+    /// user has approved a generated script. Replaces rather than appends
+    /// because a script is one exchange, and interleaving it with whatever was
+    /// already typed would produce a conversation nobody wrote.
+    func replaceTurns(with new: [Turn]) {
+        guard !new.isEmpty else { return }
+        turns = new
+    }
+
     /// Swap a turn with its neighbour. Reordering matters because a seam only
     /// lands where the speaker changes — moving a turn moves the seam.
     func moveTurn(at index: Int, by offset: Int) {

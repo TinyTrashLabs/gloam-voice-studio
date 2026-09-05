@@ -175,7 +175,16 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
-            path: "Sources/StudioKit"
+            path: "Sources/StudioKit",
+            // Prose about a vendored file, not something to ship in the bundle.
+            exclude: ["Article/Resources/README-Readability.md"],
+            resources: [
+                // Mozilla Readability, run against the rendered DOM by
+                // ReadabilityArticleReader. Vendored deliberately: article
+                // extraction must work without fetching and evaluating a
+                // script off the network at runtime.
+                .copy("Article/Resources/Readability.js")
+            ]
         ),
         .testTarget(
             name: "StudioKitTests",

@@ -473,6 +473,8 @@ final class AppModel {
     /// Dialogue mode's own state. Lazy for the same reason `script` is: a
     /// session that never opens Dialogue never builds it.
     @ObservationIgnored lazy var dialogue: DialogueComposer = DialogueComposer(app: self)
+    /// Article -> two-host script, feeding the composer above.
+    @ObservationIgnored lazy var articleImport: ArticleImportModel = ArticleImportModel(app: self)
 
     @ObservationIgnored lazy var script: ScriptModel = ScriptModel(
         app: self,
