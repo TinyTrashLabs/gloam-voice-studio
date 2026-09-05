@@ -214,21 +214,44 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
         return DialogueOutputAssembler.assemble(
             generated: DialogueChunk(
                 samples: samples,
-                words: words.map { AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1) }),
+                words: Dia2WordTiming.aligned(words, sampleCount: samples.count,
+                                              sampleRate: sampleRate)),
             prefixes: request.prefixes,
             sampleRate: sampleRate,
             keepPrefixAudio: request.keepPrefixAudio)
     }
 
     func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
-        Dia2StreamingSession(session: try model.streamDialogue(
-            script: request.script, prefixes: prefixes(request), config: config(request)))
+        Dia2StreamingSession(
+            session: try model.streamDialogue(
+                script: request.script, prefixes: prefixes(request), config: config(request)),
+            sampleRate: sampleRate)
     }
 
     /// A one-turn dialogue, so the ordinary single-voice path still works.
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         let (samples, _) = try await model.generateDialogue(script: [request.text])
         return samples
+    }
+}
+
+/// Dia2 reports one timestamp per generated word — where it STARTS. A word's
+/// end is the next word's start, and the last word runs to the end of the
+/// audio it came with.
+///
+/// Worth spelling out because the obvious shortcut (`end: start`) type-checks
+/// and reads fine, and it is what this did: every generated word came back
+/// zero-length, so anything measuring a span — slicing a speaker's audio out
+/// of a take, say — silently got nothing.
+enum Dia2WordTiming {
+    static func aligned(_ words: [(String, Double)],
+                        sampleCount: Int, sampleRate: Int) -> [AlignedWordTiming] {
+        let duration = sampleRate > 0 ? Double(sampleCount) / Double(sampleRate) : 0
+        return words.enumerated().map { index, word in
+            let next = index + 1 < words.count ? words[index + 1].1 : duration
+            return AlignedWordTiming(text: word.0, start: word.1,
+                                     end: max(word.1, next))
+        }
     }
 }
 
@@ -262,6 +285,8 @@ enum Dia2RequestAdapter {
 /// Bridges Dia2's actor session onto EngineKit's streaming protocol.
 struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
     let session: Dia2Session
+    /// Needed to turn a chunk's sample count into the last word's end time.
+    let sampleRate: Int
 
     func append(_ lines: [String]) async { await session.append(lines) }
     func finish() async { await session.finish() }
@@ -275,9 +300,12 @@ struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
                     for try await c in upstream {
                         continuation.yield(DialogueChunk(
                             samples: c.samples,
-                            words: c.words.map {
-                                AlignedWordTiming(text: $0.0, start: $0.1, end: $0.1)
-                            }))
+                            // A streamed chunk's last word ends at the chunk
+                            // boundary, which is the best available answer
+                            // until the next chunk arrives.
+                            words: Dia2WordTiming.aligned(c.words,
+                                                          sampleCount: c.samples.count,
+                                                          sampleRate: sampleRate)))
                     }
                     continuation.finish()
                 } catch {
