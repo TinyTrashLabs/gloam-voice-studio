@@ -452,6 +452,23 @@ final class AppModel {
     @ObservationIgnored
     private var avatarCache: (version: Int, entries: [String: URL?]) = (-1, [:])
 
+    /// The bracketed sounds `backend` actually knows, or empty when it has no
+    /// fixed vocabulary (Fish and the Qwen family take free-form directions).
+    ///
+    /// Empty means "use your own list"; non-empty means "these and nothing
+    /// else", because a tag the model does not know gets read out loud.
+    func nonverbalTags(for backend: BackendID) -> [String] {
+        if let hit = tagCache[backend] { return hit }
+        let tags = NonverbalTagCatalog.parenthesised(
+            inModelDirectory: downloads.directory(for: backend))
+        tagCache[backend] = tags
+        return tags
+    }
+    /// Keyed by backend and never invalidated: a model's tokenizer does not
+    /// change once it is on disk, and a redownload replaces it with the same
+    /// vocabulary.
+    @ObservationIgnored private var tagCache: [BackendID: [String]] = [:]
+
     // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
     // gated per backend by ControlSurface.knobs). Initial values == knobDefaults
     // (the Qwen model's own generation defaults), so a fresh app and the Reset

@@ -7,6 +7,14 @@ import SwiftUI
 struct TagChipsView: View {
     @Binding var text: String
     @Binding var selection: NSRange
+    /// The engine's own vocabulary, when it has a fixed one. Dia2 knows
+    /// exactly fifty `(parenthesised)` sounds and reads anything else out
+    /// loud, so the curated `[square bracket]` list below — which is Fish's —
+    /// is worse than useless there: every chip in it would be spoken.
+    var engineTags: [String] = []
+    /// Whether this engine takes free-form directions. False for a fixed
+    /// vocabulary, where a custom tag can only ever be read aloud.
+    var allowsCustomTags: Bool = true
     @AppStorage("tagChipsExpanded") private var expanded = true
     @State private var customTag = ""
 
@@ -30,7 +38,7 @@ struct TagChipsView: View {
             // The bench itself scrolls (StudioView wraps it in a ScrollView),
             // so the chips lay out at full height — no inner scroll region.
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(Self.groups, id: \.label) { group in
+                ForEach(groups, id: \.label) { group in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(group.label.uppercased())
                             .font(.system(size: 10, weight: .semibold))
@@ -42,6 +50,7 @@ struct TagChipsView: View {
                         }
                     }
                 }
+                if allowsCustomTags {
                 HStack(spacing: 6) {
                     TextField("custom — free-form works, e.g. whisper in small voice",
                               text: $customTag)
@@ -50,6 +59,11 @@ struct TagChipsView: View {
                         .onSubmit { insertCustom() }
                     Button("+ Tag") { insertCustom() }
                         .disabled(customTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                } else {
+                    Text("This engine knows these sounds and no others — anything else "
+                         + "is read out loud.")
+                        .font(.caption2).foregroundStyle(Brand.fgFaint)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,8 +74,22 @@ struct TagChipsView: View {
         .font(.callout)
     }
 
+    /// The engine's own tags when it has a fixed vocabulary, else the curated
+    /// free-form list.
+    private var groups: [(label: String, color: Color, tags: [String])] {
+        guard !engineTags.isEmpty else { return Self.groups }
+        return [("sounds this engine knows", .orange, engineTags)]
+    }
+
+    /// A tag already carrying its own brackets is inserted verbatim; the
+    /// curated list is bare words that get `[...]` put round them. Getting this
+    /// wrong produces `[(laughs)]`, which no engine knows.
+    private static func bracketed(_ tag: String) -> String {
+        (tag.hasPrefix("(") || tag.hasPrefix("[")) ? tag : "[\(tag)]"
+    }
+
     private func chip(_ tag: String, color: Color) -> some View {
-        Button("[\(tag)]") { insert(tag) }
+        Button(Self.bracketed(tag)) { insert(tag) }
             .buttonStyle(.plain)
             .font(.system(.caption, design: .monospaced))
             .padding(.horizontal, 8)
@@ -70,7 +98,7 @@ struct TagChipsView: View {
             .overlay(Capsule().stroke(color.opacity(0.5), lineWidth: 1))
             .foregroundStyle(color)
             .accessibilityIdentifier("tag-chip-\(tag)")
-            .help("Insert [\(tag)] at the cursor")
+            .help("Insert \(Self.bracketed(tag)) at the cursor")
     }
 
     private func insertCustom() {
@@ -83,7 +111,7 @@ struct TagChipsView: View {
     }
 
     private func insert(_ tag: String) {
-        let chip = "[\(tag)]"
+        let chip = Self.bracketed(tag)
         let ns = text as NSString
         let loc = max(0, min(selection.location, ns.length))
         let len = max(0, min(selection.length, ns.length - loc))

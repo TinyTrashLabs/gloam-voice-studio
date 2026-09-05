@@ -288,47 +288,55 @@ struct StudioView: View {
         showSaveDirection = false
     }
 
-    /// The whole bench scrolls: expanded disclosures (tags, fine-tune) must
-    /// never force the stack taller than the window — SwiftUI centers
-    /// overflowing stacks, shoving everything off-screen ("blank window").
+    /// One scrolling page of sections — VOICE, WRITE, tags, then TAKES — with
+    /// the Generate bar pinned underneath it.
+    ///
+    /// It used to be a `VSplitView` of two independently scrolling panes. That
+    /// gave the bench its own small viewport, and on an engine whose tag list
+    /// runs to three rows the Generate button fell past the bottom of it; with
+    /// scroll indicators hidden and the takes shelf directly below, the button
+    /// read as simply missing. Sections in one scroll view cannot do that.
+    ///
+    /// The Generate bar stays outside the scroll view deliberately: the button
+    /// you press to do the thing must never be the thing that scrolled away.
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
-        VSplitView {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
+
+                    // TAKES is a section of the same page now, not a pane. An
+                    // inner ScrollView here would fight this one, so the takes
+                    // simply lay out at full height and the page scrolls them.
+                    VStack(alignment: .leading, spacing: 0) {
+                        zoneLabel("TAKES")
+                        if model.variants.isEmpty {
+                            VStack(spacing: 10) {
+                                Text("No takes yet — write a line and press Generate (⌘↩).")
+                                    .font(.caption).foregroundStyle(Brand.fgFaint)
+                                SiblingAppsFootnote(campaign: .takesEmptyState)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(model.variants) { variant in
+                                    variantCard(variant)
+                                }
+                            }
+                            .padding(.top, 6)
+                        }
+                    }
+                    .accessibilityIdentifier("takes-region")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .scrollIndicators(.never)
-            .frame(minHeight: 220)
-            // TAKES takes the rest of the column rather than a 240pt shelf at
-            // the bottom: the shelf left a band of dead space between the bench
-            // and the takes, and hid entirely until the first take existed, so
-            // the space was empty in the one state where a hint would help.
-            VStack(alignment: .leading, spacing: 0) {
-                zoneLabel("TAKES")
-                if model.variants.isEmpty {
-                    VStack(spacing: 10) {
-                        Text("No takes yet — write a line and press Generate (⌘↩).")
-                            .font(.caption).foregroundStyle(Brand.fgFaint)
-                        SiblingAppsFootnote(campaign: .takesEmptyState)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 10) {
-                            ForEach(model.variants) { variant in
-                                variantCard(variant)
-                            }
-                        }
-                        .padding(.top, 6)
-                    }
-                }
-            }
-            .frame(minHeight: 120, maxHeight: .infinity)
-            .accessibilityIdentifier("takes-region")
+            .scrollIndicators(.automatic)
+            actBar
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Brand.ink2.opacity(0.5))
         }
     }
 
@@ -671,9 +679,26 @@ struct StudioView: View {
             DictationButton(text: $model.text)
         }
         if model.backend.spec.honorsTags {
-            TagChipsView(text: $model.text, selection: $lineSelection)
+            // An engine with a fixed vocabulary supplies it; one without gets
+            // the curated free-form list. Dia2 is the first of the former, and
+            // showing it the free-form list meant every chip inserted words it
+            // would read out loud.
+            let engineTags = model.nonverbalTags(for: model.backend)
+            TagChipsView(text: $model.text, selection: $lineSelection,
+                         engineTags: engineTags, allowsCustomTags: engineTags.isEmpty)
         }
 
+    }
+
+    /// The Generate row, pinned by `singleModeStack` BELOW the scrolling bench
+    /// rather than at the end of it.
+    ///
+    /// It used to be the last thing in `benchControls`, inside the scroll view.
+    /// With scroll indicators hidden and the takes shelf directly underneath,
+    /// an engine whose tag list ran to three rows pushed it past the fold and
+    /// it read as simply absent — which is exactly what happened on dia2.
+    @ViewBuilder
+    var actBar: some View {
         // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
         // Why generation is blocked, or nil when it isn't. The engine/voice
