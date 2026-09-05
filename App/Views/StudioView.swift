@@ -306,6 +306,8 @@ struct StudioView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
+                    tagSection
+                    actBar
 
                     // TAKES is a section of the same page now, not a pane. An
                     // inner ScrollView here would fight this one, so the takes
@@ -332,11 +334,10 @@ struct StudioView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .scrollIndicators(.automatic)
-            actBar
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Brand.ink2.opacity(0.5))
+            // Always shown, never the overlay kind that fades out. The bug
+            // this screen just had was a control below the fold with nothing
+            // on screen suggesting there WAS a fold.
+            .scrollIndicators(.visible)
         }
     }
 
@@ -678,7 +679,14 @@ struct StudioView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
             DictationButton(text: $model.text)
         }
+    }
+
+    /// TAGS, its own section between WRITE and the Generate bar.
+    @ViewBuilder
+    var tagSection: some View {
         if model.backend.spec.honorsTags {
+            @Bindable var model = model
+            zoneLabel("TAGS")
             // An engine with a fixed vocabulary supplies it; one without gets
             // the curated free-form list. Dia2 is the first of the former, and
             // showing it the free-form list meant every chip inserted words it
@@ -687,16 +695,9 @@ struct StudioView: View {
             TagChipsView(text: $model.text, selection: $lineSelection,
                          engineTags: engineTags, allowsCustomTags: engineTags.isEmpty)
         }
-
     }
 
-    /// The Generate row, pinned by `singleModeStack` BELOW the scrolling bench
-    /// rather than at the end of it.
-    ///
-    /// It used to be the last thing in `benchControls`, inside the scroll view.
-    /// With scroll indicators hidden and the takes shelf directly underneath,
-    /// an engine whose tag list ran to three rows pushed it past the fold and
-    /// it read as simply absent — which is exactly what happened on dia2.
+    /// The Generate row — its own section, between TAGS and TAKES.
     @ViewBuilder
     var actBar: some View {
         // ── ACT zone (no label per spec) ─────────────────────────────────────
