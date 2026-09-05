@@ -451,7 +451,7 @@ struct ServerSettings: View {
     /// `VoiceSidebarView.voiceList` uses.
     private var defaultVoiceLibrary: [VoiceMeta] {
         _ = model.voicesVersion
-        return model.voices.list()
+        return model.voiceList
     }
 
 }

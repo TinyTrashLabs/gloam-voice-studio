@@ -135,7 +135,7 @@ struct StudioView: View {
             // Read voicesVersion so a saved transcript re-derives capabilities
             // (and re-lights the engine chips) without reselecting the voice.
             let _ = model.voicesVersion
-            let caps = model.voices.capabilities(slug)
+            let caps = model.voiceCapabilities(slug)
             let renderable = caps.supports(model.backend)
             // What can SPEAK this voice, which is not what the pack contains.
             // `engines/` ids answer a different question: they include ids this
@@ -620,7 +620,7 @@ struct StudioView: View {
         if !model.backend.controls.presetSpeakers.isEmpty
             || model.backend.controls.voiceClone != .none {
             zoneLabel("VOICE")
-            let voices = model.voices.list()
+            let voices = model.voiceList
             // Custom popover dropdown (not a native Menu): AppKit menus flatten
             // custom SwiftUI views, so VoiceAvatarView collapsed to a bare monogram
             // and names dropped. A popover renders full SwiftUI, avatars included.
@@ -684,7 +684,7 @@ struct StudioView: View {
                 return "Pick a voice in the sidebar."
             }
             let _ = model.voicesVersion
-            guard !model.voices.capabilities(slug).supports(model.backend) else { return nil }
+            guard !model.voiceCapabilities(slug).supports(model.backend) else { return nil }
             let name = (try? model.voices.meta(slug).name) ?? slug
             return "\(model.backend.rawValue) can't speak “\(name)” — switch engine, "
                 + "or pick a voice it can render."
@@ -854,7 +854,7 @@ struct StudioView: View {
         // This popover picks the voice the CURRENT backend will speak with, so
         // (unlike the sidebar, where selection also means editing) rows the
         // backend can't render are disabled outright.
-        let renderable = model.voices.capabilities(voice.slug).supports(model.backend)
+        let renderable = model.voiceCapabilities(voice.slug).supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)

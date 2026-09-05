@@ -192,7 +192,7 @@ private struct LineRow: View {
                 get: { line.voiceSlug ?? "" },
                 set: { v in script.update(line.id) { $0.voiceSlug = v.isEmpty ? nil : v } })) {
                 Text("Session voice").tag("")
-                ForEach(model.voices.list(), id: \.slug) {
+                ForEach(model.voiceList, id: \.slug) {
                     Text($0.name).tag($0.slug)
                 }
             }

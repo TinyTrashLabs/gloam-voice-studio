@@ -88,7 +88,7 @@ struct ChatView: View {
         VStack(spacing: 10) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 34)).foregroundStyle(Brand.fgFaint)
-            if model.voices.list().isEmpty {
+            if model.voiceList.isEmpty {
                 // No voices anywhere yet — the sidebar's empty state would say
                 // the same thing off to the left where it's easy to miss, so
                 // offer the same three ways in right where the user is looking.

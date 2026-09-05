@@ -41,7 +41,7 @@ struct VoiceCatalogView: View {
             Divider().opacity(0.2)
 
             // Voice list
-            let installedSlugs = Set(model.voices.list().map(\.slug))
+            let installedSlugs = Set(model.voiceList.map(\.slug))
             List(filteredVoices) { voice in
                 catalogRow(voice, installedSlugs: installedSlugs)
             }

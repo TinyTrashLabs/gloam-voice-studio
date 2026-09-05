@@ -370,6 +370,63 @@ final class AppModel {
     var generationError: String?
     var voicesVersion = 0   // bump to refresh voice lists after library mutations
 
+    /// The voice library as the UI reads it, re-read from disk once per
+    /// mutation instead of once per view body.
+    ///
+    /// `VoiceLibrary.list()` opens and JSON-decodes every voice's meta.json,
+    /// and it used to be called straight from view bodies — twice in
+    /// `DialogueView.speakerCard` alone. SwiftUI evaluates bodies per frame
+    /// while a list scrolls, so that put a directory walk and N JSON decodes
+    /// on the main thread per frame: a `sample` of the app taken mid-scroll
+    /// spent about a third of the main thread inside this call and its
+    /// syscalls, which is what made scrolling stutter while a Dia2 pass was
+    /// rendering. Nothing about the answer changes between mutations, so it
+    /// is cached and `voicesVersion` invalidates it.
+    ///
+    /// `@ObservationIgnored` on the storage matters: filling the cache from
+    /// inside a getter that SwiftUI is calling would otherwise be a mutation
+    /// during view update. The dependency SwiftUI needs is `voicesVersion`,
+    /// which is read below and is observed.
+    var voiceList: [VoiceMeta] {
+        if let cached = voiceListCache, cached.version == voicesVersion { return cached.metas }
+        let metas = voices.list()
+        voiceListCache = (voicesVersion, metas)
+        return metas
+    }
+    @ObservationIgnored private var voiceListCache: (version: Int, metas: [VoiceMeta])?
+
+    /// Slugs still owned by the preset seeder — the sidebar's "Bundled"
+    /// section. Cached for the same reason and by the same signal:
+    /// `PresetVoiceSeeder.isBundled` calls `VoiceLibrary.entry`, which walks
+    /// each voice's engines/ directory, and the sidebar asked it once per
+    /// voice per frame.
+    var bundledVoiceSlugs: Set<String> {
+        if let cached = bundledCache, cached.version == voicesVersion { return cached.slugs }
+        let slugs = Set(voiceList.filter { PresetVoiceSeeder.isBundled($0, in: voices) }
+            .map(\.slug))
+        bundledCache = (voicesVersion, slugs)
+        return slugs
+    }
+    @ObservationIgnored private var bundledCache: (version: Int, slugs: Set<String>)?
+
+    /// What a voice can render, cached per library mutation.
+    ///
+    /// `VoiceLibrary.capabilities` is documented as "cheap filesystem checks",
+    /// which it is — once. The sidebar asks it per row, and the bench per
+    /// voice in the picker, so at 60fps those cheap checks become a steady
+    /// stream of `open`/`getattrlistbulk` on the main thread.
+    func voiceCapabilities(_ slug: String) -> VoiceCapabilities {
+        if capabilityCache.version != voicesVersion {
+            capabilityCache = (voicesVersion, [:])
+        }
+        if let hit = capabilityCache.entries[slug] { return hit }
+        let caps = voices.capabilities(slug)
+        capabilityCache.entries[slug] = caps
+        return caps
+    }
+    @ObservationIgnored
+    private var capabilityCache: (version: Int, entries: [String: VoiceCapabilities]) = (-1, [:])
+
     // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
     // gated per backend by ControlSurface.knobs). Initial values == knobDefaults
     // (the Qwen model's own generation defaults), so a fresh app and the Reset

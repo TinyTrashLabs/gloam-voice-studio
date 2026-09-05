@@ -185,6 +185,9 @@ struct VoiceEditorForm: View {
             do {
                 try model.voices.saveAvatar(slug, pngData: png)
                 avatarVersion += 1
+                // An avatar is what makes a bundled preset the user's, so the
+                // sidebar's grouping has to be re-derived, not just the image.
+                model.voicesVersion += 1
             } catch { self.error = model.describeAny(error) }
         }
     }

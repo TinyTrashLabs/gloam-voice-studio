@@ -103,7 +103,7 @@ struct ChatInspectorView: View {
             // Engines gate on the CONVERSATION's voice pack: a preset engine
             // without a baked rendition for this voice would speak as a house
             // voice, not the character — disable it and say why.
-            let voiceCaps = model.selectedVoiceSlug.map { model.voices.capabilities($0) }
+            let voiceCaps = model.selectedVoiceSlug.map { model.voiceCapabilities($0) }
             Picker("", selection: $appModel.chatTTSBackend) {
                 ForEach(Self.chatVoiceBackends, id: \.self) { backend in
                     let enoughRAM = model.hasSufficientRAM(for: backend)

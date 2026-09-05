@@ -122,7 +122,19 @@ final class DialogueComposer {
 
     /// How many passes this will take, where the seams fall, and how long each
     /// pass runs — shown before generating, because after is too late.
-    var report: SceneReport { DialoguePlanner.report(for: lines) }
+    ///
+    /// Cached against the turns it was computed from. The pass plan is read by
+    /// the plan strip AND once per turn row (to draw the seam), so on a long
+    /// generated script an uncached property re-planned the whole script for
+    /// every row of every frame — quadratic work on the main thread, which is
+    /// what made scrolling a scripted episode stutter.
+    var report: SceneReport {
+        if let cached = reportCache, cached.turns == turns { return cached.report }
+        let fresh = DialoguePlanner.report(for: lines)
+        reportCache = (turns, fresh)
+        return fresh
+    }
+    @ObservationIgnored private var reportCache: (turns: [Turn], report: SceneReport)?
 
     // MARK: voices
 
@@ -221,6 +233,15 @@ final class DialogueComposer {
         }
 
         let scenes = DialoguePlanner.scenes(for: script)
+        // Said before the render, not after. Each pass re-conditions from the
+        // prefixes; with no prefixes there is nothing to re-condition FROM, so
+        // every pass invents its speakers afresh and the voices audibly change
+        // at each seam. That looks like a bug and is not one, so name it.
+        if scenes.count > 1, !pass.contains(where: { $0 != nil }) {
+            notes.append("No conditioning clips, so each of the \(scenes.count) passes invents "
+                         + "its own two voices — they will change at every seam. Pick a voice "
+                         + "for each speaker to keep them the same throughout.")
+        }
         let tags = Set((try? await app.engine.nonverbalTags(backend: .dia2)) ?? [])
         let rate = BackendID.dia2.spec.defaultSampleRate
         var samples: [Float] = []
@@ -245,7 +266,14 @@ final class DialogueComposer {
                 let chunk = try await app.engine.synthesizeDialogue(
                     backend: .dia2,
                     request: ProviderDialogueRequest(request, script: text, prefixes: pass))
-                samples.append(contentsOf: chunk.samples)
+                // Level EACH pass, not the finished join. Passes are separate
+                // generations and come out at their own levels; normalising
+                // once at the end applies a single gain to all of them, so the
+                // differences survive intact and the take gets audibly louder
+                // and quieter at every seam. Levelling per pass to the app's
+                // own loudness standard is what makes the seam a cut rather
+                // than a jump.
+                samples.append(contentsOf: Loudness.leveled(chunk.samples, sampleRate: rate))
             }
         } catch {
             self.error = app.describeAny(error)
@@ -254,7 +282,10 @@ final class DialogueComposer {
         }
 
         let wall = Date().timeIntervalSince(started)
-        let levelled = AudioAssembler.normalizePeak(floats: samples)
+        // Already at the standard, pass by pass (above). A peak normalise here
+        // would undo that work in the one case it matters: a single loud
+        // transient in one pass would pull the whole take down around it.
+        let levelled = samples
         takeWAV = WAVEncoder.encode(pcm16: PCM16.data(from: levelled), sampleRate: rate)
         takeSeconds = Double(levelled.count) / Double(rate)
         takeWallSeconds = wall

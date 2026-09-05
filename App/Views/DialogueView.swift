@@ -184,7 +184,7 @@ struct DialogueView: View {
     /// with. The alignment state is a first-class row, not a tooltip.
     @ViewBuilder
     private func speakerCard(_ speaker: Int) -> some View {
-        let voices = model.voices.list()
+        let voices = model.voiceList
         let slug = composer.voices[speaker - 1]
         let selected = slug.flatMap { s in voices.first { $0.slug == s } }
         GroupBox {
@@ -351,6 +351,9 @@ struct DialogueView: View {
     @ViewBuilder
     private var turnList: some View {
         @Bindable var composer = model.dialogue
+        // Read once, not once per row: `report` plans the whole script, and
+        // asking for it inside the loop made drawing N turns cost N plans.
+        let seams = Set(composer.report.splitAfterLines)
         // A plain stack with explicit move buttons rather than a `List` with
         // `onMove`: a List nested inside this ScrollView gets its own scroller
         // and fights the page's. Reordering is rare enough to be a button.
@@ -404,7 +407,7 @@ struct DialogueView: View {
                 }
                 // A seam lands after this turn — the point where the model
                 // re-conditions and the voices reset.
-                if composer.report.splitAfterLines.contains(index) {
+                if seams.contains(index) {
                     HStack(spacing: 6) {
                         Rectangle().fill(Brand.violet.opacity(0.5)).frame(height: 1)
                         Text("PASS BREAK")

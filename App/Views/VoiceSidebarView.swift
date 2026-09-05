@@ -182,7 +182,7 @@ struct VoiceSidebarView: View {
         // (source audio and/or engines/<id>/ renditions). Unrenderable rows
         // stay selectable (editing, persona) but dim and say what they DO work
         // on, so a supertonic-only pack isn't mistaken for broken.
-        let caps = model.voices.capabilities(voice.slug)
+        let caps = model.voiceCapabilities(voice.slug)
         let renderable = caps.supports(model.backend)
         // Hover/selection drives EMPHASIS only, never presence: the controls
         // are always laid out (an on-hover insert made the row's width jump and
@@ -329,10 +329,7 @@ struct VoiceSidebarView: View {
             .help("Permanently delete this voice")
     }
 
-    private var voiceList: [VoiceMeta] {
-        _ = model.voicesVersion
-        return model.voices.list()
-    }
+    private var voiceList: [VoiceMeta] { model.voiceList }
 
     private typealias VoiceGroup = (base: VoiceMeta, variants: [VoiceMeta])
 
@@ -365,8 +362,11 @@ struct VoiceSidebarView: View {
         }
         // An acted variant is an edit too: a preset that has grown one is the
         // user's, whatever its own meta.json says.
+        // Asked of a cached set rather than of the filesystem: this runs on
+        // every SwiftUI update, and `isBundled` walks the pack's directories.
+        let bundledByLibrary = model.bundledVoiceSlugs
         let bundled = groups.filter {
-            $0.variants.isEmpty && PresetVoiceSeeder.isBundled($0.base, in: model.voices)
+            $0.variants.isEmpty && bundledByLibrary.contains($0.base.slug)
         }
         let bundledSlugs = Set(bundled.map(\.base.slug))
         return (groups.filter { !bundledSlugs.contains($0.base.slug) }, bundled)

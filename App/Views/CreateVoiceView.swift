@@ -323,7 +323,11 @@ struct CreateVoiceView: View {
             defer { url.stopAccessingSecurityScopedResource() }
             guard let raw = try? Data(contentsOf: url),
                   let png = AvatarProcessor.makeAvatarPNG(from: raw) else { return }
-            do { try model.voices.saveAvatar(slug, pngData: png); avatarVersion += 1 }
+            do {
+                try model.voices.saveAvatar(slug, pngData: png)
+                avatarVersion += 1
+                model.voicesVersion += 1   // an avatar moves a preset out of Bundled
+            }
             catch { editError = model.describeAny(error) }
         }
     }
