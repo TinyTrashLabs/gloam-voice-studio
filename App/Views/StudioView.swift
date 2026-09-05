@@ -160,7 +160,7 @@ struct StudioView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     VoiceAvatarView(slug: slug, name: meta.name,
-                                    avatarURL: model.voices.avatarURL(slug), size: 20)
+                                    avatarURL: model.voiceAvatarURL(slug), size: 20)
                     Text(meta.name).font(.callout.weight(.semibold))
                     Text("Works with:").font(.caption).foregroundStyle(Brand.fgFaint)
                     ForEach(orderedCompatible, id: \.self) { backend in
@@ -633,7 +633,7 @@ struct StudioView: View {
                         VoiceAvatarView(
                             slug: voice.slug,
                             name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
+                            avatarURL: model.voiceAvatarURL(voice.slug),
                             size: 22)
                         Text(voice.name)
                             .font(.system(.callout, design: .default))
@@ -826,7 +826,9 @@ struct StudioView: View {
                         .foregroundStyle(Brand.fgDim)
                         .padding(10)
                 }
-                ForEach(groupedVoices(voices), id: \.base.slug) { group in
+                // The cached grouping, not a fresh one: this popover's list is
+                // rebuilt on every redraw while it is open.
+                ForEach(model.groupedVoiceList, id: \.base.slug) { group in
                     voicePickerRow(group.base, isVariant: false, variantCount: group.variants.count)
                     if pickerExpandedBases.contains(group.base.slug) {
                         ForEach(group.variants, id: \.slug) { variant in
@@ -884,7 +886,7 @@ struct StudioView: View {
                     VoiceAvatarView(
                         slug: voice.slug,
                         name: voice.name,
-                        avatarURL: model.voices.avatarURL(voice.slug),
+                        avatarURL: model.voiceAvatarURL(voice.slug),
                         size: isVariant ? 18 : 22)
                     Text(voice.name).foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
                     if !renderable {

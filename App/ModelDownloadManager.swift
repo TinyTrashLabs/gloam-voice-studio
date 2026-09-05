@@ -2,6 +2,7 @@ import EngineKit
 import Foundation
 import HuggingFace
 import Observation
+import StudioKit
 
 @MainActor @Observable
 final class ModelDownloadManager {
@@ -214,9 +215,12 @@ final class ModelDownloadManager {
     /// explicit destination — flat repos (chatterbox/fish) work, subdir repos
     /// (qwen3) don't. Public resolve URLs need no auth for mlx-community repos.
     // `nonisolated` so the per-byte streaming loop below doesn't hop to the
-    // MainActor on every byte of a multi-GB file — only `onProgress`, called
-    // once per ~1MB flush, does that (it's typed `@MainActor` so the `await`
-    // there is the only actor hop in the hot loop).
+    // MainActor on every byte of a multi-GB file. `onProgress` still does —
+    // it writes observed state, so every call rebuilds the view tree — which
+    // is why it is THROTTLED rather than called per flush. A megabyte per
+    // report is ~100 reports a second on a fast connection, and 100 view-tree
+    // rebuilds a second saturates the main thread and makes everything in the
+    // app scroll badly while a model downloads.
     nonisolated private func downloadRepoSnapshot(
         repo: String, to dir: URL,
         onProgress: @MainActor @Sendable (Double) -> Void
@@ -241,6 +245,14 @@ final class ModelDownloadManager {
         // every reported fraction is clamped to 1.0 to keep progress sane.
         let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
         var done: Int64 = 0
+        var throttle = ProgressThrottle()
+        // Local, so the loop below reads as "report progress" and the rate
+        // limiting is not something a future edit can forget to apply.
+        func report(_ fraction: Double, force: Bool = false) async {
+            let clamped = min(1.0, fraction)
+            guard throttle.shouldReport(clamped, force: force) else { return }
+            await onProgress(clamped)
+        }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for file in files {
             try Task.checkCancellation()
@@ -251,7 +263,7 @@ final class ModelDownloadManager {
                    atPath: target.path)[.size] as? Int64,
                onDisk == size {
                 done += size
-                await onProgress(min(1.0, Double(done) / Double(total)))
+                await report(Double(done) / Double(total))
                 continue
             }
             guard let src = URL(
@@ -280,7 +292,7 @@ final class ModelDownloadManager {
                         try handle.write(contentsOf: buffer)
                         fileDone += Int64(buffer.count)
                         buffer.removeAll(keepingCapacity: true)
-                        await onProgress(min(1.0, Double(done + fileDone) / Double(total)))
+                        await report(Double(done + fileDone) / Double(total))
                         try Task.checkCancellation()
                     }
                 }
@@ -290,7 +302,9 @@ final class ModelDownloadManager {
                 try? FileManager.default.removeItem(at: target)
                 try FileManager.default.moveItem(at: tmp, to: target)
                 done += file.size ?? fileDone
-                await onProgress(min(1.0, Double(done) / Double(total)))
+                // Forced: a finished file is a real milestone, and the last
+                // one must land on 1.0 rather than stopping just short.
+                await report(Double(done) / Double(total), force: true)
             } catch {
                 try? handle.close()
                 throw error

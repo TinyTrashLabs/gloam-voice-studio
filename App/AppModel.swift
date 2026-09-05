@@ -427,6 +427,31 @@ final class AppModel {
     @ObservationIgnored
     private var capabilityCache: (version: Int, entries: [String: VoiceCapabilities]) = (-1, [:])
 
+    /// Voices with their acted variants folded under them — the shape both the
+    /// sidebar and the Direct pane's voice popover draw from. Grouping walks
+    /// the whole library, and it ran inside those view bodies, so it happened
+    /// on every redraw of a list that redraws constantly while scrolling.
+    var groupedVoiceList: [(base: VoiceMeta, variants: [VoiceMeta])] {
+        if let cached = groupedCache, cached.version == voicesVersion { return cached.groups }
+        let groups = groupedVoices(voiceList)
+        groupedCache = (voicesVersion, groups)
+        return groups
+    }
+    @ObservationIgnored
+    private var groupedCache: (version: Int, groups: [(base: VoiceMeta, variants: [VoiceMeta])])?
+
+    /// A voice's avatar, if it has one. One `stat` per row per redraw
+    /// otherwise, and the sidebar has a row per voice.
+    func voiceAvatarURL(_ slug: String) -> URL? {
+        if avatarCache.version != voicesVersion { avatarCache = (voicesVersion, [:]) }
+        if let hit = avatarCache.entries[slug] { return hit }
+        let url = voices.avatarURL(slug)
+        avatarCache.entries[slug] = .some(url)
+        return url
+    }
+    @ObservationIgnored
+    private var avatarCache: (version: Int, entries: [String: URL?]) = (-1, [:])
+
     // Manual delivery knobs (bound by the Direct pane's Advanced disclosure;
     // gated per backend by ControlSurface.knobs). Initial values == knobDefaults
     // (the Qwen model's own generation defaults), so a fresh app and the Reset

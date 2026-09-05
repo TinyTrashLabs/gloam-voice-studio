@@ -300,10 +300,10 @@ struct CreateVoiceView: View {
             HStack(spacing: 14) {
                 let _ = avatarVersion
                 VoiceAvatarView(slug: slug, name: editName,
-                                avatarURL: model.voices.avatarURL(slug), size: 64)
+                                avatarURL: model.voiceAvatarURL(slug), size: 64)
                 VStack(alignment: .leading, spacing: 6) {
                     Button("Upload Photo…") { avatarImporter = true }
-                    if model.voices.avatarURL(slug) != nil {
+                    if model.voiceAvatarURL(slug) != nil {
                         Button("Remove") {
                             do { try model.voices.removeAvatar(slug); avatarVersion += 1 }
                             catch { editError = model.describeAny(error) }

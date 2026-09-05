@@ -203,7 +203,7 @@ struct DialogueView: View {
                     HStack(spacing: 6) {
                         if let voice = selected {
                             VoiceAvatarView(slug: voice.slug, name: voice.name,
-                                            avatarURL: model.voices.avatarURL(voice.slug),
+                                            avatarURL: model.voiceAvatarURL(voice.slug),
                                             size: 22)
                             Text(voice.name).foregroundStyle(Brand.fg)
                         } else {
@@ -306,7 +306,7 @@ struct DialogueView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 VoiceAvatarView(slug: voice.slug, name: voice.name,
-                                                avatarURL: model.voices.avatarURL(voice.slug),
+                                                avatarURL: model.voiceAvatarURL(voice.slug),
                                                 size: 22)
                                 Text(voice.name).foregroundStyle(Brand.fg)
                                 Spacer(minLength: 12)

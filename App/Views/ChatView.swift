@@ -275,7 +275,7 @@ struct ChatView: View {
         return HStack(alignment: .top, spacing: 10) {
             if message.role == "assistant" {
                 VoiceAvatarView(slug: voice.slug, name: voice.name,
-                                avatarURL: model.voices.avatarURL(voice.slug), size: 26)
+                                avatarURL: model.voiceAvatarURL(voice.slug), size: 26)
             } else {
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 22)).foregroundStyle(Brand.fgFaint)

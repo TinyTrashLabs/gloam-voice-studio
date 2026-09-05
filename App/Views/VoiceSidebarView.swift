@@ -205,7 +205,7 @@ struct VoiceSidebarView: View {
                 Color.clear.frame(width: 12)
             }
             VoiceAvatarView(slug: voice.slug, name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
+                            avatarURL: model.voiceAvatarURL(voice.slug),
                             size: isVariant ? 20 : 26)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
@@ -351,7 +351,7 @@ struct VoiceSidebarView: View {
     /// search filter: a group stays when its base or any variant matches by
     /// name or slug (case-insensitive substring).
     private var filteredShelves: (own: [VoiceGroup], bundled: [VoiceGroup]) {
-        var groups = groupedVoices(voiceList)
+        var groups = model.groupedVoiceList
         let query = searchText.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty {
             func matches(_ v: VoiceMeta) -> Bool {

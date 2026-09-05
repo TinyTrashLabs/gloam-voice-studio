@@ -43,13 +43,13 @@ struct VoiceEditorForm: View {
                 VoiceAvatarView(
                     slug: editingSlug ?? "",
                     name: name,
-                    avatarURL: editingSlug.flatMap { model.voices.avatarURL($0) },
+                    avatarURL: editingSlug.flatMap { model.voiceAvatarURL($0) },
                     size: 72)
                 VStack(alignment: .leading, spacing: 6) {
                     if editingSlug != nil {
                         Button("Upload Photo…") { avatarImporterPresented = true }
                             .accessibilityIdentifier("avatar-upload")
-                        if let slug = editingSlug, model.voices.avatarURL(slug) != nil {
+                        if let slug = editingSlug, model.voiceAvatarURL(slug) != nil {
                             Button("Remove") {
                                 do {
                                     try model.voices.removeAvatar(slug)
