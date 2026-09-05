@@ -23,10 +23,10 @@ final class NonverbalTagCatalogTests: XCTestCase {
     /// parenthesised ones are sounds a script may contain.
     func testOnlyParenthesisedTokensAreTags() throws {
         try write("""
-        {"(laughs)": 3, "(clears throat)": 4, "[S1]": 1, "<pad>": 0, "()": 9}
+        {"(laughs)": 3, "(sighs)": 4, "[S1]": 1, "<pad>": 0, "()": 9}
         """)
         XCTAssertEqual(NonverbalTagCatalog.parenthesised(inModelDirectory: dir),
-                       ["(clears throat)", "(laughs)"])
+                       ["(laughs)", "(sighs)"])
     }
 
     /// A model that isn't downloaded yet must not produce an empty picker
@@ -39,5 +39,23 @@ final class NonverbalTagCatalogTests: XCTestCase {
     func testMalformedJSONIsEmptyRatherThanACrash() throws {
         try write("{not json")
         XCTAssertTrue(NonverbalTagCatalog.parenthesised(inModelDirectory: dir).isEmpty)
+    }
+}
+
+extension NonverbalTagCatalogTests {
+    /// A two-word tag is a real token in the vocabulary and still unusable,
+    /// because the script parser splits on whitespace before encoding. Offering
+    /// it would mean offering to have the words read out loud.
+    func testMultiWordTagsAreExcludedBecauseTheParserSplitsThem() throws {
+        try write("""
+        {"(laughs)": 1, "(clears throat)": 2, "(audience laughs)": 3, "(sighs)": 4}
+        """)
+        XCTAssertEqual(NonverbalTagCatalog.parenthesised(inModelDirectory: dir),
+                       ["(laughs)", "(sighs)"])
+    }
+
+    func testUsableInAScriptNamesTheRule() {
+        XCTAssertTrue(NonverbalTagCatalog.usableInAScript("(laughs)"))
+        XCTAssertFalse(NonverbalTagCatalog.usableInAScript("(clears throat)"))
     }
 }

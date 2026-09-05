@@ -23,6 +23,29 @@ public enum NonverbalTagCatalog {
         else { return [] }
         return object.keys
             .filter { $0.hasPrefix("(") && $0.hasSuffix(")") && $0.count > 2 }
+            .filter { !$0.contains(" ") }   // see `usableInAScript` below
             .sorted()
     }
+
+    /// Why a tag containing a space is left out of the list above.
+    ///
+    /// Dia2's script parser splits each line on whitespace and encodes word by
+    /// word, so a two-word tag is torn in half before the tokenizer ever sees
+    /// it. Verified against the reference implementation's own tokenizer:
+    ///
+    ///     "(clears throat)" -> [49156]                    one token
+    ///     "(clears"         -> [24, 1668, 954]  ( cle ars
+    ///     "throat)"         -> [373, 8331, 25]  th roat )
+    ///
+    /// The tag is genuinely in the vocabulary — it is the SPLIT that breaks it,
+    /// and the reference (`parse_script`, `segment.split()`) splits the same
+    /// way, so this is not a porting mistake to fix on our side alone. Those
+    /// six subword pieces are ordinary text, which Dia2 reads out loud: offering
+    /// "(clears throat)" as a chip is offering to have "clears throat" spoken.
+    ///
+    /// Fixing it properly means matching added tokens BEFORE splitting, in the
+    /// parser, in the vendored fork. Until then these are excluded rather than
+    /// offered, because a chip that cannot work is worse than one that is
+    /// missing.
+    public static func usableInAScript(_ tag: String) -> Bool { !tag.contains(" ") }
 }
