@@ -4,6 +4,7 @@ import Speech
 import MLX
 import MLXFFT
 import StudioKit
+import SpeechKit
 
 // Times a Dia2 render of one script through the SAME path the app uses, so
 // "is MLX faster than the CPU reference" is a measurement and not a belief.
@@ -18,8 +19,29 @@ if CommandLine.arguments.dropFirst().first == "dia2-time" {
     print(String(format: "load: %.1fs", Date().timeIntervalSince(loadStart)))
     var config = Dia2GenerationConfig()
     config.cfgScale = cfg
+    // Pin the speaker when DIA2_PREFIX names a WAV. Without a prefix Dia2
+    // invents a voice per run, so two renders differ in speaker AND in
+    // whatever is under test -- which makes an A/B unreadable.
+    var prefixes: (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?) = (nil, nil)
+    if let path = ProcessInfo.processInfo.environment["DIA2_PREFIX"] {
+        let url = URL(fileURLWithPath: path)
+        // Whisper, not AppleTranscriber: only Whisper reports word-level
+        // timings, and a prefix without them conditions nothing.
+        let whisper = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Caches/Models/whisper/openai_whisper-small")
+        let aligner = WhisperWordAligner(transcriber: WhisperTranscriber(modelFolder: whisper))
+        let aligned = try await aligner.align(audioURL: url, transcript: nil)
+        let samples = try RefAudioCombiner.decodeMono(try Data(contentsOf: url),
+                                                     sampleRate: Double(model.sampleRate))
+        prefixes.speaker1 = Dia2PrefixInput(
+            samples: samples,
+            words: aligned.map { Dia2Word(text: $0.w, start: $0.start, end: $0.end) })
+        print("prefix: \(aligned.count) words, "
+              + String(format: "%.2fs", Double(samples.count) / Double(model.sampleRate)))
+    }
     let start = Date()
-    let (samples, words) = try await model.generateDialogue(script: [line], config: config)
+    let (samples, words) = try await model.generateDialogue(
+        script: [line], prefixes: prefixes, config: config)
     let wall = Date().timeIntervalSince(start)
     let seconds = Double(samples.count) / Double(model.sampleRate)
     print(String(format: "cfg %.1f | audio %.2fs | wall %.2fs | %.2fx realtime",
