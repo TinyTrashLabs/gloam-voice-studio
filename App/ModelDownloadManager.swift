@@ -270,27 +270,54 @@ final class ModelDownloadManager {
                 string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let (bytes, response) = try await URLSession.shared.bytes(from: src)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                throw DownloadError(message: "\(file.path): HTTP \(http.statusCode)")
-            }
             // Stream to a .part file so progress moves within a single large
-            // file instead of jumping only when each file completes. Any
-            // leftover .part from a previous attempt of this same file is
-            // discarded — we always restart the in-flight file from scratch.
+            // file instead of jumping only when each file completes -- and so
+            // an interrupted file can be RESUMED.
+            //
+            // It used to be deleted and restarted from zero. A 4GB shard that
+            // dropped at 3GB threw those 3GB away and asked for them again,
+            // which on a slow link or a nearly-full disk is the difference
+            // between "retry" and "give up".
             let tmp = target.appendingPathExtension("part")
-            try? FileManager.default.removeItem(at: tmp)
-            FileManager.default.createFile(atPath: tmp.path, contents: nil)
+            let resumeFrom = (try? FileManager.default.attributesOfItem(
+                atPath: tmp.path)[.size] as? Int64) ?? 0
+            var request = URLRequest(url: src)
+            // Only ask to resume when the partial is a genuine prefix: shorter
+            // than the file we are expecting. A .part at or past the expected
+            // size is corrupt or stale, so it is discarded rather than trusted.
+            let canResume = resumeFrom > 0 && (file.size.map { resumeFrom < $0 } ?? true)
+            if canResume {
+                request.setValue("bytes=\(resumeFrom)-", forHTTPHeaderField: "Range")
+            }
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+            guard status == 200 || status == 206 else {
+                throw DownloadError(message: "\(file.path): HTTP \(status)")
+            }
+            // 206 means the server honoured the range and is sending the
+            // remainder; 200 means it ignored it and is sending the whole
+            // file, so whatever is on disk has to go.
+            let appending = status == 206 && canResume
+            if !appending {
+                try? FileManager.default.removeItem(at: tmp)
+                FileManager.default.createFile(atPath: tmp.path, contents: nil)
+            }
             let handle = try FileHandle(forWritingTo: tmp)
             do {
                 var buffer = Data()
                 buffer.reserveCapacity(1 << 20)
-                var fileDone: Int64 = 0
+                var fileDone: Int64 = appending ? resumeFrom : 0
+                if appending {
+                    // Append rather than overwrite; a resumed body starts at
+                    // the offset we asked for, not at zero.
+                    try handle.seekToEnd()
+                    await report(Double(done + fileDone) / Double(total))
+                }
                 for try await byte in bytes {
                     buffer.append(byte)
                     if buffer.count >= 1 << 20 {
                         try handle.write(contentsOf: buffer)
-                        fileDone += Int64(buffer.count)
+                        fileDone += Int64(buffer.count)   // includes the resumed prefix
                         buffer.removeAll(keepingCapacity: true)
                         await report(Double(done + fileDone) / Double(total))
                         try Task.checkCancellation()
