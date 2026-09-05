@@ -5,6 +5,61 @@ import MLX
 import MLXFFT
 import StudioKit
 
+// Times a Dia2 render of one script through the SAME path the app uses, so
+// "is MLX faster than the CPU reference" is a measurement and not a belief.
+if CommandLine.arguments.dropFirst().first == "dia2-time" {
+    let dir = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Group Containers/UT233385J9.fm.gloam/Models/dia2@2b-8bit")
+    let line = CommandLine.arguments.dropFirst(2).first
+        ?? "[S1] (applause) This article discusses the movement called Birds Aren't Real."
+    let cfg = Float(CommandLine.arguments.dropFirst(3).first ?? "2.0") ?? 2.0
+    let loadStart = Date()
+    let model = try await Dia2Model.load(from: dir)
+    print(String(format: "load: %.1fs", Date().timeIntervalSince(loadStart)))
+    var config = Dia2GenerationConfig()
+    config.cfgScale = cfg
+    let start = Date()
+    let (samples, words) = try await model.generateDialogue(script: [line], config: config)
+    let wall = Date().timeIntervalSince(start)
+    let seconds = Double(samples.count) / Double(model.sampleRate)
+    print(String(format: "cfg %.1f | audio %.2fs | wall %.2fs | %.2fx realtime",
+                 cfg, seconds, wall, wall / max(seconds, 0.001)))
+    print("words: \(words.map(\.0).joined(separator: " "))")
+    if let out = ProcessInfo.processInfo.environment["DIA2_OUT"] {
+        let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples),
+                                    sampleRate: model.sampleRate)
+        try wav.write(to: URL(fileURLWithPath: out))
+        print("wrote \(out)")
+    }
+    exit(0)
+}
+
+
+import MLXAudioTTS
+
+// Encodes a few strings with the REAL Dia2 tokenizer and prints the ids, so a
+// claim about tag handling is a measurement rather than a reading of the code.
+if CommandLine.arguments.dropFirst().first == "dia2-tokens" {
+    let dir = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Group Containers/UT233385J9.fm.gloam/Models/dia2@2b-8bit")
+    let tokenizer = try await Dia2Tokenizer(modelFolder: dir)
+    let samples = [
+        "(applause)",
+        "(laughs)",
+        "[S1] (applause)",
+        "[S1] Hello",
+        "Real.",
+        "can't",
+    ]
+    for sample in samples {
+        print("\(sample.debugDescription) -> \(tokenizer.encode(sample))")
+    }
+    print("id(of:) (applause) = \(String(describing: tokenizer.id(of: "(applause)")))")
+    print("id(of:) (laughs)   = \(String(describing: tokenizer.id(of: "(laughs)")))")
+    exit(0)
+}
+
+
 // TEMPORARY debug harness — round-trips a synthetic signal through
 // LuxISTFT (forward MLXFFT.rfft, trusted, → LuxISTFT reconstruction, under
 // test) to isolate whether the ISTFT+overlap-add math itself is correct,
