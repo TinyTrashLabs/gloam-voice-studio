@@ -57,6 +57,88 @@ if CommandLine.arguments.dropFirst().first == "dia2-time" {
 }
 
 
+// Renders the SAME single-vs-split experiment as the Python reference driver,
+// through OUR engine path, so "does our port diverge from the reference" is a
+// measurement. Reads the shared turns JSON (identical text on both sides),
+// builds Benson(S1)/Midge(S2) prefixes from the pack's CACHED alignment.json
+// (no whisper — same timings the reference was fed), splits with the real
+// DialoguePlanner, and writes <prefix>_single/_split/_passN.wav.
+if CommandLine.arguments.dropFirst().first == "dia2-compare" {
+    let a = Array(CommandLine.arguments.dropFirst(2))
+    guard a.count >= 3 else { die("dia2-compare <turns.json> <outDir> <namePrefix>") }
+    let turnsURL = URL(fileURLWithPath: a[0])
+    let outDir = URL(fileURLWithPath: a[1])
+    let namePrefix = a[2]
+    struct T: Codable { let speaker: Int; let text: String }
+    let turns = try JSONDecoder().decode([T].self, from: Data(contentsOf: turnsURL))
+
+    let container = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Group Containers/UT233385J9.fm.gloam")
+    let modelDir = container.appendingPathComponent("Models/dia2@2b-8bit")
+    let voices = VoiceLibrary(directory: container.appendingPathComponent("Voices"))
+
+    let model = try await Dia2Model.load(from: modelDir)
+    let rate = Double(model.sampleRate)
+
+    func prefixInput(_ slug: String) throws -> Dia2PrefixInput {
+        guard let words = Dia2Alignment.cached(slug, in: voices), !words.isEmpty else {
+            die("no cached alignment.json for \(slug)")
+        }
+        guard let refURL = try Dia2Alignment.referenceURL(slug, in: voices) else {
+            die("no reference audio for \(slug)")
+        }
+        let samples = try RefAudioCombiner.decodeMono(try Data(contentsOf: refURL), sampleRate: rate)
+        print("prefix \(slug): \(words.count)w \(String(format: "%.2fs", Double(samples.count) / rate))")
+        return Dia2PrefixInput(
+            samples: samples,
+            words: words.map { Dia2Word(text: $0.w, start: $0.start, end: $0.end) })
+    }
+    let prefixes = (speaker1: Optional(try prefixInput("benson")),
+                    speaker2: Optional(try prefixInput("midge")))
+
+    // Match the reference driver: cfg 6, text 0.6/50, audio 0.8/50, maxPadding 6.
+    var config = Dia2GenerationConfig()
+    config.cfgScale = 6
+    config.maxPadding = 6
+
+    func tagged(_ idxs: [Int]) -> [String] {
+        idxs.map { "[S\(turns[$0].speaker)] \(turns[$0].text)" }
+    }
+    @discardableResult
+    func render(_ script: [String], _ name: String) async throws -> [Float] {
+        let started = Date()
+        let (samples, _) = try await model.generateDialogue(
+            script: script, prefixes: prefixes, config: config)
+        let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: model.sampleRate)
+        try wav.write(to: outDir.appendingPathComponent(name))
+        print(String(format: "%@ : audio %.2fs wall %.1fs", name,
+                     Double(samples.count) / rate, Date().timeIntervalSince(started)))
+        return samples
+    }
+
+    let lines = turns.enumerated().map {
+        DialogueLine(index: $0.offset, voiceSlug: nil, text: $0.element.text,
+                     speakerID: "S\($0.element.speaker)")
+    }
+    let scenes = DialoguePlanner.scenes(for: lines)
+    print("boundaries: \(scenes.map(\.lines)) opens: \(scenes.map { "S\(turns[$0.lines[0]].speaker)" })")
+
+    print("[single]")
+    try await render(tagged(Array(turns.indices)), "\(namePrefix)_single.wav")
+
+    print("[split]")
+    var joined: [Float] = []
+    for (k, sc) in scenes.enumerated() {
+        let s = try await render(tagged(sc.lines), "\(namePrefix)_pass\(k + 1).wav")
+        joined.append(contentsOf: s)
+    }
+    let splitWav = WAVEncoder.encode(pcm16: PCM16.data(from: joined), sampleRate: model.sampleRate)
+    try splitWav.write(to: outDir.appendingPathComponent("\(namePrefix)_split.wav"))
+    print(String(format: "%@_split joined %.2fs", namePrefix, Double(joined.count) / rate))
+    exit(0)
+}
+
+
 import MLXAudioTTS
 
 // Encodes a few strings with the REAL Dia2 tokenizer and prints the ids, so a

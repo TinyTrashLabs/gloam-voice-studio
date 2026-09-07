@@ -512,6 +512,7 @@ struct ConsoleLog: View {
 struct StorageSettings: View {
     @Environment(AppModel.self) private var model
     @State private var sizes: [(String, Int64)] = []
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
 
     var body: some View {
         @Bindable var model = model
@@ -521,6 +522,15 @@ struct StorageSettings: View {
                     value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
             }
             Button("Recalculate") { recalc() }
+            Section("Advanced") {
+                Toggle("Enable Lab (advanced audio comparison)", isOn: $labModeEnabled)
+                    .accessibilityIdentifier("lab-mode-toggle")
+                Text("Adds a Lab tab (⌘5) for developers — a comparison shelf that collects "
+                     + "clips from any source side by side, with timestamp marks, comments, and "
+                     + "verdicts an agent can read back. Off by default; turning it off hides the "
+                     + "tab without deleting anything.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Voice candidates") {
                 Stepper("Keep last \(model.foundryCandidateRetentionCap) candidates",
                         value: $model.foundryCandidateRetentionCap, in: 5...500, step: 5)

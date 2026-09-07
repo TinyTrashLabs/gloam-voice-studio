@@ -1,6 +1,7 @@
 import EngineKit
 import Foundation
 import Observation
+import OSLog
 import StudioKit
 
 /// Dialogue-mode state: the two speakers, their turns, the Dia2 controls, and
@@ -48,18 +49,66 @@ final class DialogueComposer {
     // repeated itself, and 3.0 collapsed into babble 30 seconds in. 6 held.
     // Each of those is a single observation, so treat the number as "6 works,
     // low values were seen to fail", not as a tuned optimum.
-    var cfgScale: Float = 6
-    var textTemperature: Float = 0.6
-    var textTopK: Int = 50
-    var audioTemperature: Float = 0.8
-    var audioTopK: Int = 50
+    private static let defaults = (
+        cfgScale: Float(6), textTemperature: Float(0.6), textTopK: 50,
+        audioTemperature: Float(0.8), audioTopK: 50, maxPadding: 6,
+        keepPrefixAudio: false)
+
+    var cfgScale: Float = DialogueComposer.defaults.cfgScale
+    var textTemperature: Float = DialogueComposer.defaults.textTemperature
+    var textTopK: Int = DialogueComposer.defaults.textTopK
+    var audioTemperature: Float = DialogueComposer.defaults.audioTemperature
+    var audioTopK: Int = DialogueComposer.defaults.audioTopK
     /// 6 is the reference's `StateMachine.max_padding`, not the checkpoint's
     /// `max_pad` of 8. Raising it to 8 stretched the same pass from 35s to 57s
     /// with 2-5s holes between turns; lowering it presses the delivery on.
-    var maxPadding: Int = 6
+    var maxPadding: Int = DialogueComposer.defaults.maxPadding
     /// Debug aid: prepends the conditioning clips to the take so you can hear
     /// exactly what the model was given. Never right for a shipped take.
-    var keepPrefixAudio = false
+    var keepPrefixAudio = DialogueComposer.defaults.keepPrefixAudio
+
+    func resetGenerationSettings() {
+        cfgScale = Self.defaults.cfgScale
+        textTemperature = Self.defaults.textTemperature
+        textTopK = Self.defaults.textTopK
+        audioTemperature = Self.defaults.audioTemperature
+        audioTopK = Self.defaults.audioTopK
+        maxPadding = Self.defaults.maxPadding
+        keepPrefixAudio = Self.defaults.keepPrefixAudio
+    }
+
+    /// What one pass actually produced. Kept per take so a bad pass can be
+    /// named after the fact — a pass that goes quiet is invisible in a joined
+    /// take, and that is exactly the failure worth catching.
+    struct PassReport: Identifiable {
+        let id = UUID()
+        let number: Int
+        let turns: Int
+        let words: Int
+        let seconds: Double
+        let wallSeconds: Double
+        /// Fraction of the pass below -50 dBFS, in 20ms windows.
+        let silentFraction: Double
+        /// Re-rolls it took to get this pass. 0 is the ordinary case.
+        var attempts: Int = 0
+        /// The draw this pass was rendered with, so it can be got back.
+        var seed: UInt64 = 0
+        /// A pass that is mostly silence did not say its lines.
+        static let degradedAbove = 0.5
+        var looksDegraded: Bool { silentFraction > Self.degradedAbove }
+        var summary: String {
+            String(format: "pass %d · %d turns, %d words · %.1fs audio in %.1fs · %.0f%% silent · seed %llu%@",
+                   number, turns, words, seconds, wallSeconds, silentFraction * 100, seed,
+                   attempts > 0 ? " (re-rolled \(attempts)x)" : "")
+        }
+    }
+
+    private(set) var passReports: [PassReport] = []
+
+    /// How many times this pass was re-rendered before it was kept.
+    /// 0 for the ordinary case.
+
+    static let log = Logger(subsystem: "fm.gloam.studio", category: "dialogue")
 
     // MARK: take
     var isGenerating = false
@@ -71,6 +120,18 @@ final class DialogueComposer {
     var takeWAV: Data?
     var takeSeconds: Double = 0
     var takeWallSeconds: Double = 0
+    /// The seed the last take was rendered with.
+    ///
+    /// Sampling is otherwise drawn from a process-wide RNG mlx-swift seeds
+    /// from the clock, so no two renders of one script are comparable and no
+    /// take can be got back. Recording it makes a take reproducible and lets a
+    /// single bad pass be re-rolled without disturbing the others.
+    private(set) var takeSeed: UInt64 = 0
+    /// A pass that collapses is re-rendered with a fresh draw, at most this
+    /// many times. Total collapse is rare, so this is a safety net rather than
+    /// a quality control -- it cannot see the far commoner failure, a pass that
+    /// says every word but drifts off the speaker's timbre.
+    private static let collapseRetries = 2
 
     unowned let app: AppModel
     /// Cached prefixes by slug, so re-picking a voice does not realign it.
@@ -216,6 +277,11 @@ final class DialogueComposer {
         }
 
         isGenerating = true
+        passReports = []
+        // One number reproduces the whole take; each pass derives its own draw
+        // from it, so re-rolling one pass leaves the others exactly as they
+        // were.
+        takeSeed = UInt64.random(in: .min ... .max)
         defer { isGenerating = false; progress = nil }
 
         // Prefixes must be indexed by SPEAKER, not by order of appearance: a
@@ -248,6 +314,10 @@ final class DialogueComposer {
         let started = Date()
 
         do {
+            let voiceList = voices.map { $0 ?? "none" }.joined(separator: "+")
+            let prefixList = pass.map { $0 == nil ? "none" : "\($0!.words.count)w" }
+                .joined(separator: "+")
+            Self.log.info("take starting: \(scenes.count) passes, \(script.count) turns, voices \(voiceList), prefixes \(prefixList), cfg \(self.cfgScale), padding \(self.maxPadding)")
             for (number, scene) in scenes.enumerated() {
                 progress = "Pass \(number + 1) of \(scenes.count)"
                 let sceneTurns = scene.lines.map {
@@ -259,13 +329,35 @@ final class DialogueComposer {
                     textTemperature: textTemperature, textTopK: textTopK,
                     audioTemperature: audioTemperature, audioTopK: audioTopK,
                     maxPadding: maxPadding, keepPrefixAudio: keepPrefixAudio)
+                let passStarted = Date()
                 let text = try DialoguePlanner.script(for: request, knownTags: tags)
-                // Must precede queuing work on `engine` (see
-                // TTSResidencyPolicy's deadlock-safety contract).
-                await app.ttsResidency.willUse(app.engine)
-                let chunk = try await app.engine.synthesizeDialogue(
-                    backend: .dia2,
-                    request: ProviderDialogueRequest(request, script: text, prefixes: pass))
+
+                // Re-roll a pass that collapsed. The draw is what changes, not
+                // the settings: a collapse is one bad sample path, and turning
+                // knobs to escape it silently renders the pass to a different
+                // specification than its neighbours.
+                var levelledChunk: [Float] = []
+                var silent = 1.0
+                var attempt = 0
+                var passSeed = DialogueSeed.pass(take: takeSeed, index: number)
+                while true {
+                    passSeed = DialogueSeed.pass(take: takeSeed, index: number, attempt: attempt)
+                    var seeded = request
+                    seeded.seed = passSeed
+                    // Must precede queuing work on `engine` (see
+                    // TTSResidencyPolicy's deadlock-safety contract).
+                    await app.ttsResidency.willUse(app.engine)
+                    let chunk = try await app.engine.synthesizeDialogue(
+                        backend: .dia2,
+                        request: ProviderDialogueRequest(seeded, script: text, prefixes: pass))
+                    levelledChunk = Loudness.leveled(chunk.samples, sampleRate: rate)
+                    silent = Loudness.silentFraction(levelledChunk, sampleRate: rate)
+                    guard silent > PassReport.degradedAbove, attempt < Self.collapseRetries
+                    else { break }
+                    attempt += 1
+                    Self.log.error("pass \(number + 1) came out \(Int(silent * 100))% silent — re-rolling (attempt \(attempt + 1))")
+                    progress = "Pass \(number + 1) of \(scenes.count) — re-rolling"
+                }
                 // Level EACH pass, not the finished join. Passes are separate
                 // generations and come out at their own levels; normalising
                 // once at the end applies a single gain to all of them, so the
@@ -273,7 +365,20 @@ final class DialogueComposer {
                 // and quieter at every seam. Levelling per pass to the app's
                 // own loudness standard is what makes the seam a cut rather
                 // than a jump.
-                samples.append(contentsOf: Loudness.leveled(chunk.samples, sampleRate: rate))
+                let report = PassReport(
+                    number: number + 1, turns: sceneTurns.count,
+                    words: sceneTurns.reduce(0) { $0 + $1.text.split(separator: " ").count },
+                    seconds: Double(levelledChunk.count) / Double(rate),
+                    wallSeconds: Date().timeIntervalSince(passStarted),
+                    silentFraction: silent,
+                    attempts: attempt, seed: passSeed)
+                passReports.append(report)
+                if report.looksDegraded {
+                    Self.log.error("\(report.summary) — mostly silent, the lines were not spoken")
+                } else {
+                    Self.log.info("\(report.summary)")
+                }
+                samples.append(contentsOf: levelledChunk)
             }
         } catch {
             self.error = app.describeAny(error)
@@ -294,6 +399,16 @@ final class DialogueComposer {
             notes.append("Rendered in \(scenes.count) passes. Each pass starts from the "
                          + "reference again, so the seams are where the voices reset.")
         }
+        // A pass that went quiet is invisible once the passes are joined, so
+        // name it rather than leaving it to be found by ear.
+        let degraded = passReports.filter(\.looksDegraded)
+        if !degraded.isEmpty {
+            let which = degraded.map { "\($0.number)" }.joined(separator: ", ")
+            notes.append("Pass \(which) came out mostly silent — those lines were not spoken. "
+                         + "This is a known bug in multi-pass renders; a script short enough to "
+                         + "fit one pass avoids it.")
+        }
+        Self.log.info("take finished: \(self.takeSeconds)s audio, \(wall)s wall, \(degraded.count) degraded pass(es)")
         await app.refreshEngineStatus()
     }
 }

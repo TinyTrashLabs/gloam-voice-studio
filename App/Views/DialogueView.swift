@@ -19,6 +19,8 @@ struct DialogueView: View {
     @State private var voiceSearch = ""
     @FocusState private var voiceSearchFocused: Bool
     @AppStorage("dialogueInspectorVisible") private var inspectorVisible = true
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
+    @State private var confirmingClear = false
 
     private var composer: DialogueComposer { model.dialogue }
 
@@ -26,6 +28,28 @@ struct DialogueView: View {
     /// `residentTTS` rather than `backend` because the question is what is in
     /// memory, not what a picker says.
     private var dia2IsResident: Bool { model.residentTTS == .dia2 }
+
+    /// Any turn actually has words — used to decide whether clearing needs a
+    /// confirmation.
+    private var scriptHasContent: Bool {
+        composer.turns.contains {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    /// Reset to the default two empty turns (S1, S2), the same shape a fresh
+    /// composer starts in.
+    private func clearScript() {
+        composer.replaceTurns(with: [.init(speaker: 1), .init(speaker: 2)])
+    }
+
+    /// A short label for a take sent to the Lab: the voices and take length, so
+    /// the clip is legible in a comparison of several dialogue passes.
+    private var dialogueClipLabel: String {
+        let voices = composer.voices.compactMap { $0 }.joined(separator: " + ")
+        let who = voices.isEmpty ? "Dialogue take" : voices
+        return String(format: "%@ · %.1fs", who, composer.takeSeconds)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -156,6 +180,23 @@ struct DialogueView: View {
                     }
                     .accessibilityIdentifier("dialogue-add-turn")
                     Spacer()
+                    // Reset the exchange to two empty turns. A confirmation only
+                    // when there's real writing to lose — clearing a blank
+                    // script needs no ceremony.
+                    Button(role: .destructive) {
+                        if scriptHasContent { confirmingClear = true } else { clearScript() }
+                    } label: {
+                        Label("Clear script", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("dialogue-clear-script")
+                    .help("Reset the conversation to two empty turns")
+                    .confirmationDialog("Clear the whole script?",
+                                        isPresented: $confirmingClear, titleVisibility: .visible) {
+                        Button("Clear script", role: .destructive) { clearScript() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This resets the conversation to two empty turns.")
+                    }
                 }
 
                 zoneLabel("PASSES")
@@ -495,7 +536,9 @@ struct DialogueView: View {
         if let wav = composer.takeWAV {
             GroupBox {
                 HStack(spacing: 12) {
-                    WaveformView(wavData: wav).frame(height: 44)
+                    SeekableWaveformView(wavData: wav, id: "dialogue", player: player)
+                        .frame(height: 44)
+                        .accessibilityIdentifier("dialogue-seek")
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(String(format: "%.2fs · wall %.1fs",
                                     composer.takeSeconds, composer.takeWallSeconds))
@@ -505,8 +548,8 @@ struct DialogueView: View {
                     }
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Brand.fgDim)
-                    Button(player.playingID == "dialogue" ? "Stop" : "Play") {
-                        player.toggle(id: "dialogue", data: wav)
+                    Button(player.playingID == "dialogue" ? "Pause" : "Play") {
+                        player.togglePlayback(id: "dialogue", data: wav)
                     }
                     .accessibilityIdentifier("dialogue-play")
                     Button("Export…") {
@@ -519,6 +562,13 @@ struct DialogueView: View {
                     }
                     .accessibilityIdentifier("dialogue-export")
                     .help("Export this take as a WAV file")
+                    // Advanced: drop this take into a Lab comparison. The take
+                    // WAV already carries its own header, so it ships as-is.
+                    if labModeEnabled {
+                        SendToLabMenu(label: dialogueClipLabel, source: .dialogue) {
+                            composer.takeWAV
+                        }
+                    }
                 }
                 .padding(6)
             }
@@ -534,7 +584,15 @@ struct DialogueView: View {
         @Bindable var composer = model.dialogue
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                zoneLabel("DIRECT")
+                HStack {
+                    zoneLabel("DIRECT")
+                    Spacer()
+                    Button("Reset to defaults") { composer.resetGenerationSettings() }
+                        .font(.caption)
+                        .disabled(composer.isGenerating)
+                        .accessibilityIdentifier("dialogue-reset-defaults")
+                        .help("Restore Dia2 generation settings")
+                }
                 Text("Dia2 samples what is said and how it sounds separately. The text side "
                      + "decides the words and when a speaker changes; the audio side decides "
                      + "the delivery.")
@@ -542,9 +600,9 @@ struct DialogueView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 knobRow("CFG scale", $composer.cfgScale, 1...10,
-                        desc: "How hard the model is held to the reference voices. 6 is the "
-                            + "measured sweet spot: lower drifts off the voice, higher clips "
-                            + "and shouts.")
+                        desc: "How strongly generation follows its conditioning. The app defaults "
+                            + "to 6; lower settings have failed in some tests, and higher "
+                            + "settings can sound harsh.")
                 knobRow("Text temperature", $composer.textTemperature, 0.1...2,
                         desc: "Variety in the words and turn-taking. Raise it for looser "
                             + "banter; too high and the speakers start talking over the script.")
@@ -555,9 +613,10 @@ struct DialogueView: View {
                             + "the cost of stability.")
                 stepperRow("Audio top-k", $composer.audioTopK, 1...200,
                            desc: "How many candidate codes the audio side considers.")
-                stepperRow("Max padding", $composer.maxPadding, 0...30,
-                           desc: "Frames of silence a turn may be padded with before the next "
-                               + "speaker starts. Higher leaves longer beats between lines.")
+                stepperRow("Max padding", $composer.maxPadding, 1...30,
+                           desc: "How many frames the model may wait between words before "
+                               + "the next word is forced. Default: 6. Higher values can "
+                               + "produce long silences or skipped speech.")
                 Toggle("Keep prefix audio", isOn: $composer.keepPrefixAudio)
                     .accessibilityIdentifier("dialogue-keep-prefix")
                 Text("Prepends each speaker's reference clip to the take, so you can hear "

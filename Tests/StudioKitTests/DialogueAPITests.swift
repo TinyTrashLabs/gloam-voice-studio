@@ -100,6 +100,26 @@ final class DialogueAPITests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testDialogueUsesTheDia2ReferenceAndPairedAlignment() async throws {
+        func wav(_ count: Int) -> Data {
+            WAVEncoder.encode(pcm16: PCM16.data(from: (0..<count).map {
+                Float(sin(Double($0) * 0.1)) * 0.2
+            }), sampleRate: 24_000)
+        }
+        _ = try deps.voices.save(name: "Ava", refWav: wav(4800), refText: "full source",
+            engines: ["dia2": ["ref.wav": wav(2400), "alignment.json":
+                try JSONEncoder().encode([AlignedWord(w: "clip", start: 0, end: 0.1)])]])
+        try await withDialogueApp { client in
+            try await client.execute(uri: "/v1/audio/dialogue", method: .post,
+                body: ByteBuffer(string: #"{"turns":[{"speaker":1,"text":"Hello"}],"voices":["ava"]}"#)) { response in
+                XCTAssertEqual(response.status, .ok)
+                let prefix = FakeDialogueModel.lastDialogue?.prefixes.first ?? nil
+                XCTAssertEqual(prefix?.samples.count, 2400)
+                XCTAssertEqual(prefix?.words.map(\.text), ["clip"])
+            }
+        }
+    }
+
     func testNoVoicesGeneratesUnconditioned() async throws {
         try await withDialogueApp { client in
             let body = """
@@ -187,6 +207,45 @@ final class DialogueAPITests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(sent.audioTopK, 67)
         XCTAssertEqual(sent.maxPadding, 5)
         XCTAssertTrue(sent.keepPrefixAudio)
+    }
+
+    /// Passes must not share a draw. Identical seeds would not make two passes
+    /// sound alike -- they render different text -- but they would make a
+    /// re-roll meaningless, because rerolling one pass would have to reroll
+    /// every pass with it.
+    func testEachPassOfATakeDrawsItsOwnSeed() {
+        let take: UInt64 = 0xDEAD_BEEF
+        let passes = (0 ..< 8).map { DialogueSeed.pass(take: take, index: $0) }
+        XCTAssertEqual(Set(passes).count, passes.count, "two passes shared a draw")
+        // Reproducible: the same take renders the same passes.
+        XCTAssertEqual(passes, (0 ..< 8).map { DialogueSeed.pass(take: take, index: $0) })
+        // A different take is a different performance throughout.
+        XCTAssertNotEqual(passes, (0 ..< 8).map { DialogueSeed.pass(take: take &+ 1, index: $0) })
+    }
+
+    /// Retry-on-collapse re-rolls the DRAW for one pass, leaving its
+    /// neighbours exactly as they were -- so a rescued pass cannot disturb a
+    /// take that was otherwise fine.
+    func testARetryChangesOnlyItsOwnPass() {
+        let take: UInt64 = 12_345
+        let first = DialogueSeed.pass(take: take, index: 2, attempt: 0)
+        let retry = DialogueSeed.pass(take: take, index: 2, attempt: 1)
+        XCTAssertNotEqual(first, retry)
+        XCTAssertEqual(DialogueSeed.pass(take: take, index: 3, attempt: 0),
+                       DialogueSeed.pass(take: take, index: 3, attempt: 0))
+        // A retry of pass 2 must not collide with any draw pass 3 could take.
+        let neighbours = (0 ..< 4).map { DialogueSeed.pass(take: take, index: 3, attempt: $0) }
+        XCTAssertFalse(neighbours.contains(retry))
+    }
+
+    /// The seed has to survive the hop from the caller's request to the model,
+    /// or a take is reproducible in name only.
+    func testSeedReachesTheModel() async throws {
+        FakeDialogueModel.lastDialogue = nil
+        let dialogue = DialogueRequest(
+            turns: [DialogueTurn(speaker: 1, text: "Hello")], voices: [], seed: 4_242)
+        let sent = ProviderDialogueRequest(dialogue, script: ["[S1] Hello"], prefixes: [])
+        XCTAssertEqual(sent.seed, 4_242)
     }
 
     /// The old field names still have to work: Gloam Radio sends them.

@@ -5,7 +5,8 @@ import SwiftUI
 /// is the Voice Foundry where `qwen3-design` mints new ones; `chat` converses with
 /// a voice's persona through a local LLM; `dialogue` writes a two-speaker exchange
 /// for Dia2, which is the one engine that speaks both voices in a single pass.
-enum StudioSection: String { case studio, createVoice, chat, dialogue }
+/// `lab` is the advanced audio-comparison shelf, shown only when Lab mode is on.
+enum StudioSection: String { case studio, createVoice, chat, dialogue, lab }
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
@@ -14,9 +15,14 @@ struct ContentView: View {
     @State private var llmPickerOpen = false
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
     @AppStorage("didShowOnboarding") private var didShowOnboarding = false
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
 
     private var section: StudioSection {
-        StudioSection(rawValue: sectionRaw) ?? .studio
+        let resolved = StudioSection(rawValue: sectionRaw) ?? .studio
+        // Turning Lab mode off while it's the selected section would strand the
+        // user on a tab with no picker entry — fall back to Studio.
+        if resolved == .lab && !labModeEnabled { return .studio }
+        return resolved
     }
 
     var body: some View {
@@ -36,6 +42,7 @@ struct ContentView: View {
                     case .createVoice: CreateVoiceView()
                     case .chat: ChatView()
                     case .dialogue: DialogueView()
+                    case .lab: LabView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -109,6 +116,10 @@ struct ContentView: View {
                 Text("Create Voice").tag(StudioSection.createVoice)
                 Text("Chat").tag(StudioSection.chat)
                 Text("Dialogue").tag(StudioSection.dialogue)
+                // Advanced developer surface — only offered when Lab mode is on.
+                if labModeEnabled {
+                    Text("Lab").tag(StudioSection.lab)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()

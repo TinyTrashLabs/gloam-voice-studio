@@ -975,6 +975,14 @@ final class AppModel {
                                luxTShift: Float(0.5), luxReturnSmooth: true)
 
     /// Restore the Advanced fine-tune sliders to their defaults.
+    func resetGenerationSettings() {
+        resetDeliveryKnobs()
+        emotion = .neutral
+        speed = 1
+        instruct = ""
+        language = "auto"
+    }
+
     func resetDeliveryKnobs() {
         temperatureOverride = Self.knobDefaults.temperature
         exaggerationOverride = Self.knobDefaults.exaggeration
@@ -1375,7 +1383,7 @@ final class AppModel {
     func dialoguePrefix(for slug: String, aligner: any WordAligning,
                         rate: Double) async throws -> DialoguePrefix {
         let words = try await Dia2Alignment.resolve(slug, in: voices, using: aligner)
-        guard let refURL = try voices.entry(slug).refURL else {
+        guard let refURL = try Dia2Alignment.referenceURL(slug, in: voices) else {
             throw Dia2AlignmentError.noReferenceAudio(slug)
         }
         let samples = try RefAudioCombiner.decodeMono(try Data(contentsOf: refURL),
@@ -1607,7 +1615,10 @@ final class AppModel {
             // RECORD button uses.
             makeAligner: { [speech] in
                 WhisperWordAligner(transcriber: await speech.makeTranscriber())
-            })
+            },
+            // The Lab shelf the tab observes, so an agent's lab_put_clip over
+            // MCP lands in the same in-process store the UI is showing.
+            lab: LabStore.shared)
     }
 
     private func performServerSync() async {

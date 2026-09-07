@@ -264,6 +264,7 @@ enum Dia2RequestAdapter {
         if let k = r.audioTopK ?? r.topK { c.audioTopK = k }
         if let s = r.cfgScale { c.cfgScale = s }
         if let p = r.maxPadding { c.maxPadding = p }
+        c.seed = r.seed
         return c
     }
 

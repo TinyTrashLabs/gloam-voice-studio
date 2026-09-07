@@ -89,6 +89,7 @@ struct GloamVoiceStudioApp: App {
 /// AppStorage key the toolbar picker reads, so the two stay in lockstep.
 private struct SectionMenuButtons: View {
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
     var body: some View {
         Button("Studio") { sectionRaw = StudioSection.studio.rawValue }
             .keyboardShortcut("1", modifiers: .command)
@@ -98,6 +99,11 @@ private struct SectionMenuButtons: View {
             .keyboardShortcut("3", modifiers: .command)
         Button("Dialogue") { sectionRaw = StudioSection.dialogue.rawValue }
             .keyboardShortcut("4", modifiers: .command)
+        // ⌘5 only exists when Lab mode is on — matches the toolbar picker.
+        if labModeEnabled {
+            Button("Lab") { sectionRaw = StudioSection.lab.rawValue }
+                .keyboardShortcut("5", modifiers: .command)
+        }
     }
 }
 

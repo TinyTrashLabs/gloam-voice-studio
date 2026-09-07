@@ -46,6 +46,9 @@ packs/*.bak-*
 # Stray marketing captures
 mc-*.png
 
+# Coverage counters dropped by `swift test --enable-code-coverage` runs
+*.profraw
+
 # Handoffs are internal working notes — they do not belong in a public repo.
 # Keep them in handoffs/ locally; see CLAUDE.md.
 HANDOFF*.md

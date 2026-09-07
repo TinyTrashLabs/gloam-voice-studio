@@ -195,6 +195,11 @@ public struct APIDependencies: Sendable {
     /// finds no timings, which the dialogue route reads as "no prefix" and
     /// generates unconditioned rather than failing.
     public let makeAligner: @Sendable () async -> any WordAligning
+    /// The in-app audio comparison shelf the Lab tools mutate. `nil` when the
+    /// server is built without one (today's tests, a headless run); the Lab
+    /// handlers then fall back to `LabStore.shared`. `@MainActor`-isolated, so
+    /// the handlers hop to the main actor to touch it.
+    public let lab: LabStore?
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
@@ -209,7 +214,8 @@ public struct APIDependencies: Sendable {
                     = { _, _, _ in throw STTUnavailable() },
                 prepareTTS: @escaping @Sendable () async -> Void = {},
                 makeAligner: @escaping @Sendable () async -> any WordAligning
-                    = { UntimedWordAligner() }) {
+                    = { UntimedWordAligner() },
+                lab: LabStore? = nil) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
@@ -223,6 +229,7 @@ public struct APIDependencies: Sendable {
         self.listen = listen
         self.prepareTTS = prepareTTS
         self.makeAligner = makeAligner
+        self.lab = lab
     }
 }
 
@@ -262,3 +269,23 @@ public struct DialogueBody: Codable, Sendable {
 
 // Make VoiceMeta ResponseEncodable so handlers can return it directly.
 extension VoiceMeta: ResponseEncodable {}
+
+/// `POST /v1/lab/groups` — create or update a comparison group. Mirrors the
+/// `lab_set_group` MCP tool; same snake_case field names.
+struct LabGroupRequest: Codable {
+    let heading: String
+    let listen_for: String?
+    let id: String?
+}
+
+/// `POST /v1/lab/clips` — add a WAV to a group. Mirrors `lab_put_clip`: address
+/// the group by `group_id` or by `group_heading` (create-if-absent), and supply
+/// the audio as `audio_b64` (inline base64 WAV) or `path` (a local file).
+struct LabClipRequest: Codable {
+    let group_id: String?
+    let group_heading: String?
+    let label: String
+    let note: String?
+    let audio_b64: String?
+    let path: String?
+}

@@ -64,6 +64,12 @@ public enum StoragePaths {
     /// Private to each app -- one app's conversation log is not the other's.
     public static var history: URL { appSupport.appendingPathComponent("History") }
 
+    /// Private: the Lab's comparison shelf -- wavs collected from any source
+    /// (agent over MCP, a Finder drop, a "Send to Lab" render) plus the marks
+    /// and comments the developer leaves on them. An advanced dev feature, not
+    /// something a casual user's library needs to share.
+    public static var lab: URL { appSupport.appendingPathComponent("Lab") }
+
     /// Private: unsaved Voice Foundry takes, meaningless outside the app that
     /// is auditioning them.
     public static var foundryCandidates: URL {

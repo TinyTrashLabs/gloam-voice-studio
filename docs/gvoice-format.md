@@ -46,6 +46,7 @@ backends vary in what they need:
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
 | `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
+| `dia2` | optional | none | — | Word-aligned reference audio; may carry a dedicated `dia2` clip |
 | `supertonic` | **none** | none | F1–F5 / M1–M5 (`supertonicVoices`) | `style.json` — `style_ttl` + `style_dp` |
 
 `supertonic` is one backend, not two — there is no separate `supertonic-2`/
@@ -142,6 +143,29 @@ its own, and SHOULD refuse rather than condition on the over-long master.
 Transcript text lives inline in the manifest (`source.<key>.text`), not as a
 sibling file — there is no `transcript.txt` member. (An earlier draft of this
 doc showed one; it was never implemented and this is the correction.)
+
+### The `dia2` conditioning reference
+
+A pack MAY carry a dedicated `engines/dia2/ref.wav` and its word timings in
+`engines/dia2/alignment.json`. This lets producers select a complete, clean
+excerpt for dialogue conditioning while keeping the master recording intact.
+No new pack version is needed: both files belong to the engine's existing
+variant asset list.
+
+When present, Dia2 MUST use that reference instead of `source/ref.wav`.
+The alignment MUST describe the selected clip, with times in seconds relative
+to its beginning, not the master recording. It is an array of objects with
+`w` (word), `start`, and `end` fields. Replacing or trimming the dedicated
+reference requires replacing or regenerating its alignment too.
+
+If no dedicated reference exists, readers MAY use the master and its cached
+Dia2 alignment. If an alignment is missing, the app creates it from the audio
+it actually selected. The master's transcript is not passed to the aligner
+for a dedicated clip, since it may describe different material.
+
+Exporters MUST include both assets when present, and importers MUST preserve
+their association. Other engines continue to select their own assets or the
+master recording.
 
 ## `manifest.json`
 

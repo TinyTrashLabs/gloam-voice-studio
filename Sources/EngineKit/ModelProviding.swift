@@ -63,17 +63,23 @@ public struct ProviderDialogueRequest: Sendable {
     public var audioTemperature: Float?
     public var audioTopK: Int?
     public var maxPadding: Int?
+    /// Sampling seed. nil draws from the process-wide RNG, which mlx-swift
+    /// seeds from the clock at launch — so nil means no two renders of the
+    /// same request are comparable. Set it and a pass is reproducible.
+    public var seed: UInt64?
     public var keepPrefixAudio: Bool
     public init(script: [String], prefixes: [DialoguePrefix?],
                 temperature: Float? = nil, topK: Int? = nil, cfgScale: Float? = nil,
                 textTemperature: Float? = nil, textTopK: Int? = nil,
                 audioTemperature: Float? = nil, audioTopK: Int? = nil,
-                maxPadding: Int? = nil, keepPrefixAudio: Bool = false) {
+                maxPadding: Int? = nil, seed: UInt64? = nil,
+                keepPrefixAudio: Bool = false) {
         self.script = script; self.prefixes = prefixes
         self.temperature = temperature; self.topK = topK; self.cfgScale = cfgScale
         self.textTemperature = textTemperature; self.textTopK = textTopK
         self.audioTemperature = audioTemperature; self.audioTopK = audioTopK
-        self.maxPadding = maxPadding; self.keepPrefixAudio = keepPrefixAudio
+        self.maxPadding = maxPadding; self.seed = seed
+        self.keepPrefixAudio = keepPrefixAudio
     }
 }
 

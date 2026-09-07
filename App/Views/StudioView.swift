@@ -21,6 +21,7 @@ struct StudioView: View {
     @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
     @AppStorage("studioInspectorVisible") private var inspectorVisible = true
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
     @State private var transcribingSlug: String?
     @State private var transcribeError: String?
 
@@ -348,7 +349,15 @@ struct StudioView: View {
     private var studioInspector: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                zoneLabel("DIRECT")
+                HStack {
+                    zoneLabel("DIRECT")
+                    Spacer()
+                    Button("Reset to defaults") { model.resetGenerationSettings() }
+                        .font(.caption)
+                        .disabled(model.isGenerating)
+                        .accessibilityIdentifier("reset-knobs")
+                        .help("Restore delivery, speed, direction, language, and sampling defaults")
+                }
                 directCard
             }
             .padding(14)
@@ -552,12 +561,6 @@ struct StudioView: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                }
-                HStack {
-                    Spacer()
-                    Button("Reset to defaults") { model.resetDeliveryKnobs() }
-                        .font(.caption)
-                        .accessibilityIdentifier("reset-knobs")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -966,7 +969,8 @@ struct StudioView: View {
                     .padding(6)
                     .background(Circle().fill(Brand.gradient.opacity(0.25)))
                     .accessibilityIdentifier("variant-badge-\(variant.label)")
-                WaveformView(wavData: variant.wavData)
+                SeekableWaveformView(wavData: variant.wavData,
+                                     id: variant.id.uuidString, player: player)
                     .frame(height: 44)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(String(format: "%.2fs · wall %.2fs", variant.seconds,
@@ -975,8 +979,8 @@ struct StudioView: View {
                 }
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Brand.fgDim)
-                Button(player.playingID == variant.id.uuidString ? "Stop" : "Play") {
-                    player.toggle(id: variant.id.uuidString, data: variant.wavData)
+                Button(player.playingID == variant.id.uuidString ? "Pause" : "Play") {
+                    player.togglePlayback(id: variant.id.uuidString, data: variant.wavData)
                 }
                 .accessibilityIdentifier("play-\(variant.label)")
                 Button("Export…") {
@@ -987,10 +991,29 @@ struct StudioView: View {
                         provenance: WAVEncoder.provenanceComment))
                 }
                 .help("Export this variant as a WAV file")
+                // Advanced: send this take to a Lab comparison. `wavData` is a
+                // complete WAV (44-byte header + PCM), which is exactly what the
+                // Lab ingests, so it goes across untouched.
+                if labModeEnabled {
+                    SendToLabMenu(label: studioClipLabel(variant), source: .studio) {
+                        variant.wavData
+                    }
+                }
             }
             .padding(6)
         }
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// A legible Lab label for a Studio take: which variant (A/B), the voice, and
+    /// a snippet of the line it spoke.
+    private func studioClipLabel(_ variant: Variant) -> String {
+        let voice = model.selectedVoiceSlug
+            .flatMap { slug in model.voiceList.first { $0.slug == slug }?.name }
+        let line = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippet = line.isEmpty ? "take" : String(line.prefix(40))
+        let who = voice.map { "\($0) · " } ?? ""
+        return "\(variant.label) · \(who)\(snippet)"
     }
 
 }

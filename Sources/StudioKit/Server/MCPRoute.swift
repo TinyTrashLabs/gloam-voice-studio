@@ -111,6 +111,90 @@ enum MCPRoute {
                     ],
                 ],
             ],
+            [
+                "name": "lab_set_group",
+                "description": "Create or update a Lab comparison group (the unit "
+                    + "the audio-comparison shelf collects clips into). Pass `id` to "
+                    + "update an existing group's heading/listen_for; omit it to create.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "heading": ["type": "string",
+                                    "description": "What's being compared"],
+                        "listen_for": ["type": "string",
+                                       "description": "Instruction to the listener (optional)"],
+                        "id": ["type": "string",
+                               "description": "Existing group id to update (optional)"],
+                    ],
+                    "required": ["heading"],
+                ],
+            ],
+            [
+                "name": "lab_put_clip",
+                "description": "Add a WAV to a Lab group and return its clip id and "
+                    + "duration. Address the group by `group_id`, or by `group_heading` "
+                    + "(created if absent). Supply the audio as `audio_b64` (inline "
+                    + "base64 WAV) or `path` (a local file the app can read).",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "group_id": ["type": "string",
+                                     "description": "Target group id"],
+                        "group_heading": ["type": "string",
+                                          "description": "Target group by heading (create-if-absent)"],
+                        "label": ["type": "string",
+                                  "description": "Clip label (\"A · Benson's original 8s ref\")"],
+                        "note": ["type": "string",
+                                 "description": "Per-clip note (optional)"],
+                        "audio_b64": ["type": "string",
+                                      "description": "Base64-encoded WAV bytes"],
+                        "path": ["type": "string",
+                                 "description": "Path to a local WAV to copy in"],
+                    ],
+                    "required": ["label"],
+                ],
+            ],
+            [
+                "name": "lab_list",
+                "description": "List all Lab groups with their clips "
+                    + "(id, label, duration, source).",
+                "inputSchema": ["type": "object", "properties": [String: Any]()],
+            ],
+            [
+                "name": "lab_read_feedback",
+                "description": "Read back what the developer left on the Lab: per-clip "
+                    + "timestamp marks and comments, per-group verdict, and open "
+                    + "requests. Pass `group_id` for one group, omit for all.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "group_id": ["type": "string",
+                                     "description": "Limit to one group (optional)"],
+                    ],
+                ],
+            ],
+            [
+                "name": "lab_delete_group",
+                "description": "Delete a Lab group and its clips.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "group_id": ["type": "string", "description": "Group id to delete"],
+                    ],
+                    "required": ["group_id"],
+                ],
+            ],
+            [
+                "name": "lab_delete_clip",
+                "description": "Delete a single Lab clip.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "clip_id": ["type": "string", "description": "Clip id to delete"],
+                    ],
+                    "required": ["clip_id"],
+                ],
+            ],
         ]
     }
 
@@ -235,9 +319,87 @@ enum MCPRoute {
             } catch {
                 return toolError(id: id, "listen failed: \(error)")
             }
+        case "lab_set_group":
+            guard let heading = arguments["heading"] as? String else {
+                return toolError(id: id, "lab_set_group requires 'heading'")
+            }
+            // Pull the args into local Sendable values before the main-actor hop —
+            // the raw `arguments` dictionary is task-isolated and can't cross it.
+            let listenFor = arguments["listen_for"] as? String ?? ""
+            let groupID = arguments["id"] as? String
+            do {
+                let out = try await MainActor.run {
+                    try LabTools.setGroup(LabTools.store(deps), heading: heading,
+                                          listenFor: listenFor, id: groupID)
+                }
+                return toolResult(id: id, content: [jsonText(out)])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
+        case "lab_put_clip":
+            guard let label = arguments["label"] as? String else {
+                return toolError(id: id, "lab_put_clip requires 'label'")
+            }
+            let groupID = arguments["group_id"] as? String
+            let groupHeading = arguments["group_heading"] as? String
+            let note = arguments["note"] as? String
+            let audioB64 = arguments["audio_b64"] as? String
+            let path = arguments["path"] as? String
+            do {
+                let out = try await MainActor.run {
+                    try LabTools.putClip(LabTools.store(deps),
+                                         groupID: groupID, groupHeading: groupHeading,
+                                         label: label, note: note,
+                                         audioB64: audioB64, path: path, source: .mcp)
+                }
+                return toolResult(id: id, content: [jsonText(out)])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
+        case "lab_list":
+            let out = await MainActor.run { LabTools.list(LabTools.store(deps)) }
+            return toolResult(id: id, content: [jsonText(out)])
+        case "lab_read_feedback":
+            let groupID = arguments["group_id"] as? String
+            do {
+                let data = try await MainActor.run {
+                    try LabTools.feedbackJSON(LabTools.store(deps), groupID: groupID)
+                }
+                return toolResult(id: id, content: [
+                    ["type": "text", "text": String(decoding: data, as: UTF8.self)],
+                ])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
+        case "lab_delete_group":
+            guard let groupID = arguments["group_id"] as? String else {
+                return toolError(id: id, "lab_delete_group requires 'group_id'")
+            }
+            do {
+                try await MainActor.run { try LabTools.deleteGroup(LabTools.store(deps), groupID: groupID) }
+                return toolResult(id: id, content: [jsonText(Data("{\"ok\":true}".utf8))])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
+        case "lab_delete_clip":
+            guard let clipID = arguments["clip_id"] as? String else {
+                return toolError(id: id, "lab_delete_clip requires 'clip_id'")
+            }
+            do {
+                try await MainActor.run { try LabTools.deleteClip(LabTools.store(deps), clipID: clipID) }
+                return toolResult(id: id, content: [jsonText(Data("{\"ok\":true}".utf8))])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
         default:
             return toolError(id: id, "unknown tool")
         }
+    }
+
+    /// Wraps already-serialized JSON bytes as a `text` tool-result content block
+    /// (MCP has no first-class JSON content type).
+    private static func jsonText(_ data: Data) -> [String: Any] {
+        ["type": "text", "text": String(decoding: data, as: UTF8.self)]
     }
 
     // MARK: JSON-RPC plumbing

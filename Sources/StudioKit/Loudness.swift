@@ -152,6 +152,26 @@ public enum Loudness {
     /// `measuring` is the signal loudness is READ from, when that differs from
     /// the signal gain is WRITTEN to — a mono downmix standing in for interleaved
     /// multi-channel audio. Defaults to `samples` itself.
+    /// Share of `samples` sitting below `thresholdDBFS`, measured in 20 ms
+    /// windows. A rendered pass that is mostly silence did not speak its
+    /// lines — the words were consumed while no audio came out — so this is
+    /// the cheap check that catches a dead pass before anyone plays it.
+    public static func silentFraction(_ samples: [Float], sampleRate: Int,
+                                      thresholdDBFS: Double = -50) -> Double {
+        let hop = max(1, sampleRate / 50)
+        guard samples.count >= hop else { return 0 }
+        let threshold = Float(pow(10.0, thresholdDBFS / 20.0))
+        var quiet = 0, total = 0, index = 0
+        while index + hop <= samples.count {
+            var sum: Float = 0
+            for value in samples[index ..< index + hop] { sum += value * value }
+            if (sum / Float(hop)).squareRoot() < threshold { quiet += 1 }
+            total += 1
+            index += hop
+        }
+        return total > 0 ? Double(quiet) / Double(total) : 0
+    }
+
     public static func leveled(_ samples: [Float],
                                sampleRate: Int,
                                targetLUFS: Float = AudioAssembler.referenceLoudnessLUFS,

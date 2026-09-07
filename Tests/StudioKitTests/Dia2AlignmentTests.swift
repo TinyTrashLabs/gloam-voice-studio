@@ -22,6 +22,32 @@ final class Dia2AlignmentTests: XCTestCase {
         }
     }
 
+    func testDia2ReferenceOverridesSourceAndAlignsItsOwnText() async throws {
+        _ = try lib.save(name: "Ava", refWav: Data([1, 2, 3]), refText: "full source transcript",
+                         engines: ["dia2": ["ref.wav": Data([4, 5, 6])]])
+        let selected = try XCTUnwrap(Dia2Alignment.referenceURL("ava", in: lib))
+        XCTAssertEqual(try Data(contentsOf: selected), Data([4, 5, 6]))
+        struct SelectedReferenceAligner: WordAligning {
+            func align(audioURL: URL, transcript: String?) async throws -> [AlignedWord] {
+                XCTAssertEqual(try Data(contentsOf: audioURL), Data([4, 5, 6]))
+                XCTAssertNil(transcript, "The full source transcript doesn't describe a derived clip")
+                return [AlignedWord(w: "selected", start: 0, end: 0.4)]
+            }
+        }
+        let words = try await Dia2Alignment.resolve("ava", in: lib,
+            using: SelectedReferenceAligner())
+        XCTAssertEqual(words.map(\.w), ["selected"])
+    }
+
+    func testDia2ReferenceWorksWithoutFullSource() async throws {
+        _ = try lib.save(name: "Ava", refWav: nil, refText: "",
+                         engines: ["dia2": ["ref.wav": Data([4, 5, 6])]])
+        XCTAssertTrue(lib.capabilities("ava").supports(.dia2))
+        let words = try await Dia2Alignment.resolve("ava", in: lib,
+            using: CountingAligner(words: [AlignedWord(w: "hi", start: 0, end: 0.3)]))
+        XCTAssertEqual(words.map(\.w), ["hi"])
+    }
+
     func testAlignsOnceThenReadsTheCache() async throws {
         _ = try lib.save(name: "Ava", refWav: Data([1, 2, 3]), refText: "hello there")
         let aligner = CountingAligner(words: [

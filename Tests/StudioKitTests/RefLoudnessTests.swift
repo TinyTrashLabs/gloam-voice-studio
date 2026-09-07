@@ -306,3 +306,31 @@ final class RefLoudnessTests: XCTestCase {
         XCTAssertEqual(found?.offset, chunk.offset + 12)
     }
 }
+
+extension RefLoudnessTests {
+    /// A pass that renders as silence is the multi-pass dialogue bug's whole
+    /// signature, so the measure that flags it has to be exact at the edges.
+    func testSilentFractionCountsQuietWindows() {
+        let rate = 24_000
+        let tone = [Float](repeating: 0.5, count: rate)
+        let silence = [Float](repeating: 0, count: rate)
+        XCTAssertEqual(Loudness.silentFraction(tone, sampleRate: rate), 0, accuracy: 0.001)
+        XCTAssertEqual(Loudness.silentFraction(silence, sampleRate: rate), 1, accuracy: 0.001)
+        XCTAssertEqual(Loudness.silentFraction(tone + silence, sampleRate: rate),
+                       0.5, accuracy: 0.02)
+    }
+
+    /// -60 dBFS sits below the default floor; -40 sits above it.
+    func testSilentFractionUsesTheThreshold() {
+        let rate = 24_000
+        let faint = [Float](repeating: Float(pow(10.0, -60.0 / 20.0)), count: rate)
+        let audible = [Float](repeating: Float(pow(10.0, -40.0 / 20.0)), count: rate)
+        XCTAssertEqual(Loudness.silentFraction(faint, sampleRate: rate), 1, accuracy: 0.001)
+        XCTAssertEqual(Loudness.silentFraction(audible, sampleRate: rate), 0, accuracy: 0.001)
+    }
+
+    /// Shorter than one window: nothing measured, not "all silent".
+    func testSilentFractionOfATinyBufferIsZero() {
+        XCTAssertEqual(Loudness.silentFraction([0, 0, 0], sampleRate: 24_000), 0)
+    }
+}

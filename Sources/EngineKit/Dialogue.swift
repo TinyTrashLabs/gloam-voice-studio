@@ -27,6 +27,11 @@ public struct DialogueRequest: Sendable, Equatable {
     public var audioTemperature: Float?
     public var audioTopK: Int?
     public var maxPadding: Int?
+    /// Sampling seed for the take. Each pass derives its own seed from this
+    /// (see `DialogueSeed`), so one number reproduces a whole multi-pass
+    /// render. nil leaves every pass to the process-wide RNG, which mlx-swift
+    /// seeds from the clock — no two renders comparable.
+    public var seed: UInt64?
     /// Return the conditioning audio ahead of the take. Useful for hearing
     /// exactly what the model was given; wrong for anything shipped.
     public var keepPrefixAudio: Bool
@@ -35,12 +40,34 @@ public struct DialogueRequest: Sendable, Equatable {
                 temperature: Float? = nil, topK: Int? = nil, cfgScale: Float? = nil,
                 textTemperature: Float? = nil, textTopK: Int? = nil,
                 audioTemperature: Float? = nil, audioTopK: Int? = nil,
-                maxPadding: Int? = nil, keepPrefixAudio: Bool = false) {
+                maxPadding: Int? = nil, seed: UInt64? = nil,
+                keepPrefixAudio: Bool = false) {
         self.turns = turns; self.voices = voices
         self.temperature = temperature; self.topK = topK; self.cfgScale = cfgScale
         self.textTemperature = textTemperature; self.textTopK = textTopK
         self.audioTemperature = audioTemperature; self.audioTopK = audioTopK
-        self.maxPadding = maxPadding; self.keepPrefixAudio = keepPrefixAudio
+        self.maxPadding = maxPadding; self.seed = seed
+        self.keepPrefixAudio = keepPrefixAudio
+    }
+}
+
+/// How a take's seed becomes a pass's seed.
+///
+/// Passes must not share one seed: identical seeds do NOT make two passes
+/// sound alike (they render different text), but they do make a re-roll
+/// meaningless — rerolling pass 3 would have to reroll every pass. Mixing the
+/// pass index in gives each pass its own reproducible draw, and `attempt`
+/// gives the retry-on-collapse path a fresh draw for one pass alone.
+///
+/// splitmix64's finalizer, so neighbouring (take, pass, attempt) triples land
+/// far apart instead of on adjacent states of the same stream.
+public enum DialogueSeed {
+    public static func pass(take: UInt64, index: Int, attempt: Int = 0) -> UInt64 {
+        var z = take &+ (UInt64(bitPattern: Int64(index)) &* 0x9E37_79B9_7F4A_7C15)
+            &+ (UInt64(bitPattern: Int64(attempt)) &* 0xBF58_476D_1CE4_E5B9)
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
 
@@ -59,6 +86,7 @@ public extension ProviderDialogueRequest {
                   audioTemperature: dialogue.audioTemperature,
                   audioTopK: dialogue.audioTopK,
                   maxPadding: dialogue.maxPadding,
+                  seed: dialogue.seed,
                   keepPrefixAudio: dialogue.keepPrefixAudio)
     }
 }

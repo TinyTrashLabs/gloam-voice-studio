@@ -47,9 +47,14 @@ let package = Package(
         // back at 200 Hz, or as the other speaker outright.
         // NOTE: this is #11's branch head, not main. Repin to the merge
         // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
-        .package(
-            url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "d84bcca8f74d0db24cc8ecb542c4cbb6c54a8d6c"),
+        // LOCAL OVERRIDE (Dia2 quality work, feat/dia2). SwiftPM prefers a
+        // `.package(path:)` over the URL pin for the same package identity, so
+        // ../mlx-audio-swift is what actually builds. Drop this line and the
+        // URL pin below takes over again.
+        .package(path: "../mlx-audio-swift"),
+        // .package(
+        //     url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
+        //     revision: "d84bcca8f74d0db24cc8ecb542c4cbb6c54a8d6c"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

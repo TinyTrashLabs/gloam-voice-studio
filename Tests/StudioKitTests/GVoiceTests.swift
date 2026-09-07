@@ -43,6 +43,21 @@ final class GVoiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: try lib.get("cruz").refURL), Data([1, 2, 3, 4]))
     }
 
+    func testDia2ReferenceAndAlignmentRoundTripTogether() throws {
+        let alignment = try JSONEncoder().encode([AlignedWord(w: "clip", start: 0, end: 0.2)])
+        _ = try lib.save(name: "Cruz", refWav: Data([1, 2]), refText: "master recording",
+            engines: ["dia2": ["ref.wav": Data([3, 4]), "alignment.json": alignment]])
+        let pack = try GVoice.export("cruz", from: lib)
+        XCTAssertEqual(Set(try manifest(pack).engines?["dia2"]?["base"] ?? []),
+            ["engines/dia2/ref.wav", "engines/dia2/alignment.json"])
+        let destination = VoiceLibrary(directory: dir.appendingPathComponent("imported"))
+        _ = try GVoice.import(pack, into: destination)
+        let clip = try XCTUnwrap(Dia2Alignment.referenceURL("cruz", in: destination))
+        XCTAssertEqual(try Data(contentsOf: clip), Data([3, 4]))
+        XCTAssertEqual(Dia2Alignment.cached("cruz", in: destination)?.map(\.w), ["clip"])
+        XCTAssertEqual(try Data(contentsOf: try destination.get("cruz").refURL), Data([1, 2]))
+    }
+
     func testManifestCarriesTheCurrentVersion() throws {
         _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
         XCTAssertEqual(try manifest(try GVoice.export("cruz", from: lib)).gvoice, 2)

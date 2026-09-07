@@ -506,7 +506,89 @@ public enum APIRouter {
             }
         }
 
+        // Lab: the in-app audio-comparison shelf, mirroring the `lab_*` MCP tools
+        // for curl/API fallback. Same JSON in and out — the store work lives in
+        // LabTools, called on the main actor since LabStore is @MainActor.
+        router.post("v1/lab/groups") { request, context -> Response in
+            let req = try await request.decode(as: LabGroupRequest.self, context: context)
+            let out = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.setGroup(LabTools.store(deps), heading: req.heading,
+                                          listenFor: req.listen_for ?? "", id: req.id)
+                }
+            }
+            return jsonResponse(out)
+        }
+
+        router.post("v1/lab/clips") { request, context -> Response in
+            let req = try await request.decode(as: LabClipRequest.self, context: context)
+            let out = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.putClip(LabTools.store(deps),
+                                         groupID: req.group_id, groupHeading: req.group_heading,
+                                         label: req.label, note: req.note,
+                                         audioB64: req.audio_b64, path: req.path, source: .mcp)
+                }
+            }
+            return jsonResponse(out)
+        }
+
+        router.get("v1/lab/list") { _, _ -> Response in
+            let out = await MainActor.run { LabTools.list(LabTools.store(deps)) }
+            return jsonResponse(out)
+        }
+
+        router.get("v1/lab/feedback") { request, _ -> Response in
+            let groupID = request.uri.queryParameters["group_id"].map(String.init)
+            let data = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.feedbackJSON(LabTools.store(deps), groupID: groupID)
+                }
+            }
+            return Response(status: .ok,
+                            headers: [.contentType: "application/json"],
+                            body: .init(byteBuffer: ByteBuffer(data: data)))
+        }
+
+        router.delete("v1/lab/groups/:id") { _, context -> Response in
+            let id = try context.parameters.require("id")
+            try await mapLabErrors {
+                try await MainActor.run { try LabTools.deleteGroup(LabTools.store(deps), groupID: id) }
+            }
+            return jsonResponse(Data(#"{"ok":true}"#.utf8))
+        }
+
+        router.delete("v1/lab/clips/:id") { _, context -> Response in
+            let id = try context.parameters.require("id")
+            try await mapLabErrors {
+                try await MainActor.run { try LabTools.deleteClip(LabTools.store(deps), clipID: id) }
+            }
+            return jsonResponse(Data(#"{"ok":true}"#.utf8))
+        }
+
         return router
+    }
+
+    /// Wrap already-serialized JSON bytes in a 200 response — the Lab routes hand
+    /// back JSON that LabTools built.
+    static func jsonResponse(_ data: Data) -> Response {
+        Response(status: .ok,
+                 headers: [.contentType: "application/json"],
+                 body: .init(byteBuffer: ByteBuffer(data: data)))
+    }
+
+    /// LabTools.Error → FastAPI-parity status + detail. `.unknownGroup` is a 404
+    /// (the named group isn't there); `.badInput` a 400 (a caller mistake).
+    static func mapLabErrors<T>(_ body: () async throws -> T) async throws -> T {
+        do { return try await body() }
+        catch let error as LabTools.Error {
+            switch error {
+            case .unknownGroup:
+                throw APIError(status: .notFound, detail: error.description)
+            case .badInput:
+                throw APIError(status: .badRequest, detail: error.description)
+            }
+        }
     }
 
     /// StudioError → FastAPI-parity status + detail strings.
@@ -610,7 +692,9 @@ private func dialoguePrefixes(_ voices: [String?],
         guard let entry = try? deps.voices.entry(slug) else {
             throw APIError(status: .badRequest, detail: "Unknown voice: \(slug)")
         }
-        guard let refURL = entry.refURL else { prefixes.append(nil); continue }
+        guard let refURL = entry.engines["dia2"]?["ref.wav"] ?? entry.refURL else {
+            prefixes.append(nil); continue
+        }
         if aligner == nil { aligner = await deps.makeAligner() }
         let words = (try? await Dia2Alignment.resolve(slug, in: deps.voices,
                                                       using: aligner!)) ?? []

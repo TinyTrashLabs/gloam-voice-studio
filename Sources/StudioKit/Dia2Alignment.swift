@@ -58,13 +58,21 @@ public enum Dia2Alignment {
         try JSONEncoder().encode(words).write(to: destination, options: .atomic)
     }
 
+    /// A Dia2-specific reference and its alignment live together in the pack.
+    /// Older packs continue to use the original recording.
+    public static func referenceURL(_ slug: String, in library: VoiceLibrary) throws -> URL? {
+        let entry = try library.entry(slug)
+        return entry.engines[engineID]?["ref.wav"] ?? entry.refURL
+    }
+
     public static func resolve(_ slug: String, in library: VoiceLibrary,
                                using aligner: any WordAligning) async throws -> [AlignedWord] {
         if let cached = cached(slug, in: library), !cached.isEmpty { return cached }
-        guard let refURL = (try? library.entry(slug))?.refURL else {
+        guard let refURL = try referenceURL(slug, in: library) else {
             throw Dia2AlignmentError.noReferenceAudio(slug)
         }
-        let transcript = (try? library.meta(slug).refText).flatMap {
+        let isDerived = (try? library.entry(slug))?.engines[engineID]?["ref.wav"] != nil
+        let transcript = isDerived ? nil : (try? library.meta(slug).refText).flatMap {
             $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
         }
         let words = try await aligner.align(audioURL: refURL, transcript: transcript)
