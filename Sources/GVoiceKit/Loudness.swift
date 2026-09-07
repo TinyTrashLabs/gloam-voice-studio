@@ -21,6 +21,53 @@ import Foundation
 ///    same thing for every voice", which is the entire contract. ITU-R BS.1770
 ///    K-weighting costs two biquads and removes most of that residual.
 public enum Loudness {
+    /// Never let normalisation push a peak above this.
+    ///
+    /// This bounds the LIMITER, not the gain. The first version of this standard
+    /// used the ceiling to cap the gain instead, and that silently disabled the
+    /// whole feature for about half the library: any clip with a couple of
+    /// transients near full scale could not be boosted at all, so `joe` stayed
+    /// 7.8 dB under target and `morgan-freeman` 4.3 dB under. Bending those
+    /// transients is a far smaller edit to a reference than leaving the voice
+    /// permanently quiet on every device.
+    ///
+    /// Lives here rather than on AudioAssembler because it is part of the
+    /// reference-audio standard a `.gvoice` pack is normalised to, and both
+    /// apps have to agree on it.
+    public static let referencePeakCeilingDbFS: Float = -1.0
+
+    /// The reference-audio loudness standard, in LUFS (ITU-R BS.1770 K-weighted).
+    ///
+    /// A clone sounds as loud as the reference it was built from, and nothing
+    /// downstream re-levels it: on iOS the voice path is a straight gain
+    /// multiply (VoiceMixer.setGain) with no compressor at all. So a quietly
+    /// recorded voice is quiet on every device, at every gain setting, forever —
+    /// an imported voice came in ~2.3 dB under the shipped hosts and was
+    /// audibly quieter on an iPhone at the same setting (David, 2026-08-29).
+    ///
+    /// The anchor is not a preference: it is measured from `billie-frost`, the
+    /// bundled host whose level is known-good, which sits at **-18.2 LUFS**.
+    /// Matching it is what makes "gain 1" mean the same thing for every voice —
+    /// the contract the UI already implies.
+    ///
+    /// The target is that anchor raised **1.2 dB** (≈15% in linear amplitude).
+    /// Levelling the set to billie-frost made every voice CONSISTENT but left the
+    /// whole set quiet against the music bed (David, 2026-08-29). Consistency was
+    /// the bug; absolute level is a separate, deliberate choice on top of it.
+    ///
+    /// LUFS rather than RMS, and RMS rather than peak, for the same reason twice
+    /// over — each is a closer model of what an ear reports than the last.
+    /// `normalizePeak` equalises the loudest SAMPLE, which one transient
+    /// dominates. Plain RMS equalises energy, but weights 60 Hz the same as
+    /// 3 kHz: measured over the real library, `maceo-sad` and `david` sit at an
+    /// identical -18.0 dBFS RMS and still differ by 2.0 LU, in the direction the
+    /// ear reports. K-weighting costs two biquads and removes most of that gap.
+    ///
+    /// Lives here with the ceiling: together they ARE the reference standard a
+    /// `.gvoice` is normalised to, and both apps have to agree on both numbers.
+    public static let referenceLoudnessLUFS: Float = -17.0
+
+
 
     // MARK: - Measurement
 
@@ -113,7 +160,7 @@ public enum Loudness {
     /// lookahead limiter's gain envelope moves the whole clip around a peak,
     /// which is a much larger edit to a reference than bending the peak itself.
     public static func softLimit(_ samples: [Float],
-                                 ceilingDbFS: Float = AudioAssembler.referencePeakCeilingDbFS,
+                                 ceilingDbFS: Float = Loudness.referencePeakCeilingDbFS,
                                  kneeDb: Float = 6) -> [Float] {
         let ceiling = pow(10, ceilingDbFS / 20)
         let threshold = ceiling * pow(10, -kneeDb / 20)
@@ -174,8 +221,8 @@ public enum Loudness {
 
     public static func leveled(_ samples: [Float],
                                sampleRate: Int,
-                               targetLUFS: Float = AudioAssembler.referenceLoudnessLUFS,
-                               ceilingDbFS: Float = AudioAssembler.referencePeakCeilingDbFS,
+                               targetLUFS: Float = Loudness.referenceLoudnessLUFS,
+                               ceilingDbFS: Float = Loudness.referencePeakCeilingDbFS,
                                maxBoostDb: Float = 24,
                                measuring: [Float]? = nil) -> [Float] {
         let probe = measuring ?? samples

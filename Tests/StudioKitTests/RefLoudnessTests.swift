@@ -1,4 +1,5 @@
 import XCTest
+@testable import GVoiceKit
 @testable import StudioKit
 
 /// The reference-audio loudness standard (#voice-loudness, 2026-08-29).

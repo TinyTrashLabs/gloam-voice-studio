@@ -1,5 +1,6 @@
 import XCTest
 import ZIPFoundation
+@testable import GVoiceKit
 @testable import StudioKit
 
 final class GVoiceTests: XCTestCase {

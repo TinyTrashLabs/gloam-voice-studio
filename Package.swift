@@ -7,6 +7,10 @@ let package = Package(
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
         .library(name: "StudioKit", targets: ["StudioKit"]),
+        // The .gvoice format, on its own so an app can read and write packs
+        // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
+        // what gloam-voice-studio-ios depends on.
+        .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
     ],
     dependencies: [
@@ -170,9 +174,22 @@ let package = Package(
             dependencies: ["EngineKit", "StudioKit"],
             path: "Sources/spike"
         ),
+        // The `.gvoice` pack format and nothing else: manifest, zip layout,
+        // entry limits, pace/gain rules and the reference loudness standard.
+        // Foundation + ZIPFoundation ONLY -- deliberately no EngineKit, so a
+        // client gets the format without the engines. docs/gvoice-format.md is
+        // normative; this is its only Swift implementation.
+        .target(
+            name: "GVoiceKit",
+            dependencies: [
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
+            path: "Sources/GVoiceKit"
+        ),
         .target(
             name: "StudioKit",
             dependencies: [
+                "GVoiceKit",
                 "EngineKit",
                 // Dia2 needs word timings for a conditioning clip, and the
                 // transcriber that produces them lives in SpeechKit.
@@ -195,6 +212,7 @@ let package = Package(
             name: "StudioKitTests",
             dependencies: [
                 "StudioKit",
+                "GVoiceKit",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
             path: "Tests/StudioKitTests"

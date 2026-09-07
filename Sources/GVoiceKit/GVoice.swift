@@ -4,8 +4,14 @@ import ZIPFoundation
 /// The one-file voice pack: one identity, its source audio, and per-engine
 /// renditions derived from it.
 ///
-/// `docs/gvoice-format.md` in this repo is the source of truth for the format;
-/// the Python engine (`voices.py`) conforms to the same document.
+/// `docs/gvoice-format.md` in this repo is the source of truth for the format,
+/// and this target is its only Swift implementation -- the macOS app and the
+/// iOS app both consume THIS code rather than each keeping a copy.
+///
+/// NOTE: the Python engine (`voices.py`) does NOT conform. It reads and writes
+/// a flat zip of `meta.json` + `ref.wav` with no manifest, no `source/` and no
+/// `engines/`. See "Known gaps" in the format doc; an earlier version of this
+/// comment claimed conformance and was wrong.
 public enum GVoice {
     /// Only version this build reads or writes.
     ///
@@ -94,6 +100,28 @@ public enum GVoice {
         /// Free-form, producer-defined record of how the renditions were made.
         /// Opaque to this reader — carried through import/export unchanged.
         public var provenance: JSONValue?
+
+        /// Spelled out because a public struct's memberwise init is internal.
+        /// It went unnoticed while the only caller was in this module; a client
+        /// target — the iOS app, or a test — cannot build a manifest without it.
+        public init(gvoice: Int, name: String, slug: String? = nil,
+                    createdAt: String? = nil, variants: [String]? = nil,
+                    pace: Double? = nil, enginePace: [String: Double]? = nil,
+                    gain: Double? = nil, source: [String: Source]? = nil,
+                    engines: [String: [String: [String]]]? = nil,
+                    provenance: JSONValue? = nil) {
+            self.gvoice = gvoice
+            self.name = name
+            self.slug = slug
+            self.createdAt = createdAt
+            self.variants = variants
+            self.pace = pace
+            self.enginePace = enginePace
+            self.gain = gain
+            self.source = source
+            self.engines = engines
+            self.provenance = provenance
+        }
     }
 
     /// Engine ids that must never leave this machine inside a pack.
@@ -143,7 +171,7 @@ public enum GVoice {
     /// means the recipient gets a voice on the engines you baked for and cannot
     /// re-clone it anywhere else — the right default for packs leaving your own
     /// machines, and the wrong one for your own library.
-    public static func export(_ slug: String, from library: VoiceLibrary,
+    public static func export(_ slug: String, from library: some GVoicePackStore,
                               includeSource: Bool = true) throws -> Data {
         let variants = library.variantSlugs(of: slug)
         let base = try library.entry(variants["base"] ?? slug)  // throws voiceNotFound
@@ -223,7 +251,7 @@ public enum GVoice {
     /// directories, regardless of what order `manifest.variants` lists keys in
     /// (that ordering is attacker-controlled and must not be trusted to put
     /// "base" first).
-    public static func `import`(_ data: Data, into library: VoiceLibrary) throws -> VoiceMeta {
+    public static func `import`(_ data: Data, into library: some GVoicePackStore) throws -> VoiceMeta {
         let archive: Archive
         let manifest: Manifest
         do {
@@ -300,11 +328,14 @@ public enum GVoice {
         guard baseRef != nil || !baseAssets.isEmpty else {
             throw StudioError.invalidArchive("archive has no base variant to install")
         }
+        // Spelled out in full: a protocol requirement cannot carry default
+        // arguments, so import states every field it means rather than
+        // inheriting one store's idea of a default.
         let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
                                         refText: sources["base"]?.text ?? "",
                                         provenance: manifest.provenance, engines: baseAssets,
                                         pace: manifest.pace, enginePace: manifest.enginePace,
-                                        gain: manifest.gain)
+                                        gain: manifest.gain, notes: nil)
 
         for key in keys where key != "base" {
             let safeKey = try safeComponent(key)
@@ -312,7 +343,8 @@ public enum GVoice {
             guard ref != nil || !assets.isEmpty else { continue }
             try library.saveAt(slug: "\(baseMeta.slug)-\(safeKey)", name: "\(manifest.name) \(key)",
                                refWav: ref, refText: sources[key]?.text ?? "",
-                               provenance: manifest.provenance, variantOf: baseMeta.slug, engines: assets)
+                               provenance: manifest.provenance, variantOf: baseMeta.slug,
+                               engines: assets, notes: nil)
         }
         return baseMeta
     }
@@ -330,7 +362,11 @@ public enum GVoice {
     /// Reject a path component that could escape the voice directory. Member
     /// paths inside a pack are attacker-controlled — the manifest is just JSON
     /// in a zip someone sent us.
-    static func safeComponent(_ name: String) throws -> String {
+    ///
+    /// Public because every store needs it for the same reason, and a store
+    /// that rolled its own would be re-deciding a security rule the format
+    /// already owns.
+    public static func safeComponent(_ name: String) throws -> String {
         guard !name.isEmpty, name != ".", name != "..",
               !name.contains("/"), !name.contains("\\")
         else { throw StudioError.invalidArchive("unsafe path component: \(name)") }
