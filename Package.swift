@@ -61,7 +61,7 @@ let package = Package(
         // drop it again before pushing.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "e759907ae9b40a82b19ad6ea002726c7d9c775d2"),
+            revision: "fcc05e703c4c158fc210bd37d26ea6891223b7cc"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

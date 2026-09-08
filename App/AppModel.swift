@@ -709,6 +709,11 @@ final class AppModel {
                                  languageProvider: UITestFakeLanguageProvider())
             chatSpeechEngine = GloamEngine(provider: UITestFakeProvider())
         } else {
+            // Cap MLX's Metal buffer-reuse pool. The default is ~0.95x physical
+            // RAM, which let a Dia2 take strand ~10 GB of stale scratch and swap
+            // it (2026-09-08). 1 GB measured clean — footprint ~4 GB, zero swap,
+            // no slowdown. (A Settings-configurable cap is planned.)
+            MLXModelProvider.configureMemory(cacheLimitBytes: 1 << 30)
             let modelRoot = StoragePaths.models
             // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
             // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
