@@ -7,24 +7,31 @@ import Foundation
 ///
 /// Errors are surfaced as `LabToolError`: `.badInput` for a caller mistake
 /// (missing/ambiguous argument), `.unknownGroup` when a named group can't be
-/// resolved. The MCP layer turns both into an `isError: true` tool result; the
-/// HTTP layer turns both into a 4xx.
+/// resolved, `.disabled` when the server carries no store at all. The MCP layer
+/// turns all three into an `isError: true` tool result; the HTTP layer turns the
+/// first two into a 4xx and `.disabled` into a 503.
 enum LabTools {
     enum Error: Swift.Error, CustomStringConvertible {
         case badInput(String)
         case unknownGroup(String)
+        case disabled
         var description: String {
             switch self {
             case .badInput(let m): return m
             case .unknownGroup(let id): return "no Lab group with id '\(id)'"
+            case .disabled: return "Lab is disabled"
             }
         }
     }
 
-    /// The store the handlers operate on: the injected one, else the app-wide shared.
+    /// The store the handlers operate on. `nil` deps mean Lab is off (Settings →
+    /// Storage → Advanced, or a server built without one), and every handler
+    /// rejects rather than reaching for `LabStore.shared` behind the toggle's
+    /// back -- the gate is only real if there is no fallback.
     @MainActor
-    static func store(_ deps: APIDependencies) -> LabStore {
-        deps.lab ?? LabStore.shared
+    static func store(_ deps: APIDependencies) throws -> LabStore {
+        guard let lab = deps.lab else { throw Error.disabled }
+        return lab
     }
 
     /// Serialize a JSON object to `Data`. Returned by the functions below so the

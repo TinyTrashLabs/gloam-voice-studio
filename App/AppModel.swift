@@ -170,6 +170,24 @@ final class AppModel {
             chatAudioStore.cap = chatAudioRetentionCap
         }
     }
+    /// Developer-only Lab tab (⌘5), off by default. Also gates the server's Lab
+    /// surface: the deps carry a store only while this is on, so with Lab off
+    /// the `/v1/lab/*` routes 503 and the `lab_*` MCP tools vanish from
+    /// `tools/list`. That gate is snapshotted into the deps at build time, hence
+    /// the sync — flipping the toggle applies to a running server, no relaunch.
+    /// Written to the same key the views read with `@AppStorage`.
+    var labModeEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(labModeEnabled, forKey: "labModeEnabled")
+            scheduleServerSync()
+        }
+    }
+    /// Retention cap for Lab clips. `LabStore` reads this key live (it is a
+    /// `static let shared` with nowhere to push a new value), so there is
+    /// nothing to hand off here beyond persisting it.
+    var labClipRetentionCap: Int {
+        didSet { UserDefaults.standard.set(labClipRetentionCap, forKey: "labClipRetentionCap") }
+    }
     /// Voice engine chat replies render with — independent of the Studio
     /// backend so slow, quality-first studio work (Fish) never makes chat
     /// crawl. Small/fast backends only.
@@ -677,6 +695,9 @@ final class AppModel {
         chatContextTokens = defaults.object(forKey: "chatContextTokens") as? Int ?? 8192
         foundryCandidateRetentionCap = defaults.object(forKey: "foundryCandidateRetentionCap") as? Int ?? 50
         chatAudioRetentionCap = defaults.object(forKey: "chatAudioRetentionCap") as? Int ?? 200
+        labModeEnabled = defaults.bool(forKey: "labModeEnabled")
+        labClipRetentionCap = defaults.object(forKey: "labClipRetentionCap") as? Int
+            ?? LabStore.defaultClipCap
         chatThinking = defaults.bool(forKey: "chatThinking")
         if let data = defaults.data(forKey: "savedDirections"),
            let decoded = try? JSONDecoder().decode([DirectionPreset].self, from: data) {
@@ -1617,8 +1638,10 @@ final class AppModel {
                 WhisperWordAligner(transcriber: await speech.makeTranscriber())
             },
             // The Lab shelf the tab observes, so an agent's lab_put_clip over
-            // MCP lands in the same in-process store the UI is showing.
-            lab: LabStore.shared)
+            // MCP lands in the same in-process store the UI is showing — and
+            // only while Lab is on: nil is what makes the toggle a real gate
+            // on the MCP/HTTP surface, not just on the tab.
+            lab: labModeEnabled ? LabStore.shared : nil)
     }
 
     private func performServerSync() async {

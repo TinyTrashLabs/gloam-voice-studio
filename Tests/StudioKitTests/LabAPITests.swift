@@ -45,6 +45,18 @@ final class LabAPITests: XCTestCase, @unchecked Sendable {
         try await Application(router: APIRouter.build(deps)).test(.router, body)
     }
 
+    /// An app whose deps carry NO Lab store -- what Settings' Lab toggle being
+    /// off builds.
+    private func withLabDisabledApp(
+        _ body: @escaping @Sendable (any TestClientProtocol) async throws -> Void
+    ) async throws {
+        let off = APIDependencies(
+            engine: GloamEngine(provider: ToneProvider()),
+            voices: VoiceLibrary(directory: dir),
+            defaultBackend: .chatterboxTurbo)
+        try await Application(router: APIRouter.build(off)).test(.router, body)
+    }
+
     /// A 1s silent WAV at 24 kHz, as the task prescribes.
     private func sampleWAV() -> Data {
         WAVEncoder.encode(pcm16: PCM16.data(from: [Float](repeating: 0, count: 24_000)),
@@ -152,6 +164,58 @@ final class LabAPITests: XCTestCase, @unchecked Sendable {
                 let text = String(buffer: resp.body)
                 XCTAssertTrue(text.contains("B · single"), text)
             }
+        }
+    }
+
+    // MARK: Lab off
+
+    /// With Lab off there is no store in the deps, and the routes must refuse
+    /// rather than quietly serve `LabStore.shared` behind the toggle's back.
+    func testHTTPRoutesRejectWhenLabIsDisabled() async throws {
+        try await withLabDisabledApp { client in
+            try await client.execute(uri: "/v1/lab/list", method: .get) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+            try await client.execute(uri: "/v1/lab/feedback", method: .get) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+            try await client.execute(uri: "/v1/lab/groups", method: .post,
+                body: ByteBuffer(string: #"{"heading":"should not land"}"#)) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+            let wavB64 = self.sampleWAV().base64EncodedString()
+            try await client.execute(uri: "/v1/lab/clips", method: .post,
+                body: ByteBuffer(string: #"{"group_heading":"nope","label":"A","audio_b64":"\#(wavB64)"}"#)) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+            try await client.execute(uri: "/v1/lab/groups/anything", method: .delete) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+            try await client.execute(uri: "/v1/lab/clips/anything", method: .delete) { resp in
+                XCTAssertEqual(resp.status, .serviceUnavailable)
+            }
+        }
+        // Nothing reached the real store this test injects elsewhere, nor the
+        // shared one: the disabled app has neither.
+        let untouched = await MainActor.run { self.lab.state.groups.isEmpty }
+        XCTAssertTrue(untouched)
+    }
+
+    /// Same gate on the MCP side: the tools are a tool error, not a mutation.
+    func testMCPLabToolsRejectWhenLabIsDisabled() async throws {
+        try await withLabDisabledApp { client in
+            let reply = try await self.rpc(client, #"""
+            {"jsonrpc":"2.0","id":1,"method":"tools/call",
+             "params":{"name":"lab_set_group","arguments":{"heading":"should not land"}}}
+            """#)
+            let result = try XCTUnwrap(reply["result"] as? [String: Any])
+            XCTAssertEqual(result["isError"] as? Bool, true)
+            let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+            XCTAssertTrue(text.contains("Lab is disabled"), text)
+
+            let listReply = try await self.rpc(client,
+                #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lab_list","arguments":{}}}"#)
+            XCTAssertEqual((listReply["result"] as? [String: Any])?["isError"] as? Bool, true)
         }
     }
 

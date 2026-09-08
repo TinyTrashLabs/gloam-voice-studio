@@ -42,7 +42,7 @@ enum MCPRoute {
             case "ping":
                 return jsonRPCResult(id: id, [String: Any]())
             case "tools/list":
-                return jsonRPCResult(id: id, ["tools": toolDefinitions()])
+                return jsonRPCResult(id: id, ["tools": toolDefinitions(deps: deps)])
             case "tools/call":
                 return await callTool(id: id, params: params, deps: deps)
             default:
@@ -55,8 +55,11 @@ enum MCPRoute {
 
     // MARK: tools
 
-    private static func toolDefinitions() -> [[String: Any]] {
-        [
+    /// The advertised surface. The six `lab_*` tools are appended only when the
+    /// server was built with a Lab store (Settings → Storage → Advanced): with
+    /// Lab off an agent must not even see them, let alone be able to call them.
+    private static func toolDefinitions(deps: APIDependencies) -> [[String: Any]] {
+        var tools: [[String: Any]] = [
             [
                 "name": "list_voices",
                 "description": "List the cloned voices in the Gloam library "
@@ -111,6 +114,9 @@ enum MCPRoute {
                     ],
                 ],
             ],
+        ]
+        guard deps.lab != nil else { return tools }
+        tools += [
             [
                 "name": "lab_set_group",
                 "description": "Create or update a Lab comparison group (the unit "
@@ -196,6 +202,7 @@ enum MCPRoute {
                 ],
             ],
         ]
+        return tools
     }
 
     private static func callTool(id: Any?, params: [String: Any],
@@ -329,7 +336,7 @@ enum MCPRoute {
             let groupID = arguments["id"] as? String
             do {
                 let out = try await MainActor.run {
-                    try LabTools.setGroup(LabTools.store(deps), heading: heading,
+                    try LabTools.setGroup(try LabTools.store(deps), heading: heading,
                                           listenFor: listenFor, id: groupID)
                 }
                 return toolResult(id: id, content: [jsonText(out)])
@@ -347,7 +354,7 @@ enum MCPRoute {
             let path = arguments["path"] as? String
             do {
                 let out = try await MainActor.run {
-                    try LabTools.putClip(LabTools.store(deps),
+                    try LabTools.putClip(try LabTools.store(deps),
                                          groupID: groupID, groupHeading: groupHeading,
                                          label: label, note: note,
                                          audioB64: audioB64, path: path, source: .mcp)
@@ -357,13 +364,17 @@ enum MCPRoute {
                 return toolError(id: id, "\(error)")
             }
         case "lab_list":
-            let out = await MainActor.run { LabTools.list(LabTools.store(deps)) }
-            return toolResult(id: id, content: [jsonText(out)])
+            do {
+                let out = try await MainActor.run { LabTools.list(try LabTools.store(deps)) }
+                return toolResult(id: id, content: [jsonText(out)])
+            } catch {
+                return toolError(id: id, "\(error)")
+            }
         case "lab_read_feedback":
             let groupID = arguments["group_id"] as? String
             do {
                 let data = try await MainActor.run {
-                    try LabTools.feedbackJSON(LabTools.store(deps), groupID: groupID)
+                    try LabTools.feedbackJSON(try LabTools.store(deps), groupID: groupID)
                 }
                 return toolResult(id: id, content: [
                     ["type": "text", "text": String(decoding: data, as: UTF8.self)],
@@ -376,7 +387,7 @@ enum MCPRoute {
                 return toolError(id: id, "lab_delete_group requires 'group_id'")
             }
             do {
-                try await MainActor.run { try LabTools.deleteGroup(LabTools.store(deps), groupID: groupID) }
+                try await MainActor.run { try LabTools.deleteGroup(try LabTools.store(deps), groupID: groupID) }
                 return toolResult(id: id, content: [jsonText(Data("{\"ok\":true}".utf8))])
             } catch {
                 return toolError(id: id, "\(error)")
@@ -386,7 +397,7 @@ enum MCPRoute {
                 return toolError(id: id, "lab_delete_clip requires 'clip_id'")
             }
             do {
-                try await MainActor.run { try LabTools.deleteClip(LabTools.store(deps), clipID: clipID) }
+                try await MainActor.run { try LabTools.deleteClip(try LabTools.store(deps), clipID: clipID) }
                 return toolResult(id: id, content: [jsonText(Data("{\"ok\":true}".utf8))])
             } catch {
                 return toolError(id: id, "\(error)")

@@ -16,14 +16,30 @@ public final class LabStore {
     /// The app-wide store, rooted at `StoragePaths.lab`.
     public static let shared = LabStore(directory: StoragePaths.lab)
 
+    /// Clips kept when nothing is persisted -- the Settings stepper's default.
+    public static let defaultClipCap = 100
+
     public private(set) var state: LabState
     private let directory: URL
+    private let capOverride: Int?
     private var clipsDir: URL { directory.appendingPathComponent("clips") }
     private var jsonURL: URL { directory.appendingPathComponent("lab.json") }
 
+    /// How many clips the shelf keeps before ingest prunes the oldest. Read
+    /// live off the same defaults key the Settings stepper writes: `shared` is
+    /// a `static let` with no AppModel `didSet` to push a new value in the way
+    /// ChatAudioStore gets one, so the setting reaches it here instead.
+    private var clipCap: Int {
+        max(1, capOverride
+            ?? (UserDefaults.standard.object(forKey: "labClipRetentionCap") as? Int
+                ?? Self.defaultClipCap))
+    }
+
     /// Inject a directory for tests; defaults to the shared app location.
-    public init(directory: URL) {
+    /// `clipCap` likewise overrides the persisted cap for tests.
+    public init(directory: URL, clipCap: Int? = nil) {
         self.directory = directory
+        self.capOverride = clipCap
         self.state = LabStore.load(from: directory.appendingPathComponent("lab.json"))
     }
 
@@ -119,6 +135,7 @@ public final class LabStore {
         state.clips.append(clip)
         state.groups[gi].clipIDs.append(id)
         state.groups[gi].updatedAt = Date()
+        pruneClips()
         save()
         return clip
     }
@@ -155,6 +172,23 @@ public final class LabStore {
             state.groups[gi].updatedAt = Date()
         }
         save()
+    }
+
+    /// Cap the shelf at `clipCap`, dropping the oldest clips by `addedAt` --
+    /// their bytes too, since the store owns them. Runs on ingest, so an agent
+    /// pushing renders in a loop can't quietly fill the disk. The clip just
+    /// added is the newest, so it is never the one evicted.
+    private func pruneClips() {
+        let overflow = state.clips.count - clipCap
+        guard overflow > 0 else { return }
+        let doomed = state.clips.sorted { $0.addedAt < $1.addedAt }.prefix(overflow)
+        for clip in doomed {
+            try? FileManager.default.removeItem(at: clipsDir.appendingPathComponent(clip.file))
+            state.clips.removeAll { $0.id == clip.id }
+            if let gi = state.groups.firstIndex(where: { $0.id == clip.groupID }) {
+                state.groups[gi].clipIDs.removeAll { $0 == clip.id }
+            }
+        }
     }
 
     // MARK: Marks
@@ -210,7 +244,20 @@ public final class LabStore {
         guard let data = try? Data(contentsOf: url) else { return LabState() }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        return (try? dec.decode(LabState.self, from: data)) ?? LabState()
+        if let state = try? dec.decode(LabState.self, from: data) { return state }
+        // Decode failed on a file that has bytes: something wrote garbage or the
+        // schema drifted. Returning an empty state here would let the next save
+        // atomically overwrite the file and erase the user's marks/verdicts, so
+        // move the bad file aside first — it's the only copy of that work.
+        if !data.isEmpty {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let backup = url.deletingPathExtension()
+                .appendingPathExtension("json.corrupt-\(stamp)")
+            try? FileManager.default.moveItem(at: url, to: backup)
+            print("LabStore: unreadable lab.json backed up to \(backup.lastPathComponent)")
+        }
+        return LabState()
     }
 }
 

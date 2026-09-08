@@ -195,10 +195,11 @@ public struct APIDependencies: Sendable {
     /// finds no timings, which the dialogue route reads as "no prefix" and
     /// generates unconditioned rather than failing.
     public let makeAligner: @Sendable () async -> any WordAligning
-    /// The in-app audio comparison shelf the Lab tools mutate. `nil` when the
-    /// server is built without one (today's tests, a headless run); the Lab
-    /// handlers then fall back to `LabStore.shared`. `@MainActor`-isolated, so
-    /// the handlers hop to the main actor to touch it.
+    /// The in-app audio comparison shelf the Lab tools mutate. `nil` when Lab
+    /// is off in Settings, or the server is built without one (a test, a
+    /// headless run): the `/v1/lab/*` routes then 503, the `lab_*` MCP tools
+    /// return a tool error, and `tools/list` omits them entirely.
+    /// `@MainActor`-isolated, so the handlers hop to the main actor to touch it.
     public let lab: LabStore?
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,

@@ -512,7 +512,6 @@ struct ConsoleLog: View {
 struct StorageSettings: View {
     @Environment(AppModel.self) private var model
     @State private var sizes: [(String, Int64)] = []
-    @AppStorage("labModeEnabled") private var labModeEnabled = false
 
     var body: some View {
         @Bindable var model = model
@@ -523,13 +522,22 @@ struct StorageSettings: View {
             }
             Button("Recalculate") { recalc() }
             Section("Advanced") {
-                Toggle("Enable Lab (advanced audio comparison)", isOn: $labModeEnabled)
+                Toggle("Enable Lab (advanced audio comparison)", isOn: $model.labModeEnabled)
                     .accessibilityIdentifier("lab-mode-toggle")
                 Text("Adds a Lab tab (⌘5) for developers — a comparison shelf that collects "
                      + "clips from any source side by side, with timestamp marks, comments, and "
                      + "verdicts an agent can read back. Off by default; turning it off hides the "
-                     + "tab without deleting anything.")
+                     + "tab without deleting anything, and closes the Lab tools on the API "
+                     + "server too.")
                     .font(.caption).foregroundStyle(.secondary)
+                if model.labModeEnabled {
+                    Stepper("Keep last \(model.labClipRetentionCap) Lab clips",
+                            value: $model.labClipRetentionCap, in: 5...500, step: 5)
+                        .accessibilityIdentifier("lab-clip-retention-cap")
+                    Text("Older Lab clips beyond this count are pruned automatically, "
+                         + "oldest first.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Voice candidates") {
                 Stepper("Keep last \(model.foundryCandidateRetentionCap) candidates",
@@ -556,6 +564,7 @@ struct StorageSettings: View {
             ("History", StoragePaths.directorySize(StoragePaths.history)),
             ("Voice Candidates", StoragePaths.directorySize(StoragePaths.foundryCandidates)),
             ("Chat Audio", StoragePaths.directorySize(StoragePaths.chatAudio)),
+            ("Lab", StoragePaths.directorySize(StoragePaths.lab)),
             ("Models", StoragePaths.directorySize(StoragePaths.models)),
         ]
     }

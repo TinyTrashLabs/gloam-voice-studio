@@ -30,6 +30,7 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
 
     private func makeApp(backend: BackendID = .qwen17B,
                          voices: VoiceLibrary? = nil,
+                         lab: LabStore? = nil,
                          defaultVoice: @escaping @Sendable () -> String = { "" }
     ) -> some ApplicationProtocol {
         let dir = FileManager.default.temporaryDirectory
@@ -37,7 +38,8 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
         let deps = APIDependencies(engine: GloamEngine(provider: ToneProvider()),
                                    voices: voices ?? VoiceLibrary(directory: dir),
                                    defaultBackend: backend,
-                                   defaultVoice: defaultVoice)
+                                   defaultVoice: defaultVoice,
+                                   lab: lab)
         return Application(router: APIRouter.build(deps))
     }
 
@@ -62,6 +64,23 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
                            "gloam-voice-studio")
             XCTAssertNotNil(initResult?["protocolVersion"])
 
+            // No Lab store in these deps (Lab off in Settings), so the six
+            // `lab_*` tools are not advertised at all.
+            let listReply = try await self.rpc(client,
+                #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+            XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
+                           ["list_voices", "listen", "speak", "transcribe"])
+        }
+    }
+
+    /// With Lab on (the deps carry a store), the six `lab_*` tools join the list.
+    func testToolsListIncludesLabToolsWhenLabIsEnabled() async throws {
+        let labDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-lab-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: labDir) }
+        let lab = await MainActor.run { LabStore(directory: labDir) }
+        try await makeApp(lab: lab).test(.router) { client in
             let listReply = try await self.rpc(client,
                 #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]

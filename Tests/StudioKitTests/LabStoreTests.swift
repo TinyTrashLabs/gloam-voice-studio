@@ -77,6 +77,25 @@ final class LabStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
     }
 
+    /// Ingest enforces the clip cap: with the cap full, the oldest clip and its
+    /// wav go, and the newcomer stays.
+    func testPutClipPrunesOldestBeyondCap() throws {
+        let store = LabStore(directory: dir, clipCap: 2)
+        let g = store.setGroup(heading: "capped")
+        let first = try store.putClip(groupID: g.id, label: "A", wav: oneSecondWav())
+        let firstPath = store.url(for: first).path
+        let second = try store.putClip(groupID: g.id, label: "B", wav: oneSecondWav())
+        let third = try store.putClip(groupID: g.id, label: "C", wav: oneSecondWav())
+
+        XCTAssertEqual(store.state.clips.map(\.id), [second.id, third.id])
+        XCTAssertNil(store.clip(first.id))
+        // The evicted clip leaves neither a dangling id in its group …
+        XCTAssertEqual(store.group(g.id)?.clipIDs, [second.id, third.id])
+        // … nor its bytes on disk.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.url(for: third).path))
+    }
+
     func testFeedbackReturnsMarksCommentsVerdictAndOpenRequests() throws {
         let store = LabStore(directory: dir)
         let g = store.setGroup(heading: "fb")

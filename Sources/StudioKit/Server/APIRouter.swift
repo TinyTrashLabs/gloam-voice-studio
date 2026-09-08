@@ -513,7 +513,7 @@ public enum APIRouter {
             let req = try await request.decode(as: LabGroupRequest.self, context: context)
             let out = try await mapLabErrors {
                 try await MainActor.run {
-                    try LabTools.setGroup(LabTools.store(deps), heading: req.heading,
+                    try LabTools.setGroup(try LabTools.store(deps), heading: req.heading,
                                           listenFor: req.listen_for ?? "", id: req.id)
                 }
             }
@@ -524,7 +524,7 @@ public enum APIRouter {
             let req = try await request.decode(as: LabClipRequest.self, context: context)
             let out = try await mapLabErrors {
                 try await MainActor.run {
-                    try LabTools.putClip(LabTools.store(deps),
+                    try LabTools.putClip(try LabTools.store(deps),
                                          groupID: req.group_id, groupHeading: req.group_heading,
                                          label: req.label, note: req.note,
                                          audioB64: req.audio_b64, path: req.path, source: .mcp)
@@ -534,7 +534,9 @@ public enum APIRouter {
         }
 
         router.get("v1/lab/list") { _, _ -> Response in
-            let out = await MainActor.run { LabTools.list(LabTools.store(deps)) }
+            let out = try await mapLabErrors {
+                try await MainActor.run { LabTools.list(try LabTools.store(deps)) }
+            }
             return jsonResponse(out)
         }
 
@@ -542,7 +544,7 @@ public enum APIRouter {
             let groupID = request.uri.queryParameters["group_id"].map(String.init)
             let data = try await mapLabErrors {
                 try await MainActor.run {
-                    try LabTools.feedbackJSON(LabTools.store(deps), groupID: groupID)
+                    try LabTools.feedbackJSON(try LabTools.store(deps), groupID: groupID)
                 }
             }
             return Response(status: .ok,
@@ -553,7 +555,7 @@ public enum APIRouter {
         router.delete("v1/lab/groups/:id") { _, context -> Response in
             let id = try context.parameters.require("id")
             try await mapLabErrors {
-                try await MainActor.run { try LabTools.deleteGroup(LabTools.store(deps), groupID: id) }
+                try await MainActor.run { try LabTools.deleteGroup(try LabTools.store(deps), groupID: id) }
             }
             return jsonResponse(Data(#"{"ok":true}"#.utf8))
         }
@@ -561,7 +563,7 @@ public enum APIRouter {
         router.delete("v1/lab/clips/:id") { _, context -> Response in
             let id = try context.parameters.require("id")
             try await mapLabErrors {
-                try await MainActor.run { try LabTools.deleteClip(LabTools.store(deps), clipID: id) }
+                try await MainActor.run { try LabTools.deleteClip(try LabTools.store(deps), clipID: id) }
             }
             return jsonResponse(Data(#"{"ok":true}"#.utf8))
         }
@@ -578,7 +580,8 @@ public enum APIRouter {
     }
 
     /// LabTools.Error → FastAPI-parity status + detail. `.unknownGroup` is a 404
-    /// (the named group isn't there); `.badInput` a 400 (a caller mistake).
+    /// (the named group isn't there); `.badInput` a 400 (a caller mistake);
+    /// `.disabled` a 503 (Lab is off — the surface exists but is not serving).
     static func mapLabErrors<T>(_ body: () async throws -> T) async throws -> T {
         do { return try await body() }
         catch let error as LabTools.Error {
@@ -587,6 +590,8 @@ public enum APIRouter {
                 throw APIError(status: .notFound, detail: error.description)
             case .badInput:
                 throw APIError(status: .badRequest, detail: error.description)
+            case .disabled:
+                throw APIError(status: .serviceUnavailable, detail: error.description)
             }
         }
     }

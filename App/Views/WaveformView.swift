@@ -147,6 +147,11 @@ struct SeekableWaveformView: View {
                             .offset(x: max(0, (geometry.size.width - 2) * fraction))
                     }
                     .allowsHitTesting(false)
+                    // The seek layer carries the accessibility annotations too.
+                    // Reading `player.position` here scopes the observation to
+                    // this overlay subtree, so a seek re-evaluates only the
+                    // playhead — not the sibling WaveformView, which would
+                    // otherwise re-decode the whole WAV on every drag tick.
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0)
@@ -155,21 +160,21 @@ struct SeekableWaveformView: View {
                                 player.seek(id: id, data: wavData,
                                             fraction: value.location.x / geometry.size.width)
                             })
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Playback position")
+                        .accessibilityValue("\(Int(player.position(for: id))) seconds")
+                        .accessibilityAdjustableAction { direction in
+                            let duration = player.duration(for: id)
+                            let delta: Double = direction == .increment ? 5 : -5
+                            // Load on the first keyboard adjustment, then use its duration.
+                            if duration == 0 { player.seek(id: id, data: wavData, fraction: 0) }
+                            let loadedDuration = player.duration(for: id)
+                            guard loadedDuration > 0 else { return }
+                            player.seek(id: id, data: wavData,
+                                        fraction: (player.position(for: id) + delta) / loadedDuration)
+                        }
+                        .help("Click or drag to seek")
                 }
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Playback position")
-            .accessibilityValue("\(Int(player.position(for: id))) seconds")
-            .accessibilityAdjustableAction { direction in
-                let duration = player.duration(for: id)
-                let delta: Double = direction == .increment ? 5 : -5
-                // Load on the first keyboard adjustment, then use its duration.
-                if duration == 0 { player.seek(id: id, data: wavData, fraction: 0) }
-                let loadedDuration = player.duration(for: id)
-                guard loadedDuration > 0 else { return }
-                player.seek(id: id, data: wavData,
-                            fraction: (player.position(for: id) + delta) / loadedDuration)
-            }
-            .help("Click or drag to seek")
     }
 }

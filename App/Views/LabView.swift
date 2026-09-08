@@ -497,26 +497,45 @@ private struct LabWaveformScrubber: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let x = { (t: Double) in CGFloat(min(max(t / duration, 0), 1)) * w }
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.04))
-                WaveformView(wavData: wavData, color: Brand.fgDim)
-                    .padding(.horizontal, 2)
-                // Pinned marks: a thin line per mark so the eye lands on them.
-                ForEach(marks) { m in
-                    Rectangle().fill(Brand.accent.opacity(0.7))
-                        .frame(width: 1.5)
-                        .offset(x: x(m.t))
-                }
-                // Playhead.
+                // Static layer: bg + waveform + pinned marks. None of these
+                // depend on `currentTime`, so SwiftUI reuses this subtree
+                // untouched while the playhead moves — the WAV decodes once,
+                // not on every 10 Hz ticker tick.
+                LabWaveformStatic(wavData: wavData, duration: duration, marks: marks, width: w)
+                // Playhead — the only piece that tracks `currentTime`.
                 Rectangle().fill(Brand.fg)
                     .frame(width: 1.5)
-                    .offset(x: x(currentTime))
+                    .offset(x: CGFloat(min(max(currentTime / duration, 0), 1)) * w)
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
                 onSeek(Double(min(max(v.location.x / w, 0), 1)) * duration)
             })
+        }
+    }
+}
+
+/// The unchanging part of the scrubber — background, waveform, pinned marks.
+/// Split out from `LabWaveformScrubber` so its inputs never include the moving
+/// `currentTime`; SwiftUI then skips re-rendering (and re-decoding) it while the
+/// playhead advances.
+private struct LabWaveformStatic: View {
+    let wavData: Data
+    let duration: Double
+    let marks: [LabMark]
+    let width: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.04))
+            WaveformView(wavData: wavData, color: Brand.fgDim)
+                .padding(.horizontal, 2)
+            ForEach(marks) { m in
+                Rectangle().fill(Brand.accent.opacity(0.7))
+                    .frame(width: 1.5)
+                    .offset(x: CGFloat(min(max(m.t / duration, 0), 1)) * width)
+            }
         }
     }
 }
