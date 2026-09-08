@@ -51,14 +51,17 @@ let package = Package(
         // back at 200 Hz, or as the other speaker outright.
         // NOTE: this is #11's branch head, not main. Repin to the merge
         // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
-        // LOCAL OVERRIDE (Dia2 quality work, feat/dia2). SwiftPM prefers a
-        // `.package(path:)` over the URL pin for the same package identity, so
-        // ../mlx-audio-swift is what actually builds. Drop this line and the
-        // URL pin below takes over again.
-        .package(path: "../mlx-audio-swift"),
-        // .package(
-        //     url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-        //     revision: "d84bcca8f74d0db24cc8ecb542c4cbb6c54a8d6c"),
+        // Pinned to fix/dia2-rope-context-overflow's head (pushed 2026-09-07):
+        // the revision the iOS engine spike measured EngineKit's LuxTTS against,
+        // and the one gloam-voice-studio-ios pins this package at by URL. A
+        // path override here breaks every URL consumer (SwiftPM resolves the
+        // path relative to the checkout, which has no sibling), so for LOCAL
+        // Dia2 work add `.package(path: "../mlx-audio-swift")` above this line
+        // — SwiftPM prefers a path over a URL pin for the same identity — and
+        // drop it again before pushing.
+        .package(
+            url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
+            revision: "e759907ae9b40a82b19ad6ea002726c7d9c775d2"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
