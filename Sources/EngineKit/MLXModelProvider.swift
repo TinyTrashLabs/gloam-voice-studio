@@ -203,6 +203,14 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
     }
 
     func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
+        // Drain MLX's Metal buffer-reuse cache once this pass hands back its
+        // CPU samples, exactly as MLXSpeechModel.synthesize() does per line.
+        // Dia2's per-pass GPU scratch (KV cache + Mimi codec activations) is
+        // large, the desktop cache is uncapped, and dialogue renders many
+        // passes per take — without this the reuse cache climbed to ~18 GB and
+        // held (2026-09-08). DialogueChunk.samples is already [Float], so the
+        // trim frees only scratch, never the audio we return.
+        defer { Memory.clearCache() }
         // Dia2 resumes as speaker 1 after a prefix, so a pass opening on `[S2]`
         // would come back with both voices on each other's lines. Rebind it to
         // open on `[S1]`, clips and all — see `DialogueSpeakerBinding`.
@@ -241,6 +249,7 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
 
     /// A one-turn dialogue, so the ordinary single-voice path still works.
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        defer { Memory.clearCache() }   // same per-pass trim as synthesizeDialogue
         let (samples, _) = try await model.generateDialogue(script: [request.text])
         return samples
     }
@@ -317,6 +326,11 @@ struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
         let upstream = session.audio
         return AsyncThrowingStream { continuation in
             let task = Task {
+                // Drain MLX's uncapped Metal buffer-reuse cache once the whole
+                // exchange has streamed, mirroring the per-pass trim on the
+                // batch path — a long session otherwise accumulates GPU scratch
+                // just as a multi-pass take does (2026-09-08).
+                defer { Memory.clearCache() }
                 do {
                     for try await c in upstream {
                         continuation.yield(DialogueChunk(
