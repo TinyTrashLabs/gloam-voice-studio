@@ -202,30 +202,41 @@ final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
         Dia2RequestAdapter.config(r)
     }
 
-    private func prefixes(_ r: ProviderDialogueRequest)
-        -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
-    {
-        Dia2RequestAdapter.prefixes(r)
-    }
-
     func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
+        // Dia2 resumes as speaker 1 after a prefix, so a pass opening on `[S2]`
+        // would come back with both voices on each other's lines. Rebind it to
+        // open on `[S1]`, clips and all — see `DialogueSpeakerBinding`.
+        let binding = DialogueSpeakerBinding(script: request.script, prefixes: request.prefixes)
         let (samples, words) = try await model.generateDialogue(
-            script: request.script, prefixes: prefixes(request), config: config(request))
+            script: binding.script,
+            prefixes: Dia2RequestAdapter.prefixes(binding.prefixes),
+            config: config(request))
+        // The transcript needs no unflipping: it carries no speaker of its
+        // own, and the parser consumes `[S1]`/`[S2]` without ever emitting one
+        // as a word, so a rebound pass reports the same words in the same
+        // order. Callers attributing them positionally against their OWN
+        // script stay correct, which is exactly what must not change.
         return DialogueOutputAssembler.assemble(
             generated: DialogueChunk(
                 samples: samples,
                 words: Dia2WordTiming.aligned(words, sampleCount: samples.count,
                                               sampleRate: sampleRate)),
-            prefixes: request.prefixes,
+            // Prefix audio has to be reassembled in the order the model heard
+            // it, which is the binding's rather than the caller's.
+            prefixes: binding.prefixes,
             sampleRate: sampleRate,
             keepPrefixAudio: request.keepPrefixAudio)
     }
 
     func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
-        Dia2StreamingSession(
+        let binding = DialogueSpeakerBinding(script: request.script, prefixes: request.prefixes)
+        return Dia2StreamingSession(
             session: try model.streamDialogue(
-                script: request.script, prefixes: prefixes(request), config: config(request)),
-            sampleRate: sampleRate)
+                script: binding.script,
+                prefixes: Dia2RequestAdapter.prefixes(binding.prefixes),
+                config: config(request)),
+            sampleRate: sampleRate,
+            swapped: binding.swapped)
     }
 
     /// A one-turn dialogue, so the ordinary single-voice path still works.
@@ -268,7 +279,10 @@ enum Dia2RequestAdapter {
         return c
     }
 
-    static func prefixes(_ r: ProviderDialogueRequest)
+    /// Takes the clips already ordered by `DialogueSpeakerBinding`, not the
+    /// request's own array — the two differ exactly when a pass had to be
+    /// rebound, which is the case this all exists for.
+    static func prefixes(_ prefixes: [DialoguePrefix?])
         -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
     {
         func convert(_ p: DialoguePrefix?) -> Dia2PrefixInput? {
@@ -277,8 +291,8 @@ enum Dia2RequestAdapter {
                 samples: p.samples,
                 words: p.words.map { Dia2Word(text: $0.text, start: $0.start, end: $0.end) })
         }
-        return (convert(r.prefixes.first ?? nil),
-                convert(r.prefixes.count > 1 ? r.prefixes[1] : nil))
+        return (convert(prefixes.first ?? nil),
+                convert(prefixes.count > 1 ? prefixes[1] : nil))
     }
 
 }
@@ -288,8 +302,14 @@ struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
     let session: Dia2Session
     /// Needed to turn a chunk's sample count into the last word's end time.
     let sampleRate: Int
+    /// Set when the opening lines were rebound to `[S1]`. Every line appended
+    /// later has to be flipped the same way, or a session that started out
+    /// corrected drifts back onto the wrong voices halfway through.
+    var swapped: Bool = false
 
-    func append(_ lines: [String]) async { await session.append(lines) }
+    func append(_ lines: [String]) async {
+        await session.append(swapped ? lines.map(DialogueSpeakerBinding.flippingTags) : lines)
+    }
     func finish() async { await session.finish() }
     func cancel() async { await session.cancel() }
 

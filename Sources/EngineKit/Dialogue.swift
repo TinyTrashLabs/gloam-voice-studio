@@ -249,6 +249,98 @@ public enum DialoguePlanner {
     }
 }
 
+/// Which voice Dia2 gives the first turn of a pass.
+///
+/// Dia2 always resumes as SPEAKER 1 after a conditioning prefix — the
+/// reference's documented use is "place the voice of your assistant as prefix
+/// speaker 1, place the user's audio input as prefix speaker 2, and generate
+/// the response". A pass whose first line is `[S2]` sits outside that
+/// contract: the model gives the opener speaker 1's voice anyway, and because
+/// the turns alternate from there the WHOLE pass comes back with the two
+/// voices exchanged.
+///
+/// It is not a quality fault and does not sound like one — both voices are
+/// intact and undegraded, they are simply reading each other's lines. Across
+/// 16 seeded renders it measured as a 68% timbre "drift" in whichever pass
+/// happened to open on speaker 2, against 11% once each word is attributed to
+/// the voice that actually spoke it.
+///
+/// The fix is to hand Dia2 a script that always opens on `[S1]` and to
+/// exchange the conditioning clips to match, so speaker 1's voice lands on the
+/// speaker the script meant. Both halves must move together: flipping the tags
+/// alone only renames the problem, and swapping the clips alone IS the problem.
+public struct DialogueSpeakerBinding: Sendable {
+    /// The script as Dia2 must receive it: always opening on `[S1]`.
+    public let script: [String]
+    /// The conditioning clips in the order Dia2 must receive them. Anything
+    /// that reassembles prefix audio afterwards — `keepPrefixAudio` — has to
+    /// use THIS order rather than the caller's, because it is what the model
+    /// was actually given.
+    public let prefixes: [DialoguePrefix?]
+    /// Whether speaker 1 and speaker 2 were exchanged to get there.
+    public let swapped: Bool
+
+    public init(script: [String], prefixes: [DialoguePrefix?]) {
+        let first = prefixes.first ?? nil
+        let second = prefixes.count > 1 ? prefixes[1] : nil
+        // The swap exchanges the clips as well as the tags, so it can only run
+        // when the two slots agree. Dia2 cannot condition speaker 2 alone, so
+        // moving a lone speaker-1 clip into the second slot would make the
+        // pass THROW rather than merely sound wrong — and with one clip and an
+        // `[S2]` opener there is no arrangement that gets both voices right.
+        let exchangeable = (first == nil) == (second == nil)
+        swapped = Self.opensOnSpeakerTwo(script) && exchangeable
+        self.script = swapped ? script.map(Self.flippingTags) : script
+        // Only the two speaker slots move; a malformed longer array keeps its
+        // tail rather than being silently truncated.
+        self.prefixes = swapped && prefixes.count >= 2
+            ? [second, first] + prefixes.dropFirst(2)
+            : prefixes
+    }
+
+    static let speaker1Tag = "[S1]"
+    static let speaker2Tag = "[S2]"
+
+    /// Mirrors `Dia2ScriptParser`: the speaker of a line's first content word
+    /// is the last tag seen before it, and an untagged opening line is speaker
+    /// 1 because the parser alternates from an even line index.
+    static func opensOnSpeakerTwo(_ script: [String]) -> Bool {
+        guard let opener = script.first else { return false }
+        var speaker = 1
+        // The parser turns a colon into a space before splitting, so "[S2]:"
+        // has to read as a bare tag here too.
+        for token in opener.replacingOccurrences(of: ":", with: " ").split(separator: " ") {
+            if token == speaker1Tag { speaker = 1; continue }
+            if token == speaker2Tag { speaker = 2; continue }
+            break   // the first content word settles it
+        }
+        return speaker == 2
+    }
+
+    /// Exchanges `[S1]` and `[S2]` throughout a line, in ONE pass — two
+    /// sequential `replacingOccurrences` calls would collapse every tag onto
+    /// the same one. Only the tags change: the parser consumes them and never
+    /// emits one as a word, so the flipped script yields the identical
+    /// transcript, word for word and in the same order.
+    static func flippingTags(_ line: String) -> String {
+        var out = ""
+        var index = line.startIndex
+        while index < line.endIndex {
+            if line[index...].hasPrefix(speaker1Tag) {
+                out += speaker2Tag
+                index = line.index(index, offsetBy: speaker1Tag.count)
+            } else if line[index...].hasPrefix(speaker2Tag) {
+                out += speaker1Tag
+                index = line.index(index, offsetBy: speaker2Tag.count)
+            } else {
+                out.append(line[index])
+                index = line.index(after: index)
+            }
+        }
+        return out
+    }
+}
+
 /// How a script divides into Dia2 passes, so the UI can say so before generating.
 public struct SceneReport: Sendable, Equatable {
     public let sceneCount: Int

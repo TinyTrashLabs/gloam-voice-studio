@@ -138,6 +138,108 @@ if CommandLine.arguments.dropFirst().first == "dia2-compare" {
     exit(0)
 }
 
+// Renders a two-voice take through the APP's OWN path -- MLXModelProvider ->
+// Dia2SpeechModel -> synthesizeDialogue -- so `DialogueSpeakerBinding` is
+// actually exercised. `dia2-compare` above calls the model directly and so
+// cannot see the rebinding at all, which is exactly how a pass opening on
+// [S2] went unnoticed. Run it once per mode against one spec and one seed:
+// `before` reproduces the old behaviour by calling the model directly with the
+// script and clips untouched, `after` goes through the provider.
+//
+//   dia2-bind <spec.json> <outDir> <before|after>
+if CommandLine.arguments.dropFirst().first == "dia2-bind" {
+    let a = Array(CommandLine.arguments.dropFirst(2))
+    guard a.count >= 3, ["before", "after"].contains(a[2]) else {
+        die("dia2-bind <spec.json> <outDir> <before|after>")
+    }
+    struct SpecSpeaker: Decodable { let voice: String }
+    struct BindSpec: Decodable {
+        let speaker1: SpecSpeaker
+        let speaker2: SpecSpeaker
+        let seed: UInt64?
+        let passes: [[String]]
+    }
+    let spec = try JSONDecoder().decode(
+        BindSpec.self, from: Data(contentsOf: URL(fileURLWithPath: a[0])))
+    let outDir = URL(fileURLWithPath: a[1])
+    let mode = a[2]
+
+    let container = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Group Containers/UT233385J9.fm.gloam")
+    let voices = VoiceLibrary(directory: container.appendingPathComponent("Voices"))
+    let rate = BackendID.dia2.spec.defaultSampleRate
+
+    // Same cached alignments the app uses, so the conditioning is identical on
+    // both sides and only the binding differs.
+    func prefix(_ slug: String) throws -> DialoguePrefix {
+        guard let words = Dia2Alignment.cached(slug, in: voices), !words.isEmpty else {
+            die("no cached alignment.json for \(slug)")
+        }
+        guard let refURL = try Dia2Alignment.referenceURL(slug, in: voices) else {
+            die("no reference audio for \(slug)")
+        }
+        let samples = try RefAudioCombiner.decodeMono(try Data(contentsOf: refURL),
+                                                     sampleRate: Double(rate))
+        return DialoguePrefix(
+            samples: samples,
+            words: words.map { AlignedWordTiming(text: $0.w, start: $0.start, end: $0.end) })
+    }
+    let p1 = try prefix(spec.speaker1.voice)
+    let p2 = try prefix(spec.speaker2.voice)
+    print("prefixes: \(spec.speaker1.voice) \(p1.words.count)w + "
+          + "\(spec.speaker2.voice) \(p2.words.count)w | mode \(mode)")
+
+    // `after` goes through the provider the app loads; `before` holds the raw
+    // model so it can be called the way the old adapter called it.
+    var provider: (any DialogueSpeechModel)?
+    var raw: Dia2Model?
+    if mode == "after" {
+        let modelPath = container.appendingPathComponent("Models/dia2@2b-8bit").path
+        let loaded = try await MLXModelProvider(modelPathResolver: { _ in modelPath })
+            .loadModel(backend: .dia2)
+        guard let dialogue = loaded as? any DialogueSpeechModel else {
+            die("dia2 did not load as a dialogue model")
+        }
+        provider = dialogue
+    } else {
+        raw = try await Dia2Model.load(
+            from: container.appendingPathComponent("Models/dia2@2b-8bit"))
+    }
+
+    for (index, pass) in spec.passes.enumerated() {
+        let seed = (spec.seed ?? 4242) &+ UInt64(index)
+        let started = Date()
+        let samples: [Float]
+        if let provider {
+            samples = try await provider.synthesizeDialogue(
+                ProviderDialogueRequest(script: pass, prefixes: [p1, p2],
+                                        cfgScale: 6, maxPadding: 6, seed: seed)).samples
+        } else {
+            // The old adapter: script and clips straight through, untouched.
+            var config = Dia2GenerationConfig()
+            config.cfgScale = 6
+            config.maxPadding = 6
+            config.seed = seed
+            func input(_ p: DialoguePrefix) -> Dia2PrefixInput {
+                Dia2PrefixInput(samples: p.samples,
+                                words: p.words.map {
+                                    Dia2Word(text: $0.text, start: $0.start, end: $0.end)
+                                })
+            }
+            samples = try await raw!.generateDialogue(
+                script: pass, prefixes: (input(p1), input(p2)), config: config).0
+        }
+        let name = "\(mode).pass\(index + 1).wav"
+        try WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: rate)
+            .write(to: outDir.appendingPathComponent(name))
+        print(String(format: "pass %d opens %@ seed %llu: %.2fs audio, %.1fs wall -> %@",
+                     index + 1, pass.first?.prefix(4).description ?? "?", seed,
+                     Double(samples.count) / Double(rate),
+                     Date().timeIntervalSince(started), name))
+    }
+    exit(0)
+}
+
 
 import MLXAudioTTS
 
