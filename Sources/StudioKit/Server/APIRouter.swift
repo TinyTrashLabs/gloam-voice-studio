@@ -521,7 +521,16 @@ public enum APIRouter {
         }
 
         router.post("v1/lab/clips") { request, context -> Response in
-            let req = try await request.decode(as: LabClipRequest.self, context: context)
+            // A clip carries a whole WAV in `audio_b64`, so `request.decode`'s
+            // default 2 MB body cap rejects real audio. Collect the body
+            // directly at a Lab-sized limit (this is a local dev tool) the way
+            // the MCP route does, then decode from the buffer.
+            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            guard let data = buffer.readData(length: buffer.readableBytes),
+                  let req = try? JSONDecoder().decode(LabClipRequest.self, from: data)
+            else {
+                throw APIError(status: .badRequest, detail: "invalid lab clip body")
+            }
             let out = try await mapLabErrors {
                 try await MainActor.run {
                     try LabTools.putClip(try LabTools.store(deps),
