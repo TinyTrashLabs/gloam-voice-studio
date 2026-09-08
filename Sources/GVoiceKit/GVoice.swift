@@ -40,6 +40,11 @@ public enum GVoice {
     /// into the state the standard exists to fix.
     public static let maxGainDb: Double = 12
 
+    /// Where a pack's avatar lives. One square PNG at the root, sized by
+    /// `AvatarImage.side`; the manifest's `avatar` key names it so a reader
+    /// never has to probe for the member.
+    public static let avatarMember = "avatar.png"
+
     /// Per-voice loudness trim in dB, clamped. Absent — or non-finite, which is
     /// what a hand-edited manifest carrying `null`/`NaN` decodes to — means 0,
     /// i.e. the voice sits exactly where the reference standard put it.
@@ -100,6 +105,11 @@ public enum GVoice {
         /// Free-form, producer-defined record of how the renditions were made.
         /// Opaque to this reader — carried through import/export unchanged.
         public var provenance: JSONValue?
+        /// Pack-relative path of the avatar PNG, when the pack carries one.
+        /// Cosmetic, not identity: a reader that ignores it renders the voice
+        /// exactly as before, so adding it did NOT bump `gvoice`. Shared by
+        /// every variant — the picture is of the person, not of a mood.
+        public var avatar: String?
 
         /// Spelled out because a public struct's memberwise init is internal.
         /// It went unnoticed while the only caller was in this module; a client
@@ -109,7 +119,7 @@ public enum GVoice {
                     pace: Double? = nil, enginePace: [String: Double]? = nil,
                     gain: Double? = nil, source: [String: Source]? = nil,
                     engines: [String: [String: [String]]]? = nil,
-                    provenance: JSONValue? = nil) {
+                    provenance: JSONValue? = nil, avatar: String? = nil) {
             self.gvoice = gvoice
             self.name = name
             self.slug = slug
@@ -121,6 +131,7 @@ public enum GVoice {
             self.source = source
             self.engines = engines
             self.provenance = provenance
+            self.avatar = avatar
         }
     }
 
@@ -208,6 +219,15 @@ public enum GVoice {
 
         guard !entries.isEmpty else {
             throw StudioError.invalidArchive("voice \(slug) has nothing to export")
+        }
+        // After the emptiness check on purpose: a picture is not an asset in
+        // Rule 2's sense, so a pack that is only an avatar still has nothing
+        // to export. Travels whether or not `source/` does — it reveals no
+        // more than the name already does.
+        if let avatarURL = library.avatarURL(variants["base"] ?? slug),
+           let png = try? Data(contentsOf: avatarURL) {
+            entries.append((avatarMember, png))
+            manifest.avatar = avatarMember
         }
         return try makeArchive(entries: [("manifest.json", try JSONEncoder().encode(manifest))] + entries)
     }
@@ -336,6 +356,15 @@ public enum GVoice {
                                         provenance: manifest.provenance, engines: baseAssets,
                                         pace: manifest.pace, enginePace: manifest.enginePace,
                                         gain: manifest.gain, notes: nil)
+
+        // Rule 1 applies to the avatar as to any other member: missing,
+        // oversized, or not actually a PNG means no avatar, never a failed
+        // import. `readOptional` already enforces the archive-wide ceiling;
+        // an image gets the much tighter one on top.
+        if let member = manifest.avatar, let png = readOptional(member),
+           png.count <= AvatarImage.maxBytes, AvatarImage.isPNG(png) {
+            try? library.saveAvatar(baseMeta.slug, pngData: png)
+        }
 
         for key in keys where key != "base" {
             let safeKey = try safeComponent(key)

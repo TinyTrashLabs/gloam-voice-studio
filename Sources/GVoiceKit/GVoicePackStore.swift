@@ -10,8 +10,8 @@ import Foundation
 /// format's business and lives in this target, implemented once.
 ///
 /// The member list is not a design; it is a measurement. These are exactly
-/// the four operations `GVoice.export`/`GVoice.import` call, and no others.
-/// `VoiceLibrary` already satisfies all four with these signatures, so its
+/// the six operations `GVoice.export`/`GVoice.import` call, and no others.
+/// `VoiceLibrary` already satisfies all six with these signatures, so its
 /// conformance is empty -- which is the evidence the seam is in the right
 /// place. If a conformance here needs a body, the line has moved wrong.
 public protocol GVoicePackStore {
@@ -39,4 +39,13 @@ public protocol GVoicePackStore {
                 provenance: JSONValue?, variantOf: String?,
                 engines: [String: [String: Data]],
                 notes: String?) throws -> VoiceMeta
+
+    /// The voice's avatar PNG on disk, nil when it has none. Export packs it
+    /// as `GVoice.avatarMember`.
+    func avatarURL(_ slug: String) -> URL?
+
+    /// Store the avatar for an existing voice, replacing any it had. Import
+    /// calls this after the base voice is saved; the bytes are already
+    /// checked to be a PNG under `AvatarImage.maxBytes`.
+    func saveAvatar(_ slug: String, pngData: Data) throws
 }

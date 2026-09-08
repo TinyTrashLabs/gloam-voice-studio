@@ -367,6 +367,71 @@ final class GVoiceTests: XCTestCase {
         }
     }
 
+    // MARK: avatar
+
+    func testAvatarTravelsWithThePack() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1, 2]), refText: "hi")
+        let png = try AvatarImageTests.solidPNG(width: 256, height: 256)
+        try lib.saveAvatar("cruz", pngData: png)
+        let pack = try GVoice.export("cruz", from: lib)
+        XCTAssertEqual(try manifest(pack).avatar, GVoice.avatarMember)
+        XCTAssertTrue(try members(pack).contains(GVoice.avatarMember))
+
+        let destination = VoiceLibrary(directory: dir.appendingPathComponent("imported"))
+        _ = try GVoice.import(pack, into: destination)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(destination.avatarURL("cruz"))), png)
+    }
+
+    func testAvatarTravelsWithoutSourceToo() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1, 2]), refText: "hi",
+                         engines: ["supertonic": ["style.json": Self.style]])
+        try lib.saveAvatar("cruz", pngData: try AvatarImageTests.solidPNG(width: 256, height: 256))
+        let pack = try GVoice.export("cruz", from: lib, includeSource: false)
+        XCTAssertTrue(try members(pack).contains(GVoice.avatarMember))
+    }
+
+    func testPackWithoutAvatarNamesNone() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        let pack = try GVoice.export("cruz", from: lib)
+        XCTAssertNil(try manifest(pack).avatar)
+        XCTAssertFalse(try members(pack).contains(GVoice.avatarMember))
+    }
+
+    /// Rule 1: a bad avatar is one skipped asset, never a failed import.
+    func testAvatarThatIsNotAPNGIsSkippedNotFatal() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":2,"name":"Cruz","avatar":"avatar.png",
+             "source":{"base":{"audio":"source/ref.wav"}}}
+            """#.utf8)),
+            ("source/ref.wav", Data([1])),
+            ("avatar.png", Data("not an image".utf8)),
+        ])
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertNil(lib.avatarURL(meta.slug))
+    }
+
+    func testDanglingAvatarReferenceIsSkippedNotFatal() throws {
+        let pack = try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":2,"name":"Cruz","avatar":"avatar.png",
+             "source":{"base":{"audio":"source/ref.wav"}}}
+            """#.utf8)),
+            ("source/ref.wav", Data([1])),
+        ])
+        let meta = try GVoice.import(pack, into: lib)
+        XCTAssertNil(lib.avatarURL(meta.slug))
+    }
+
+    /// An old reader that knows nothing of `avatar` still imports the pack;
+    /// a new reader importing an old pack simply has no avatar. Both are the
+    /// same statement: the key is optional and additive, no `gvoice` bump.
+    func testAvatarIsAdditiveNoVersionBump() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        try lib.saveAvatar("cruz", pngData: try AvatarImageTests.solidPNG(width: 256, height: 256))
+        XCTAssertEqual(try manifest(try GVoice.export("cruz", from: lib)).gvoice, 2)
+    }
+
     // MARK: per-engine pace
 
     private func makeManifest(pace: Double? = nil,
