@@ -45,6 +45,17 @@ enum Brand {
         )
     }
 
+    /// Marketing version + build, e.g. "1.1.0 (10)", read straight from the
+    /// running bundle's Info.plist. Shown in the app menu so you can confirm at
+    /// a glance which binary is actually running — a stale /Applications copy
+    /// and a fresh dev build are otherwise easy to confuse.
+    static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }
+
     /// One source of truth for the artwork shown by macOS and inside the app.
     /// Loading the bundle resource directly also avoids a stale LaunchServices
     /// icon being reflected back through `NSApplication.applicationIconImage`.

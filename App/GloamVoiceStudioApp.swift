@@ -44,6 +44,13 @@ struct GloamVoiceStudioApp: App {
         }
         .defaultSize(width: 1280, height: 860)
         .commands {
+            // Version + build right under "About", so you can confirm which
+            // binary is running without guessing (a stale /Applications release
+            // vs. a fresh dev build look identical apart from this line).
+            CommandGroup(after: .appInfo) {
+                Button("Version \(Brand.versionString)") {}
+                    .disabled(true)
+            }
             CommandGroup(after: .newItem) {
                 Divider()
                 TranscribeMenuButton()
