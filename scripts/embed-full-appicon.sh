@@ -17,7 +17,9 @@
 # file we write.
 set -euo pipefail
 
-SRC="${SRCROOT:?}/App/Assets.xcassets/AppIcon.appiconset"
+# The classic (inset squircle) renders. Tahoe composes its own icon from
+# App/AppIcon.icon; these are for older macOS and for the store listing.
+SRC="${SRCROOT:?}/App/StoreIcon"
 # TARGET_BUILD_DIR, not BUILT_PRODUCTS_DIR: during an archive/install build the
 # two diverge, and the sandbox grants write only to the declared output path.
 DEST="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}/AppIcon.icns"
