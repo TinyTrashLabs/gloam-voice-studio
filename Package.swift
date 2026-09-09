@@ -59,9 +59,13 @@ let package = Package(
         // Dia2 work add `.package(path: "../mlx-audio-swift")` above this line
         // — SwiftPM prefers a path over a URL pin for the same identity — and
         // drop it again before pushing.
+        // spike/qwen-ios-speed head (2026-09-09): fused RoPE, greedy sub-codes
+        // and the hybrid fused decoder step (Qwen3TTSModel.fusedLayers) that
+        // put Qwen3-TTS 0.6B at real time on the iPhone 15 Pro. All behind
+        // statics that default off, so the Mac app is unchanged.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "fcc05e703c4c158fc210bd37d26ea6891223b7cc"),
+            revision: "4e07ff5036715e79376ba6d090b4cc27c6164e29"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
