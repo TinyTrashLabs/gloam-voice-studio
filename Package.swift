@@ -65,7 +65,7 @@ let package = Package(
         // statics that default off, so the Mac app is unchanged.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "4e07ff5036715e79376ba6d090b4cc27c6164e29"),
+            revision: "ddb122b0d65aff992b9227944c764a4f7c4e4057"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
