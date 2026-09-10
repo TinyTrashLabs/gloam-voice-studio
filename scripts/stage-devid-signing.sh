@@ -24,6 +24,12 @@ INFISICAL_ENV="prod"
 
 STAGE_DIR="$(mktemp -d /tmp/gloam-devid-stage.XXXXXX)"
 
+infisical_get() {
+  infisical secrets get "$1" \
+    --path "$INFISICAL_PATH" --projectId "$INFISICAL_PROJECT_ID" \
+    --env "$INFISICAL_ENV" --domain "$INFISICAL_DOMAIN" --plain 2>/dev/null
+}
+
 # --- The keychain: the PERSISTENT gloam-devsign one, never a throwaway ------
 #
 # This used to create a fresh `gloam-devid-build.keychain-db` with a random
