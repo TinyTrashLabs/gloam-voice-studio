@@ -228,8 +228,25 @@ final class DialogueComposer {
         prepareTasks[speaker] = Task {
             let rate = Double(BackendID.dia2.spec.defaultSampleRate)
             do {
+                // Same offer the bench makes: the first time this voice meets
+                // Dia, ask before spending minutes on Whisper. Declining is not
+                // a failure — the pass just won't be conditioned on this voice.
+                guard try await app.ensureDiaReady(slug: slug) else {
+                    guard !Task.isCancelled else { return }
+                    // Declining releases the pick rather than seating an
+                    // unprepared voice in the cast: Dia2 would speak the lines
+                    // in an invented voice filed under this one's name, which
+                    // is the substitution every other path here refuses. Back
+                    // to no voice — an unconditioned speaker, stated plainly
+                    // and not as an error.
+                    voices[index] = nil
+                    prefixStates[index] = .unconditioned(
+                        "Setup skipped, so this speaker has no voice and will vary "
+                        + "between takes. Pick the voice again to set it up.")
+                    return
+                }
                 let prefix = try await app.dialoguePrefix(
-                    for: slug, aligner: await app.makeAligner(), rate: rate)
+                    for: slug, aligner: app.makeDiaAligner(), rate: rate)
                 guard !Task.isCancelled else { return }
                 prefixes[slug] = prefix
                 prefixStates[index] = state(for: prefix)

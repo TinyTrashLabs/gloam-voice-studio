@@ -320,6 +320,20 @@ struct VoiceSidebarView: View {
             previewRef(voice)
         }
         .help("Play the reference audio for this voice")
+        // Only for a voice Dialogue can't use. A preset pack is a speaker name
+        // with no audio, and Dia2 conditions on audio — so the fix is to record
+        // some, with the voice's own engine. Offered here rather than in the
+        // Dialogue picker because it swaps the resident model, which the
+        // Dialogue screen has just finished swapping the other way.
+        if !model.voiceCapabilities(voice.slug).supports(.dia2) {
+            Button(model.diaUpgradeSlug == voice.slug
+                   ? "Making Dia-compatible…" : "Make Dia-compatible…") {
+                makeDiaCompatible(voice.slug)
+            }
+            .disabled(model.diaUpgradeSlug != nil)
+            .help("Record a reference clip with this voice's own engine so it "
+                  + "can be used in Dialogue. Loads that engine — takes a minute.")
+        }
         Button("Export…") { export(voice.slug) }
             .help("Export voice as a .gvoice pack")
         Button("Share…") { share(voice.slug) }
@@ -370,6 +384,12 @@ struct VoiceSidebarView: View {
         }
         let bundledSlugs = Set(bundled.map(\.base.slug))
         return (groups.filter { !bundledSlugs.contains($0.base.slug) }, bundled)
+    }
+
+    /// Fire-and-forget: the model owns the progress flag, and the only thing
+    /// coming back is a message worth showing in the library alert.
+    private func makeDiaCompatible(_ slug: String) {
+        Task { if let failure = await model.makeDiaCompatible(slug: slug) { actionError = failure } }
     }
 
     private func export(_ slug: String) {

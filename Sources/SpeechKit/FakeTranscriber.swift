@@ -30,4 +30,19 @@ public struct FakeTranscriber: Transcriber {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Evenly spaced word timings over the batch transcript.
+    ///
+    /// The fake stands in for a real transcriber in unit tests and in the
+    /// app's UI-test mode, and Dia2 conditioning is built from word timings —
+    /// so without this every fake-backed Dia2 path fell through to the
+    /// protocol default and threw `wordTimingsUnavailable`. The spacing is
+    /// arbitrary but deterministic: what callers exercise is the shape.
+    public func transcribeWords(audioURL: URL,
+                                languageHint: String? = nil) async throws -> [WordTiming] {
+        batchResult.split(separator: " ").enumerated().map { index, word in
+            WordTiming(text: String(word),
+                       start: Double(index) * 0.5, end: Double(index) * 0.5 + 0.4)
+        }
+    }
 }

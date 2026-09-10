@@ -1,3 +1,4 @@
+import AppKit
 import EngineKit
 import StudioKit
 import SwiftUI
@@ -18,6 +19,10 @@ struct DialogueView: View {
     @State private var voicePickerSpeaker: Int?
     @State private var voiceSearch = ""
     @FocusState private var voiceSearchFocused: Bool
+    /// Which turn's field holds focus, and which held it last — the tag chips
+    /// need both, because clicking a chip is itself a click away from the text.
+    @FocusState private var focusedTurn: UUID?
+    @State private var lastFocusedTurn: UUID?
     @AppStorage("dialogueInspectorVisible") private var inspectorVisible = true
     @AppStorage("labModeEnabled") private var labModeEnabled = false
     @State private var confirmingClear = false
@@ -134,7 +139,12 @@ struct DialogueView: View {
             HStack(spacing: 10) {
                 Button(model.loadingBackend == .dia2 ? "Loading Dia2…" : "Load Dia2") {
                     Task {
-                        model.backend = .dia2
+                        // Residency only — do NOT set `model.backend`. dia2 is not a
+                        // Studio speak-engine (issue #56); Dialogue drives off
+                        // `residentTTS`, and setting the bench backend to dia2 let it
+                        // hijack the Studio tab (its tags/controls + a wrong-voice
+                        // single-speaker Generate). Same shape as Create Voice loading
+                        // qwen3-design.
                         await model.loadModel(.dia2)
                     }
                 }
@@ -198,6 +208,8 @@ struct DialogueView: View {
                         Text("This resets the conversation to two empty turns.")
                     }
                 }
+
+                tagSection
 
                 zoneLabel("PASSES")
                 passPlan
@@ -340,6 +352,14 @@ struct DialogueView: View {
                     }
                     .buttonStyle(.plain)
                     ForEach(matchingVoices, id: \.slug) { voice in
+                        // Every voice is pickable, including the ones Dia2
+                        // can't speak as YET. Picking one runs the bake offer
+                        // (`AppModel.ensureDiaReady`) — which is the whole
+                        // point: a disabled row was a dead end, and the fix is
+                        // one confirmation away. It still can't look like a
+                        // ready voice, because the wait is real, so an unready
+                        // one carries a marker saying what picking it costs.
+                        let hint = model.diaReadiness(voice.slug).setupHint
                         Button {
                             composer.setVoice(voice.slug, forSpeaker: speaker)
                             voiceSearch = ""
@@ -349,7 +369,15 @@ struct DialogueView: View {
                                 VoiceAvatarView(slug: voice.slug, name: voice.name,
                                                 avatarURL: model.voiceAvatarURL(voice.slug),
                                                 size: 22)
-                                Text(voice.name).foregroundStyle(Brand.fg)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(voice.name).foregroundStyle(Brand.fg)
+                                    if let hint {
+                                        Label(hint, systemImage: "wand.and.stars")
+                                            .font(.caption2)
+                                            .foregroundStyle(Brand.fgDim)
+                                            .labelStyle(.titleAndIcon)
+                                    }
+                                }
                                 Spacer(minLength: 12)
                                 if composer.voices[speaker - 1] == voice.slug {
                                     Image(systemName: "checkmark")
@@ -362,6 +390,9 @@ struct DialogueView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .help(hint == nil ? ""
+                              : "Picking this voice offers to set it up for Dia. "
+                                + "It's done once, and can take a minute.")
                         .accessibilityIdentifier("dialogue-voice-option-\(voice.slug)")
                     }
                     if matchingVoices.isEmpty {
@@ -411,6 +442,7 @@ struct DialogueView: View {
                     .accessibilityIdentifier("dialogue-turn-speaker-\(index)")
                     TextField("What they say", text: $turn.text, axis: .vertical)
                         .textFieldStyle(.plain)
+                        .focused($focusedTurn, equals: turn.id)
                         .lineLimit(1...6)
                         .padding(6)
                         .background(RoundedRectangle(cornerRadius: 6)
@@ -461,6 +493,83 @@ struct DialogueView: View {
             }
         }
         .accessibilityIdentifier("dialogue-turns")
+        .onChange(of: focusedTurn) { _, turn in
+            if let turn { lastFocusedTurn = turn }
+        }
+    }
+
+    // MARK: tags
+
+    /// Dia2's own `(parenthesised)` sounds, inserted into the turn being
+    /// written.
+    ///
+    /// These chips used to live in Studio, which is where Dia2 used to be
+    /// speakable from; they followed it here. The vocabulary is the model's
+    /// own — read off the tokenizer on disk, not a curated list — because Dia2
+    /// speaks anything it doesn't recognise out loud, so a wrong chip is a word
+    /// in the take rather than a no-op.
+    @ViewBuilder
+    private var tagSection: some View {
+        let target = tagTargetTurn
+        let index = target.flatMap { id in composer.turns.firstIndex { $0.id == id } }
+        let tags = model.nonverbalTags(for: .dia2)
+        if !tags.isEmpty {
+            zoneLabel("TAGS")
+            if let target, let index {
+                // Which turn receives the insert, named. The chips write into a
+                // field that no longer has focus (clicking one takes it away),
+                // so the target has to be visible or the insert is a guess.
+                Text("Inserting into turn \(index + 1) · S\(composer.turns[index].speaker)")
+                    .font(.caption2)
+                    .foregroundStyle(Brand.fgDim)
+                    .accessibilityIdentifier("dialogue-tag-target")
+                TagChipsView(text: turnTextBinding(target), selection: caretInFocusedTurn,
+                             engineTags: tags, allowsCustomTags: false)
+            } else {
+                Text("Click into a turn to insert sounds.")
+                    .font(.caption2)
+                    .foregroundStyle(Brand.fgFaint)
+                    .accessibilityIdentifier("dialogue-tag-no-target")
+            }
+        }
+    }
+
+    /// The turn a tag chip writes into: the focused one, else the one focused
+    /// last, else none. A remembered turn that has since been deleted resolves
+    /// to none rather than to whatever now sits at its index.
+    private var tagTargetTurn: UUID? {
+        TagInsertionTarget.resolve(focused: focusedTurn, lastFocused: lastFocusedTurn,
+                                   existing: composer.turns.map(\.id))
+    }
+
+    private func turnTextBinding(_ id: UUID) -> Binding<String> {
+        Binding(get: { composer.turns.first { $0.id == id }?.text ?? "" },
+                set: { text in
+                    guard let index = composer.turns.firstIndex(where: { $0.id == id })
+                    else { return }
+                    composer.turns[index].text = text
+                })
+    }
+
+    /// The caret inside the focused turn.
+    ///
+    /// A turn is a SwiftUI `TextField`, which exposes no selection binding, so
+    /// this reads the live caret off AppKit's field editor — the first
+    /// responder while a field is focused. Only when a TURN holds focus: any
+    /// other field's caret would be an offset into different text. With no
+    /// readable caret the range clamps past the end (TagChipsView bounds it),
+    /// which appends — where a click-to-insert chip belongs anyway.
+    ///
+    /// The setter is inert: after the text changes, AppKit puts the caret at
+    /// the end of the field itself, and fighting it here would need a
+    /// round-trip through the run loop for no visible gain.
+    private var caretInFocusedTurn: Binding<NSRange> {
+        Binding(get: {
+            guard focusedTurn != nil,
+                  let editor = NSApp.keyWindow?.firstResponder as? NSTextView
+            else { return NSRange(location: .max, length: 0) }
+            return editor.selectedRange()
+        }, set: { _ in })
     }
 
     /// The plan, before generating rather than after. A user who can see "3

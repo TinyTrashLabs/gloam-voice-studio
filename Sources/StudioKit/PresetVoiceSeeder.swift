@@ -121,6 +121,7 @@ public enum PresetVoiceSeeder {
                 "notes": .string(preset.notes),
             ]),
         ])
+        dropStaleDia2Reference(for: preset, in: library)
         do {
             _ = try library.saveAt(slug: preset.slug, name: preset.name,
                                    refWav: nil, refText: "",
@@ -131,5 +132,26 @@ public enum PresetVoiceSeeder {
         } catch {
             return false
         }
+    }
+
+    /// A refreshed preset keeps everything the pack has gained — including a
+    /// `engines/dia2/` reference put there by "Make Dia-compatible", which
+    /// `saveAt` merges around rather than replacing. That is what we want for a
+    /// reworded name or a version bump.
+    ///
+    /// It is exactly wrong when the catalog rebinds the slug to a different
+    /// engine or speaker: the stored clip was synthesized from the OLD binding,
+    /// so keeping it would leave a voice that speaks as one preset in Studio and
+    /// as another in Dialogue. Drop the folder (clip and alignment cache
+    /// together) and let the user re-run the upgrade.
+    private static func dropStaleDia2Reference(for preset: PresetVoice,
+                                               in library: VoiceLibrary) {
+        guard case .object(let provenance)? = try? library.meta(preset.slug).provenance,
+              case .object(let mark)? = provenance["preset"],
+              case .string(let engine)? = mark["engine"],
+              case .string(let speaker)? = mark["speaker"],
+              engine != preset.engine || speaker != preset.speaker
+        else { return }
+        try? library.removeEngineAssets(preset.slug, engine: Dia2Alignment.engineID)
     }
 }

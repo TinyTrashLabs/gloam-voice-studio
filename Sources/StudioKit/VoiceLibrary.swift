@@ -247,6 +247,41 @@ public struct VoiceLibrary: Sendable {
         return found
     }
 
+    /// Add one file to an existing pack's `engines/<engine>/` folder.
+    ///
+    /// The narrow write the "Make Dia-compatible" upgrade needs: a preset voice
+    /// gains `engines/dia2/ref.wav` — a clip synthesized by its own engine — and
+    /// nothing else about the pack changes. Deliberately NOT `update(refWav:)`:
+    /// a top-level ref.wav is the cross-engine source asset, and writing one
+    /// would claim this synthesized clip is a recording of the voice, making the
+    /// preset cloneable on every backend and (per `PresetVoiceSeeder.state`)
+    /// no longer bundled.
+    ///
+    /// Same normalization and same path validation as the bulk `writeEngines`,
+    /// since this is the same write boundary reached one file at a time.
+    @discardableResult
+    public func writeEngineAsset(_ slug: String, engine: String, file: String,
+                                 data: Data) throws -> URL {
+        let voiceDir = directory.appendingPathComponent(try GVoice.safeComponent(slug))
+        guard FileManager.default.fileExists(
+            atPath: voiceDir.appendingPathComponent("meta.json").path)
+        else { throw StudioError.voiceNotFound(slug: slug) }
+        try writeEngines([engine: [file: data]], to: voiceDir)
+        return voiceDir.appendingPathComponent("engines")
+            .appendingPathComponent(engine).appendingPathComponent(file)
+    }
+
+    /// Delete a pack's `engines/<engine>/` folder, if it has one. Used when a
+    /// derived rendition goes stale — a preset rebound to a different speaker
+    /// invalidates the Dia2 clip baked from the old one.
+    public func removeEngineAssets(_ slug: String, engine: String) throws {
+        let engineDir = directory.appendingPathComponent(try GVoice.safeComponent(slug))
+            .appendingPathComponent("engines")
+            .appendingPathComponent(try GVoice.safeComponent(engine))
+        guard FileManager.default.fileExists(atPath: engineDir.path) else { return }
+        try FileManager.default.removeItem(at: engineDir)
+    }
+
     private func writeEngines(_ engines: [String: [String: Data]], to voiceDir: URL) throws {
         for (engine, files) in engines {
             let engineDir = voiceDir.appendingPathComponent("engines")

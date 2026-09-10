@@ -155,7 +155,14 @@ struct StudioView: View {
             // Partitioned rather than sorted by a `contains`-pair predicate:
             // that comparator is not a strict weak ordering, which can trap
             // inside Swift's sort.
-            let compatible = BackendID.allCases.filter { caps.supports($0) }
+            // Gated on the `.studio` surface, not `supports` alone: dia2 can
+            // speak this voice (Dialogue uses it) but is not a single-line Studio
+            // engine — a lone S1 prefix clones too weakly (issue #56). Same shape
+            // that keeps qwen3-design out of the bench. Dialogue-only backends
+            // stay off the "Works with" row and out of the speak picker.
+            let compatible = BackendID.allCases.filter {
+                $0.surfaces.contains(.studio) && caps.supports($0)
+            }
             let orderedCompatible = compatible.filter { caps.engines.contains($0.rawValue) }
                 + compatible.filter { !caps.engines.contains($0.rawValue) }
             VStack(alignment: .leading, spacing: 6) {
@@ -685,6 +692,12 @@ struct StudioView: View {
     }
 
     /// TAGS, its own section between WRITE and the Generate bar.
+    ///
+    /// Still live after Dia2 left this screen, for exactly one engine: Fish
+    /// (`fish-s2-pro`) is the other backend with `honorsTags`, and it takes the
+    /// curated free-form `[tag]` vocabulary TagChipsView carries by default —
+    /// which is what the `.inlineMarker` copy under EMOTION points the user at.
+    /// Dia2's own `(parenthesised)` sounds now live in the Dialogue composer.
     @ViewBuilder
     var tagSection: some View {
         if model.backend.spec.honorsTags {

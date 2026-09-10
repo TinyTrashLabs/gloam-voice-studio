@@ -509,10 +509,14 @@ extension BackendID {
             // than a rule — added 2026-09-05.
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .dia2:
-            // Two voices in one pass. `.studio` speaks a single turn through the
-            // dialogue path (see Dia2SpeechModel.synthesize); not a chat voice —
-            // a reply needs its prefix aligned first, which is not unattended.
-            [.studio, .dialogue, .downloadable]
+            // Two voices in one pass — Dialogue only. NOT `.studio`: a single
+            // S1-only prefix clones the target voice too weakly to ship (the
+            // conditioning is provably applied — DIA2_TRACE shows the reference
+            // audio + aligned transcript reach the model — but Dia2 still speaks
+            // in a different voice; inherent, not a wiring bug). Revisit in #56.
+            // Not a chat voice either: a reply needs its prefix aligned first,
+            // which is not unattended.
+            [.dialogue, .downloadable]
         }
     }
 

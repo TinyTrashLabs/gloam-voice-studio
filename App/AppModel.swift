@@ -1,12 +1,17 @@
 import EngineKit
 import Foundation
 import Observation
+import SpeechKit
 import StudioKit
 import SwiftUI
 
 struct AppGenerationError: Error {
     let message: String
 }
+
+/// The user answered "Not now" to baking a voice for Dia. Not a failure —
+/// callers stop quietly instead of painting the bench red.
+struct DiaBakeDeclined: Error {}
 
 /// One generated take, ready to play/export.
 /// Emotional expressions baked as acted `<slug>-<expression>` variants, rendered
@@ -445,6 +450,23 @@ final class AppModel {
     @ObservationIgnored
     private var capabilityCache: (version: Int, entries: [String: VoiceCapabilities]) = (-1, [:])
 
+    /// How ready a voice is to be a Dia2 speaker, cached per library mutation.
+    ///
+    /// Cached for the same reason as `voiceCapabilities`: the Dialogue picker
+    /// asks it once per row, and the answer costs a read of the pack's
+    /// alignment cache plus a directory walk.
+    func diaReadiness(_ slug: String) -> Dia2Readiness {
+        if diaReadinessCache.version != voicesVersion {
+            diaReadinessCache = (voicesVersion, [:])
+        }
+        if let hit = diaReadinessCache.entries[slug] { return hit }
+        let readiness = Dia2Alignment.readiness(of: slug, in: voices)
+        diaReadinessCache.entries[slug] = readiness
+        return readiness
+    }
+    @ObservationIgnored
+    private var diaReadinessCache: (version: Int, entries: [String: Dia2Readiness]) = (-1, [:])
+
     /// Voices with their acted variants folded under them — the shape both the
     /// sidebar and the Direct pane's voice popover draw from. Grouping walks
     /// the whole library, and it ran inside those view bodies, so it happened
@@ -651,7 +673,10 @@ final class AppModel {
         // reaches a working Generate with no further decisions.
         let loadedBackend = BackendID.migrating(rawValue: defaults.string(forKey: "defaultBackend") ?? "")
             ?? .kokoro
-        backend = loadedBackend == .qwenDesign ? .qwen17B : loadedBackend
+        // A persisted backend that isn't a Studio speak-engine (qwen3-design is
+        // creation-only; dia2 is Dialogue-only, issue #56) would leave the bench
+        // pointing at an engine its own picker no longer offers — fall back.
+        backend = loadedBackend.surfaces.contains(.studio) ? loadedBackend : .qwen17B
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         let lanEnabled = defaults.bool(forKey: "serverLANEnabled")
         var authToken = defaults.string(forKey: "serverAuthToken") ?? ""
@@ -832,6 +857,8 @@ final class AppModel {
                     label: String(UnicodeScalar(65 + take)!),  // A, B, …
                     wavData: wav, sampleRate: result.sampleRate,
                     seconds: seconds, wallSeconds: result.wallSeconds))
+            } catch is DiaBakeDeclined {
+                return          // "Not now" — no take, no red banner
             } catch let err as AppGenerationError {
                 generationError = err.message
                 return
@@ -1041,10 +1068,15 @@ final class AppModel {
         // Guarded on inequality because both didSets rebuild the API server,
         // and Swift fires didSet even when the value is unchanged.
         //
-        // qwen3-design is the one deliberate exception: the Foundry loads it
-        // for Create Voice only and it is not a Studio speak-backend (init
-        // performs the same carve-out when restoring the saved selection).
-        if let resident = residentTTS, resident != .qwenDesign, resident != backend {
+        // Only STUDIO speak-backends drive the bench selection. Non-studio
+        // engines get loaded for their own screens and must NOT hijack Studio:
+        // qwen3-design (Create Voice) and dia2 (Dialogue only, issue #56) —
+        // loading dia2 for the Dialogue tab used to set `backend = .dia2`, which
+        // left the Studio bench showing dia2's tags/controls and generating a
+        // single-speaker dia2 take (a wrong-voice render). The `.studio` surface
+        // is the one source of truth; init performs the same carve-out.
+        if let resident = residentTTS, resident.surfaces.contains(.studio),
+           resident != backend {
             backend = resident
         }
         if let llm = loadedLLM, llm != chatLLM { chatLLM = llm }
@@ -1230,9 +1262,13 @@ final class AppModel {
         // selected voice's name — the same substitution the guard above refuses.
         var dialoguePrefix: DialoguePrefix?
         if backend.surfaces.contains(.dialogue), let slug = resolvedVoice {
+            // First use of this voice with Dia: offer to bake it in (record a
+            // reference if it's a preset, fetch Whisper if needed, align) and
+            // stop quietly if the answer is no. Baked voices skip straight past.
+            guard try await ensureDiaReady(slug: slug) else { throw DiaBakeDeclined() }
             do {
                 dialoguePrefix = try await self.dialoguePrefix(
-                    for: slug, aligner: await makeAligner(),
+                    for: slug, aligner: makeDiaAligner(),
                     rate: Double(backend.spec.defaultSampleRate))
             } catch {
                 let name = (try? voices.meta(slug).name) ?? slug
@@ -1301,10 +1337,27 @@ final class AppModel {
 
     // MARK: - Dialogue scenes
 
-    /// The word aligner Dia2 prefixes are built from. Lazy because it pulls in
-    /// the transcriber, which the single-voice path never needs.
-    func makeAligner() async -> any WordAligning {
-        WhisperWordAligner(transcriber: await speech.makeTranscriber())
+    /// The word aligner Dia2 prefixes are built from — ALWAYS Whisper.
+    ///
+    /// This used to read `speech.makeTranscriber()`, i.e. the user's dictation
+    /// engine preference, which defaults to Apple. Apple's recognizer does not
+    /// expose word timings, so `Transcriber`'s protocol default threw and every
+    /// Dia2 generate died on "This transcriber does not provide word-level
+    /// timings" — a message about an implementation detail, for a setting the
+    /// user never connected to Dia2. Word timings are a Dia2 requirement, not a
+    /// dictation preference, so this path names Whisper itself; dictation keeps
+    /// its own choice (see `SpeechManager.makeTranscriber`).
+    ///
+    /// Returns an aligner that reports the missing model rather than throwing
+    /// here, so the non-throwing callers still have something to hand on. The
+    /// interactive paths call `ensureDiaReady` first and never reach that.
+    func makeDiaAligner() -> any WordAligning {
+        // UI-test mode has no downloaded model; the fake provides timings.
+        if UITestMode.isActive { return WhisperWordAligner(transcriber: FakeTranscriber()) }
+        guard let folder = speech.wordTimingModelFolder else {
+            return Dia2Aligner.unavailable(variant: speech.whisperVariant)
+        }
+        return Dia2Aligner.make(modelFolder: folder)
     }
 
     /// Renders the whole script as Dia2 scenes: consecutive lines grouped into
@@ -1331,7 +1384,7 @@ final class AppModel {
         let lines = script.dialogueLines
         let scenes = DialoguePlanner.scenes(for: lines)
         guard !scenes.isEmpty else { return }
-        let aligner = await makeAligner()
+        let aligner = makeDiaAligner()
         let rate = Double(backend.spec.defaultSampleRate)
 
         for scene in scenes {
@@ -1397,7 +1450,7 @@ final class AppModel {
     /// unconditioned reply is still a reply.
     func dia2ChatPrefix(for slug: String) async -> DialoguePrefix? {
         let rate = Double(BackendID.dia2.spec.defaultSampleRate)
-        guard let prefix = try? await dialoguePrefix(for: slug, aligner: await makeAligner(),
+        guard let prefix = try? await dialoguePrefix(for: slug, aligner: makeDiaAligner(),
                                                      rate: rate)
         else { return nil }
         return ChatPrefixBudget.trim(prefix.words, samples: prefix.samples,
@@ -1418,6 +1471,216 @@ final class AppModel {
                               words: words.map {
                                   AlignedWordTiming(text: $0.w, start: $0.start, end: $0.end)
                               })
+    }
+
+    // MARK: - Make Dia-compatible
+
+    /// The slug currently being upgraded for Dialogue, or nil. Drives the
+    /// menu item's disabled state — the work loads a TTS model, so it is
+    /// minutes, not milliseconds, and must not look like nothing happened.
+    var diaUpgradeSlug: String?
+
+    /// What a preset voice says to become its own Dia2 reference.
+    ///
+    /// Longer than `bakeCarrierLine` and plainly worded on purpose. This clip is
+    /// consumed twice: Dia2 conditions on it (more speech = more identity), and
+    /// WhisperKit re-transcribes it for the word timings that make it a prefix
+    /// (see `WhisperWordAligner.align`, which ignores the transcript we already
+    /// know and recognises from scratch). Ordinary words, no names, no numbers,
+    /// so the recognition is boring and the timings land where they should.
+    static let dia2CarrierLine =
+        "Here is a short sample of my voice, read at an even pace. "
+        + "I am speaking clearly so that every word can be picked out later."
+
+    /// A voice that isn't Dia-ready yet, and what making it ready will involve.
+    /// Non-nil while the confirmation is on screen.
+    struct DiaBakeOffer: Identifiable, Equatable {
+        var id: String { slug }
+        let slug: String
+        let voiceName: String
+        /// The voice has no reference clip (a preset): one gets recorded with
+        /// its own engine before anything can be aligned.
+        let needsReference: Bool
+        /// The Whisper model has to be downloaded first.
+        let needsWhisperDownload: Bool
+    }
+    var diaBakeOffer: DiaBakeOffer?
+    /// Progress line while a bake runs, nil when idle.
+    var diaBakeStatus: String?
+    @ObservationIgnored private var diaBakeAnswer: CheckedContinuation<Bool, Never>?
+
+    /// Make `slug` usable as a Dia2 speaker, asking first — once per voice.
+    ///
+    /// Alignment is minutes of Whisper (and a download, if the model isn't
+    /// there), which is not something to start behind a spinner because someone
+    /// picked a voice. So the first time a voice is used with Dia, this offers
+    /// to bake it in; afterwards the pack carries `engines/dia2/alignment.json`
+    /// and this returns immediately and silently, forever.
+    ///
+    /// Returns false when the user declined: the caller aborts, quietly.
+    func ensureDiaReady(slug: String) async throws -> Bool {
+        let readiness = Dia2Alignment.readiness(of: slug, in: voices)
+        guard readiness != .baked else { return true }
+        // A second offer while one is already up would clobber the stored
+        // continuation and strand the first caller.
+        guard diaBakeOffer == nil, diaBakeAnswer == nil else { return false }
+
+        let needsWhisper = !UITestMode.isActive && speech.wordTimingModelFolder == nil
+        let name = (try? voices.meta(slug).name) ?? slug
+        let offer = DiaBakeOffer(slug: slug, voiceName: name,
+                                 needsReference: readiness == .needsReference,
+                                 needsWhisperDownload: needsWhisper)
+        guard await askDiaBake(offer) else { return false }
+
+        diaBakeStatus = "Preparing “\(name)” for Dia…"
+        defer { diaBakeStatus = nil }
+        // The model has to be on disk before either step below: the reference
+        // synthesis warms the prefix, which aligns.
+        if needsWhisper, await !downloadWhisperForDia() { return false }
+        if readiness == .needsReference {
+            diaBakeStatus = "Recording a reference clip for “\(name)”…"
+            if let failure = await makeDiaCompatible(slug: slug) {
+                throw AppGenerationError(message: failure)
+            }
+        }
+        diaBakeStatus = "Analyzing “\(name)”…"
+        do {
+            _ = try await dialoguePrefix(for: slug, aligner: makeDiaAligner(),
+                                         rate: Double(BackendID.dia2.spec.defaultSampleRate))
+        } catch {
+            // A genuine failure (decode, a broken model) still deserves a real
+            // error — just one that names the voice and the step.
+            throw AppGenerationError(
+                message: "Couldn't work out word timings for “\(name)”: \(describeAny(error))")
+        }
+        voicesVersion += 1
+        return true
+    }
+
+    /// Show the offer and wait for the answer.
+    private func askDiaBake(_ offer: DiaBakeOffer) async -> Bool {
+        if UITestMode.isActive { return true }
+        diaBakeOffer = offer
+        return await withCheckedContinuation { continuation in
+            diaBakeAnswer = continuation
+        }
+    }
+
+    /// The confirmation's answer, from the sheet in `ContentView`.
+    func answerDiaBake(_ confirmed: Bool) {
+        diaBakeOffer = nil
+        let answer = diaBakeAnswer
+        diaBakeAnswer = nil
+        answer?.resume(returning: confirmed)
+    }
+
+    /// Fetch the Whisper model as part of a bake, reporting progress in
+    /// `diaBakeStatus`. False = the download was cancelled (abort quietly);
+    /// throws only on a real failure.
+    private func downloadWhisperForDia() async -> Bool {
+        let variant = speech.whisperVariant
+        let models = speech.whisperModels
+        models.download(variant)
+        while true {
+            switch models.state(for: variant) {
+            case .ready:
+                return true
+            case .failed(let why):
+                diaBakeStatus = nil
+                diaError = "Couldn't download the Whisper speech model: \(why)"
+                return false
+            case .downloading(let fraction):
+                diaBakeStatus = "Downloading the speech model… \(Int(fraction * 100))%"
+            case .notDownloaded:
+                // download() sets .downloading synchronously, so this is a
+                // cancel that landed between polls.
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+    }
+
+    /// A real failure from a bake — shown once, dismissable. Declines never
+    /// set this.
+    var diaError: String?
+
+    /// Give a preset voice the reference clip Dialogue needs, by having the
+    /// voice's OWN engine speak a carrier line.
+    ///
+    /// Preset packs (Kokoro, SuperTonic, Qwen CustomVoice) are a speaker name and
+    /// nothing else — no audio — so `VoiceCapabilities.supports(.dia2)` is false
+    /// and Dia2 has nothing to condition on. Synthesizing the missing clip is the
+    /// whole upgrade.
+    ///
+    /// The clip is filed at `engines/dia2/ref.wav`, not at the pack root: it is a
+    /// Dia2 conditioning aid, not a recording of a person. A root `ref.wav` would
+    /// advertise the preset as cloneable on every cloning backend and would take
+    /// the pack out of the bundled set (`PresetVoiceSeeder.isBundled`).
+    ///
+    /// Returns nil on success, else a message for the caller to show.
+    func makeDiaCompatible(slug: String) async -> String? {
+        guard diaUpgradeSlug == nil else { return nil }
+        guard !voiceCapabilities(slug).supports(.dia2) else { return nil }
+        guard let meta = try? voices.meta(slug) else { return "Voice '\(slug)' is missing." }
+        guard let (source, rendition) = presetRendition(for: slug) else {
+            return "“\(meta.name)” has no engine of its own to record with. "
+                + "Import or record a reference clip for it instead."
+        }
+        if source.spec.needsLicenseAck && !didAck(source) {
+            return "Recording with \(source.rawValue) needs its license — "
+                + "acknowledge it in Settings → Models first."
+        }
+        guard downloads.state(for: source) == .ready else {
+            if case .notDownloaded = downloads.state(for: source) { downloads.download(source) }
+            return "Downloading \(source.rawValue) to record with — try again once it's ready."
+        }
+
+        diaUpgradeSlug = slug
+        defer { diaUpgradeSlug = nil }
+        do {
+            var request = SynthesisRequest(text: Self.dia2CarrierLine)
+            switch rendition {
+            case .builtinSpeaker(let speaker): request.speaker = speaker
+            case .style(let url): request.styleURL = url
+            }
+            // Must precede queuing work on `engine` (TTSResidencyPolicy's
+            // deadlock-safety contract). This swaps the resident model to the
+            // preset's engine — including out of Dia2, which is fine: the
+            // upgrade is preparation for Dialogue, not part of a pass.
+            await ttsResidency.willUse(engine)
+            let raw = try await engine.synthesize(backend: source, request: request)
+            let samples = AudioAssembler.normalizePeak(floats: raw.samples)
+            let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples),
+                                        sampleRate: raw.sampleRate)
+            try voices.writeEngineAsset(slug, engine: Dia2Alignment.engineID,
+                                        file: "ref.wav", data: wav)
+            voicesVersion += 1
+            await refreshEngineStatus()
+        } catch {
+            return "Couldn't record a reference for “\(meta.name)”: \(describeAny(error))"
+        }
+        // Pay the alignment cost here rather than at the first Dialogue pick:
+        // it loads WhisperKit, and the user is already waiting on this action.
+        // A failure is not fatal — the clip exists, so the pick will simply
+        // align then, and report it there if it fails again.
+        _ = try? await dialoguePrefix(for: slug, aligner: makeDiaAligner(),
+                                      rate: Double(BackendID.dia2.spec.defaultSampleRate))
+        return nil
+    }
+
+    /// The engine that can speak `slug` from what the pack carries, and how.
+    ///
+    /// Preset packs bind to exactly one engine, so the first match is the
+    /// answer. Dia2 is skipped for the obvious reason (it is what we are
+    /// recording FOR) and qwen3-design because it mints voices rather than
+    /// speaking stored ones.
+    private func presetRendition(for slug: String) -> (BackendID, VoiceRendition)? {
+        for backend in BackendID.allCases where backend != .dia2 && backend != .qwenDesign {
+            if let rendition = voices.rendition(slug, engine: backend.rawValue) {
+                return (backend, rendition)
+            }
+        }
+        return nil
     }
 
     // MARK: - Voice Foundry
@@ -1547,6 +1810,12 @@ final class AppModel {
 
     func describeAny(_ error: Error) -> String {
         if let appError = error as? AppGenerationError { return appError.message }
+        // Reachable only from the callers that don't special-case a decline
+        // (chat, the script batch); the bench returns before this.
+        if error is DiaBakeDeclined {
+            return "This voice isn't baked for Dia yet — bake it in when asked, "
+                + "or from its ⋯ menu in the voice sidebar."
+        }
         if let engineError = error as? EngineError { return describe(engineError) }
         return "\(error)"
     }
@@ -1637,10 +1906,13 @@ final class AppModel {
             prepareTTS: { [ttsResidency, engine] in
                 await ttsResidency.willUse(engine)
             },
-            // Dia2 prefixes need word timings, from the same transcriber the
-            // RECORD button uses.
-            makeAligner: { [speech] in
-                WhisperWordAligner(transcriber: await speech.makeTranscriber())
+            // Dia2 prefixes need word timings, which only Whisper provides —
+            // never the dictation engine (see `makeDiaAligner`). No offer to
+            // bake here: an HTTP caller has nobody to ask, so an un-baked voice
+            // aligns on demand and a missing model comes back as a clear error.
+            makeAligner: { [weak self] in
+                await self?.makeDiaAligner()
+                    ?? Dia2Aligner.unavailable(variant: WhisperModelCatalog.defaultVariant)
             },
             // The Lab shelf the tab observes, so an agent's lab_put_clip over
             // MCP lands in the same in-process store the UI is showing — and

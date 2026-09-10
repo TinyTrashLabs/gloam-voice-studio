@@ -22,8 +22,12 @@ final class BackendSurfacesTests: XCTestCase {
         }
     }
 
-    func testDia2IsInTheStudioPickerAndTheDialogueScreen() {
-        XCTAssertTrue(BackendID.on(.studio).contains(.dia2))
+    /// Dia2 is Dialogue-only, not a Studio single-line engine: a single S1-only
+    /// prefix clones the target voice too weakly to ship (conditioning is applied
+    /// but the voice is wrong — inherent, see issue #56). It stays downloadable
+    /// and on the Dialogue screen.
+    func testDia2IsDialogueOnlyNotInStudio() {
+        XCTAssertFalse(BackendID.on(.studio).contains(.dia2))
         XCTAssertTrue(BackendID.on(.dialogue).contains(.dia2))
         XCTAssertTrue(BackendID.on(.downloadable).contains(.dia2))
     }
