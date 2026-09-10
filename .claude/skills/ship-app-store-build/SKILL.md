@@ -19,6 +19,18 @@ by the `ios-android-builder` plugin's `ship.sh`/`infisical-macos-signing.sh`
 App Store Connect rejects an upload whose build number isn't higher than the
 last one it saw.
 
+## Before you run it: this signs, and signing can prompt
+
+`ship.sh macos` stages a keychain and runs `codesign`/`productbuild`. If the
+staged keychain drops out of `security list-keychains -d user` (seen
+2026-09-10, build 11), codesign says `no identity found` or resolves a
+same-named cert in `login.keychain` and throws a keychain dialog onto David's
+screen. **Ask before running it, every time. If it fails, read the log and fix
+the staging — never re-run blind.** The plugin's `infisical-macos-signing.sh`
+now verifies the search-list step and the repo-local `fastlane/Fastfile`
+re-asserts it right before codesign. Full rule: CLAUDE.md "Signing and
+notarizing".
+
 ## Recipe (verified end-to-end 2026-07-09)
 
 Run from the repo root, with Tailscale up (`infisical.tinytrashlabs.com`
