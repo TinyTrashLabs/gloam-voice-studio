@@ -35,9 +35,18 @@ fastlane build_notarized
 This:
 1. Pulls the Developer ID Application `.p12` + password and the App Store
    Connect API key (also valid for notarytool auth) from Infisical.
-2. Imports the identity into a dedicated, throwaway keychain
-   (`~/Library/Keychains/gloam-devid-build.keychain-db`) — never touches your
-   login keychain.
+2. Unlocks the **persistent** `~/Library/Keychains/gloam-devsign.keychain-db`
+   with the tooling-owned password (`~/.config/gloam/devsign-keychain-pass`,
+   source of truth `MAC_DEVSIGN_KEYCHAIN_PASSWORD` in Infisical
+   `/gloam-macos-signing`), imports the Developer ID identity into it only if
+   missing, and verifies it is in the user keychain search list. It never
+   touches your login keychain and never creates a throwaway keychain — the
+   old per-run `gloam-devid-build.keychain-db` (random password, 1 h auto-lock)
+   is what kept producing keychain dialogs on screen (2026-09-10 and before).
+
+**Before running either command: this signs, and a wrong keychain state turns
+into a GUI keychain prompt on David's screen. Ask first, every time. If it
+fails, do not re-run it blind — see CLAUDE.md "Signing and notarizing".**
 3. `fastlane build_notarized` archives Release config, codesigns with hardened
    runtime, submits to `notarytool --wait`, staples the ticket, and zips the
    result to `build/macos/GloamVoiceStudio-<version>-macOS.zip`.
@@ -98,15 +107,24 @@ off the leaf cert's own AIA extension (`http://certs.apple.com/devidg2.der`)
 and imports it — this is already handled, but is why the script needs network
 access to `certs.apple.com` even before notarization's own network calls.
 
-## Gotcha 3 — re-running `stage-devid-signing.sh` must start from a fresh keychain
+## Gotcha 3 — the keychain is persistent; never delete or recreate it
 
-The script generates a new random keychain password every run. If a leftover
-keychain file from a prior run survives, the new random password won't match
-it, and `security import`'s ACL/trust update silently fails (you'll see
-`SecKeychainItemSetAccessWithPassword: ... not correct` but the script won't
-abort). The script deletes and recreates the keychain unconditionally each
-run specifically to avoid this — don't "optimize" that into a conditional
-create.
+`stage-devid-signing.sh` used to generate a random keychain password and
+delete/recreate its keychain every run. That design is retired: the keychain
+is now the shared `gloam-devsign.keychain-db` with a known password, no
+auto-lock, and the identity is imported once. If unlock fails, the password
+was rotated — refresh `~/.config/gloam/devsign-keychain-pass` from Infisical.
+If the keychain file is gone, rebuild it per
+`docs/superpowers/2026-07-08-macos-dev-cert-signing-recovery.md`. Do not
+reintroduce a throwaway keychain.
+
+## Gotcha 4 — codesign ignores `--keychain` for a keychain outside the search list
+
+If the keychain is not in `security list-keychains -d user`, codesign reports
+`no identity found`, or worse resolves the same-named Developer ID cert in
+`login.keychain` and prompts for its password (→ `errSecInternalComponent`).
+The staging script now verifies membership and fails loudly. Check this first
+whenever a signing step misbehaves.
 
 ## If you need the App Store build instead
 
