@@ -54,6 +54,48 @@ public actor WhisperTranscriber: Transcriber {
         return Transcript(text: text, language: languageHint)
     }
 
+    /// Word-level timings, which Dia2 needs and nothing else here provided.
+    ///
+    /// Without this the protocol's default implementation threw
+    /// `wordTimingsUnavailable` for EVERY transcriber, so Dia2 prefix
+    /// alignment could never be built: only voices that already had a cached
+    /// `engines/dia2/alignment.json` could condition a speaker, and picking
+    /// any other voice failed. Four of 113 voices on the author's machine had
+    /// that cache, so 109 of them silently could not be used with Dia2.
+    ///
+    /// `wordTimestamps: true` costs an extra alignment pass inside WhisperKit,
+    /// which is why it is not on for ordinary dictation.
+    public func transcribeWords(audioURL: URL,
+                                languageHint: String? = nil) async throws -> [WordTiming] {
+        let kit = try await loadedKit()
+        let options = DecodingOptions(language: languageHint, wordTimestamps: true)
+        let results = await kit.transcribeWithResults(
+            audioPaths: [audioURL.path], decodeOptions: options)
+        guard let first = results.first else {
+            throw SpeechError.transcriptionFailed("Whisper returned no result")
+        }
+        let transcriptions: [TranscriptionResult]
+        do { transcriptions = try first.get() }
+        catch { throw SpeechError.transcriptionFailed(error.localizedDescription) }
+
+        let words = transcriptions
+            .flatMap(\.segments)
+            .flatMap { $0.words ?? [] }
+            .map {
+                WordTiming(text: $0.word.trimmingCharacters(in: .whitespaces),
+                           start: Double($0.start), end: Double($0.end))
+            }
+            .filter { !$0.text.isEmpty }
+        // An empty result is a failure, not an empty transcript: a prefix with
+        // no words conditions nothing, and a caller that gets [] back would
+        // generate an unconditioned take under the chosen voice's name.
+        guard !words.isEmpty else {
+            throw SpeechError.transcriptionFailed(
+                "Whisper returned no word timings for \(audioURL.lastPathComponent)")
+        }
+        return words
+    }
+
     public nonisolated func liveTranscribe(audio: AsyncStream<AudioChunk>)
         -> AsyncThrowingStream<TranscriptUpdate, Error> {
         AsyncThrowingStream { continuation in

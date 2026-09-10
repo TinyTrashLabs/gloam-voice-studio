@@ -1,5 +1,6 @@
 import XCTest
 import EngineKit
+@testable import GVoiceKit
 @testable import StudioKit
 
 /// `rendition(_:engine:)` — how a pack says it renders on one engine, and the

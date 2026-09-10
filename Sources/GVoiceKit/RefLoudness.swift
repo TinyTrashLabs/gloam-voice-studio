@@ -23,8 +23,8 @@ public enum RefLoudness {
     /// a reference that cannot be levelled is still a usable reference, and
     /// refusing to save it would be a worse failure than saving it quiet.
     public static func normalized(wav: Data,
-                                  targetLUFS: Float = AudioAssembler.referenceLoudnessLUFS,
-                                  peakCeilingDbFS: Float = AudioAssembler.referencePeakCeilingDbFS) -> Data {
+                                  targetLUFS: Float = Loudness.referenceLoudnessLUFS,
+                                  peakCeilingDbFS: Float = Loudness.referencePeakCeilingDbFS) -> Data {
         guard let chunk = dataChunk(in: wav) else { return wav }
         let bytesPerSample = chunk.format == .pcm16 ? 2 : 4
         let count = chunk.length / bytesPerSample

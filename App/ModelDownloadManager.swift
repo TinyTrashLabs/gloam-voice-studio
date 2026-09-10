@@ -2,6 +2,18 @@ import EngineKit
 import Foundation
 import HuggingFace
 import Observation
+import StudioKit
+
+/// `ProgressThrottle` behind a lock, because a download consults it from its
+/// own loop and from URLSession's delegate queue at the same time.
+private final class ProgressGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var throttle = ProgressThrottle()
+
+    func allows(_ fraction: Double, force: Bool = false) -> Bool {
+        lock.withLock { throttle.shouldReport(fraction, force: force) }
+    }
+}
 
 @MainActor @Observable
 final class ModelDownloadManager {
@@ -48,8 +60,14 @@ final class ModelDownloadManager {
     init(root: URL, uiTest: Bool) {
         self.root = root
         self.uiTest = uiTest
-        Self.migrateLegacyQwenDir(root: root)
-        refresh()
+        // UI tests report every model ready and use in-memory fakes. Touching
+        // the real multi-GB model library here defeats that isolation and can
+        // stall the test app on a slow or unavailable volume before it has a
+        // process/window for XCTest to attach to.
+        if !uiTest {
+            Self.migrateLegacyQwenDir(root: root)
+            refresh()
+        }
     }
 
     /// The first model currently downloading (TTS first, then LLM), with its
@@ -86,7 +104,14 @@ final class ModelDownloadManager {
     }
 
     func directory(for backend: BackendID) -> URL {
-        root.appendingPathComponent(backend.diskFolder(quantRaw: quant(for: backend).rawValue))
+        // Only Qwen folders are quant-suffixed from `quant(for:)`. dia2 encodes
+        // size with its precision and supplies its own default, and handing it
+        // a bare "8bit" pointed this at `dia2@8bit` while AppModel's loader
+        // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
+        // reported the model ready somewhere the loader never looked, and the
+        // load fell through to the HF repo id and failed with a 401.
+        let quantRaw = backend.isQwen ? quant(for: backend).rawValue : nil
+        return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 
     /// The retired `.qwen3` backend (0.6B-Base-8bit) downloaded to `Models/qwen3`.
@@ -101,6 +126,7 @@ final class ModelDownloadManager {
     }
 
     func refresh() {
+        guard !uiTest else { return }
         for backend in BackendID.allCases {
             if case .downloading = states[backend] { continue }
             states[backend] = isComplete(backend) ? .ready : .notDownloaded
@@ -119,11 +145,41 @@ final class ModelDownloadManager {
     /// confusing `modelNotInitialized`. Require weights so the UI honestly
     /// offers a (re)download instead.
     private func isComplete(dir: URL) -> Bool {
-        guard FileManager.default.fileExists(
-            atPath: dir.appendingPathComponent("config.json").path) else { return false }
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil)) ?? []
-        return contents.contains { $0.pathExtension == "safetensors" }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) else {
+            return false
+        }
+
+        // Hugging Face checkpoints are either one canonical weight file or a
+        // sharded set named by model.safetensors.index.json. Avoid enumerating
+        // multi-GB model directories here: directory enumeration can block in
+        // FileProvider/CoreServices even while direct file lookups are healthy,
+        // which used to freeze the app before its first window appeared.
+        if fm.fileExists(atPath: dir.appendingPathComponent("model.safetensors").path) {
+            return true
+        }
+
+        // The remaining supported layouts use fixed filenames. Checking these
+        // directly is equivalent to the old "any safetensors exists" rule but
+        // does not open the directory stream.
+        for name in [
+            "kokoro-v1_0.safetensors",
+            "lux_model.safetensors",
+            "duration_predictor.safetensors",
+        ] where fm.fileExists(atPath: dir.appendingPathComponent(name).path) {
+            return true
+        }
+
+        // Sharded HF checkpoints use model-00001-of-000NN.safetensors. All
+        // models supported here are comfortably below 64 shards; requiring the
+        // first shard retains the previous interrupted-download protection.
+        for count in 2...64 {
+            let name = String(format: "model-%05d-of-%05d.safetensors", 1, count)
+            if fm.fileExists(atPath: dir.appendingPathComponent(name).path) {
+                return true
+            }
+        }
+        return false
     }
     private func isComplete(_ backend: BackendID) -> Bool {
         // Pocket isn't an HF snapshot (no config.json/safetensors) — its own
@@ -170,12 +226,17 @@ final class ModelDownloadManager {
     /// explicit destination — flat repos (chatterbox/fish) work, subdir repos
     /// (qwen3) don't. Public resolve URLs need no auth for mlx-community repos.
     // `nonisolated` so the per-byte streaming loop below doesn't hop to the
-    // MainActor on every byte of a multi-GB file — only `onProgress`, called
-    // once per ~1MB flush, does that (it's typed `@MainActor` so the `await`
-    // there is the only actor hop in the hot loop).
+    // MainActor on every byte of a multi-GB file. `onProgress` still does —
+    // it writes observed state, so every call rebuilds the view tree — which
+    // is why it is THROTTLED rather than called per flush. A megabyte per
+    // report is ~100 reports a second on a fast connection, and 100 view-tree
+    // rebuilds a second saturates the main thread and makes everything in the
+    // app scroll badly while a model downloads.
     nonisolated private func downloadRepoSnapshot(
         repo: String, to dir: URL,
-        onProgress: @MainActor @Sendable (Double) -> Void
+        // `@escaping` because the streaming download reports from URLSession's
+        // delegate queue, after this function has already suspended.
+        onProgress: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws {
         struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
         guard let treeURL = URL(
@@ -197,6 +258,16 @@ final class ModelDownloadManager {
         // every reported fraction is clamped to 1.0 to keep progress sane.
         let total = max(1, files.reduce(Int64(0)) { $0 + ($1.size ?? 0) })
         var done: Int64 = 0
+        // Consulted from TWO places on two different threads: this loop, and
+        // URLSession's delegate queue inside the streaming download. Checking
+        // it BEFORE hopping to the MainActor is the point — an unthrottled hop
+        // per network chunk is hundreds of thousands of tasks over a 4GB file.
+        let gate = ProgressGate()
+        func report(_ fraction: Double, force: Bool = false) async {
+            let clamped = min(1.0, fraction)
+            guard gate.allows(clamped, force: force) else { return }
+            await onProgress(clamped)
+        }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for file in files {
             try Task.checkCancellation()
@@ -207,50 +278,52 @@ final class ModelDownloadManager {
                    atPath: target.path)[.size] as? Int64,
                onDisk == size {
                 done += size
-                await onProgress(min(1.0, Double(done) / Double(total)))
+                await report(Double(done) / Double(total))
                 continue
             }
             guard let src = URL(
                 string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let (bytes, response) = try await URLSession.shared.bytes(from: src)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                throw DownloadError(message: "\(file.path): HTTP \(http.statusCode)")
-            }
             // Stream to a .part file so progress moves within a single large
-            // file instead of jumping only when each file completes. Any
-            // leftover .part from a previous attempt of this same file is
-            // discarded — we always restart the in-flight file from scratch.
+            // file instead of jumping only when each file completes -- and so
+            // an interrupted file can be RESUMED.
+            //
+            // It used to be deleted and restarted from zero. A 4GB shard that
+            // dropped at 3GB threw those 3GB away and asked for them again,
+            // which on a slow link or a nearly-full disk is the difference
+            // between "retry" and "give up".
             let tmp = target.appendingPathExtension("part")
-            try? FileManager.default.removeItem(at: tmp)
-            FileManager.default.createFile(atPath: tmp.path, contents: nil)
-            let handle = try FileHandle(forWritingTo: tmp)
-            do {
-                var buffer = Data()
-                buffer.reserveCapacity(1 << 20)
-                var fileDone: Int64 = 0
-                for try await byte in bytes {
-                    buffer.append(byte)
-                    if buffer.count >= 1 << 20 {
-                        try handle.write(contentsOf: buffer)
-                        fileDone += Int64(buffer.count)
-                        buffer.removeAll(keepingCapacity: true)
-                        await onProgress(min(1.0, Double(done + fileDone) / Double(total)))
-                        try Task.checkCancellation()
-                    }
-                }
-                try handle.write(contentsOf: buffer)
-                fileDone += Int64(buffer.count)
-                try handle.close()
-                try? FileManager.default.removeItem(at: target)
-                try FileManager.default.moveItem(at: tmp, to: target)
-                done += file.size ?? fileDone
-                await onProgress(min(1.0, Double(done) / Double(total)))
-            } catch {
-                try? handle.close()
-                throw error
+            let onDisk = (try? FileManager.default.attributesOfItem(
+                atPath: tmp.path)[.size] as? Int64) ?? 0
+            // Only a partial SHORTER than the file we expect is a prefix worth
+            // resuming; one at or past that length is stale or corrupt.
+            let resumeFrom = (file.size.map { onDisk < $0 } ?? true) ? onDisk : 0
+            var request = URLRequest(url: src)
+            if resumeFrom > 0 {
+                request.setValue("bytes=\(resumeFrom)-", forHTTPHeaderField: "Range")
             }
+
+            let base = done
+            let fileSize = file.size
+            let written = try await StreamingFileDownload.run(
+                request, to: tmp, resumeFrom: resumeFrom, name: file.path
+            ) { bytesOnDisk in
+                let fraction = min(1.0, Double(base + bytesOnDisk) / Double(total))
+                guard gate.allows(fraction) else { return }
+                Task { @MainActor in onProgress(fraction) }
+            }
+            try Task.checkCancellation()
+            if let fileSize, written != fileSize {
+                throw DownloadError(
+                    message: "\(file.path): got \(written) bytes, expected \(fileSize)")
+            }
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.moveItem(at: tmp, to: target)
+            done += fileSize ?? written
+            // Forced: a finished file is a real milestone, and the last one
+            // must land on 1.0 rather than stopping just short.
+            await report(Double(done) / Double(total), force: true)
         }
     }
 

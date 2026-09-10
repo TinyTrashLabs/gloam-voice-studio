@@ -182,7 +182,7 @@ struct VoiceSidebarView: View {
         // (source audio and/or engines/<id>/ renditions). Unrenderable rows
         // stay selectable (editing, persona) but dim and say what they DO work
         // on, so a supertonic-only pack isn't mistaken for broken.
-        let caps = model.voices.capabilities(voice.slug)
+        let caps = model.voiceCapabilities(voice.slug)
         let renderable = caps.supports(model.backend)
         // Hover/selection drives EMPHASIS only, never presence: the controls
         // are always laid out (an on-hover insert made the row's width jump and
@@ -205,7 +205,7 @@ struct VoiceSidebarView: View {
                 Color.clear.frame(width: 12)
             }
             VoiceAvatarView(slug: voice.slug, name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
+                            avatarURL: model.voiceAvatarURL(voice.slug),
                             size: isVariant ? 20 : 26)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
@@ -320,6 +320,20 @@ struct VoiceSidebarView: View {
             previewRef(voice)
         }
         .help("Play the reference audio for this voice")
+        // Only for a voice Dialogue can't use. A preset pack is a speaker name
+        // with no audio, and Dia2 conditions on audio — so the fix is to record
+        // some, with the voice's own engine. Offered here rather than in the
+        // Dialogue picker because it swaps the resident model, which the
+        // Dialogue screen has just finished swapping the other way.
+        if !model.voiceCapabilities(voice.slug).supports(.dia2) {
+            Button(model.diaUpgradeSlug == voice.slug
+                   ? "Making Dia-compatible…" : "Make Dia-compatible…") {
+                makeDiaCompatible(voice.slug)
+            }
+            .disabled(model.diaUpgradeSlug != nil)
+            .help("Record a reference clip with this voice's own engine so it "
+                  + "can be used in Dialogue. Loads that engine — takes a minute.")
+        }
         Button("Export…") { export(voice.slug) }
             .help("Export voice as a .gvoice pack")
         Button("Share…") { share(voice.slug) }
@@ -329,10 +343,7 @@ struct VoiceSidebarView: View {
             .help("Permanently delete this voice")
     }
 
-    private var voiceList: [VoiceMeta] {
-        _ = model.voicesVersion
-        return model.voices.list()
-    }
+    private var voiceList: [VoiceMeta] { model.voiceList }
 
     private typealias VoiceGroup = (base: VoiceMeta, variants: [VoiceMeta])
 
@@ -354,7 +365,7 @@ struct VoiceSidebarView: View {
     /// search filter: a group stays when its base or any variant matches by
     /// name or slug (case-insensitive substring).
     private var filteredShelves: (own: [VoiceGroup], bundled: [VoiceGroup]) {
-        var groups = groupedVoices(voiceList)
+        var groups = model.groupedVoiceList
         let query = searchText.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty {
             func matches(_ v: VoiceMeta) -> Bool {
@@ -365,11 +376,20 @@ struct VoiceSidebarView: View {
         }
         // An acted variant is an edit too: a preset that has grown one is the
         // user's, whatever its own meta.json says.
+        // Asked of a cached set rather than of the filesystem: this runs on
+        // every SwiftUI update, and `isBundled` walks the pack's directories.
+        let bundledByLibrary = model.bundledVoiceSlugs
         let bundled = groups.filter {
-            $0.variants.isEmpty && PresetVoiceSeeder.isBundled($0.base, in: model.voices)
+            $0.variants.isEmpty && bundledByLibrary.contains($0.base.slug)
         }
         let bundledSlugs = Set(bundled.map(\.base.slug))
         return (groups.filter { !bundledSlugs.contains($0.base.slug) }, bundled)
+    }
+
+    /// Fire-and-forget: the model owns the progress flag, and the only thing
+    /// coming back is a message worth showing in the library alert.
+    private func makeDiaCompatible(_ slug: String) {
+        Task { if let failure = await model.makeDiaCompatible(slug: slug) { actionError = failure } }
     }
 
     private func export(_ slug: String) {

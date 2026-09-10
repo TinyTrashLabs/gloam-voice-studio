@@ -46,6 +46,34 @@ public protocol Transcriber: Sendable {
     /// final has been emitted.
     func liveTranscribe(audio: AsyncStream<AudioChunk>)
         -> AsyncThrowingStream<TranscriptUpdate, Error>
+
+    /// Word-level timings. Only engines that expose them implement this; the
+    /// default reports that it is unavailable rather than guessing timings
+    /// from a flat transcript.
+    func transcribeWords(audioURL: URL, languageHint: String?) async throws -> [WordTiming]
+}
+
+/// One word and the span it occupies, in seconds from the start of the audio.
+public struct WordTiming: Sendable, Equatable {
+    public let text: String
+    public let start: Double
+    public let end: Double
+    public init(text: String, start: Double, end: Double) {
+        self.text = text; self.start = start; self.end = end
+    }
+}
+
+public enum TranscriberError: Error, CustomStringConvertible {
+    case wordTimingsUnavailable
+    public var description: String {
+        "This transcriber does not provide word-level timings"
+    }
+}
+
+public extension Transcriber {
+    func transcribeWords(audioURL: URL, languageHint: String? = nil) async throws -> [WordTiming] {
+        throw TranscriberError.wordTimingsUnavailable
+    }
 }
 
 public extension Transcriber {

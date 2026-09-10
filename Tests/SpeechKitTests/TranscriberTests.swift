@@ -48,4 +48,15 @@ final class TranscriberTests: XCTestCase {
             start: buffer.floatChannelData![0], count: 3))
         XCTAssertEqual(restored, [0.1, -0.2, 0.3])
     }
+
+    /// Dia2 conditioning needs word timings, so the fake that stands in for a
+    /// transcriber in tests and UI-test mode has to provide them — otherwise
+    /// every fake-backed Dia2 path hits the protocol default and throws.
+    func testFakeTranscriberProvidesWordTimings() async throws {
+        let fake = FakeTranscriber(batchResult: "one two three")
+        let words = try await fake.transcribeWords(audioURL: URL(fileURLWithPath: "/dev/null"))
+        XCTAssertEqual(words.map(\.text), ["one", "two", "three"])
+        XCTAssertEqual(words.first?.start, 0)
+        XCTAssertTrue(zip(words, words.dropFirst()).allSatisfy { $0.end <= $1.start })
+    }
 }

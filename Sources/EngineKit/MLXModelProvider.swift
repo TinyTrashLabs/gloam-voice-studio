@@ -57,6 +57,12 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
         }
         let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
         let model = try await TTS.loadModel(modelRepo: source)
+        // Dia2 goes through the same loader — it is registered in the fork's
+        // TTS factory — but needs the dialogue-capable adapter rather than the
+        // single-voice one.
+        if let dia2 = model as? Dia2Model {
+            return Dia2SpeechModel(model: dia2)
+        }
         return MLXSpeechModel(model: model, backend: backend)
     }
 
@@ -176,6 +182,172 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
             throw error
         } catch {
             throw EngineError.generationFailed(backend: backend, message: "\(error)")
+        }
+    }
+}
+
+/// Dia2's adapter. Separate from `MLXSpeechModel` because Dia2 is the only
+/// backend that speaks two voices in one pass, and the dialogue entry points
+/// have no meaning for the others — giving them a default would let a
+/// single-voice engine silently answer a two-voice request.
+final class Dia2SpeechModel: DialogueSpeechModel, @unchecked Sendable {
+    private let model: Dia2Model
+
+    init(model: Dia2Model) { self.model = model }
+
+    var sampleRate: Int { model.sampleRate }
+    var nonverbalTags: [String] { model.nonverbalTags }
+
+    private func config(_ r: ProviderDialogueRequest) -> Dia2GenerationConfig {
+        Dia2RequestAdapter.config(r)
+    }
+
+    func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk {
+        // Drain MLX's Metal buffer-reuse cache once this pass hands back its
+        // CPU samples, exactly as MLXSpeechModel.synthesize() does per line.
+        // Dia2's per-pass GPU scratch (KV cache + Mimi codec activations) is
+        // large, the desktop cache is uncapped, and dialogue renders many
+        // passes per take — without this the reuse cache climbed to ~18 GB and
+        // held (2026-09-08). DialogueChunk.samples is already [Float], so the
+        // trim frees only scratch, never the audio we return.
+        defer { Memory.clearCache() }
+        // Dia2 resumes as speaker 1 after a prefix, so a pass opening on `[S2]`
+        // would come back with both voices on each other's lines. Rebind it to
+        // open on `[S1]`, clips and all — see `DialogueSpeakerBinding`.
+        let binding = DialogueSpeakerBinding(script: request.script, prefixes: request.prefixes)
+        let (samples, words) = try await model.generateDialogue(
+            script: binding.script,
+            prefixes: Dia2RequestAdapter.prefixes(binding.prefixes),
+            config: config(request))
+        // The transcript needs no unflipping: it carries no speaker of its
+        // own, and the parser consumes `[S1]`/`[S2]` without ever emitting one
+        // as a word, so a rebound pass reports the same words in the same
+        // order. Callers attributing them positionally against their OWN
+        // script stay correct, which is exactly what must not change.
+        return DialogueOutputAssembler.assemble(
+            generated: DialogueChunk(
+                samples: samples,
+                words: Dia2WordTiming.aligned(words, sampleCount: samples.count,
+                                              sampleRate: sampleRate)),
+            // Prefix audio has to be reassembled in the order the model heard
+            // it, which is the binding's rather than the caller's.
+            prefixes: binding.prefixes,
+            sampleRate: sampleRate,
+            keepPrefixAudio: request.keepPrefixAudio)
+    }
+
+    func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming {
+        let binding = DialogueSpeakerBinding(script: request.script, prefixes: request.prefixes)
+        return Dia2StreamingSession(
+            session: try model.streamDialogue(
+                script: binding.script,
+                prefixes: Dia2RequestAdapter.prefixes(binding.prefixes),
+                config: config(request)),
+            sampleRate: sampleRate,
+            swapped: binding.swapped)
+    }
+
+    /// A one-turn dialogue, so the ordinary single-voice path still works.
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        defer { Memory.clearCache() }   // same per-pass trim as synthesizeDialogue
+        let (samples, _) = try await model.generateDialogue(script: [request.text])
+        return samples
+    }
+}
+
+/// Dia2 reports one timestamp per generated word — where it STARTS. A word's
+/// end is the next word's start, and the last word runs to the end of the
+/// audio it came with.
+///
+/// Worth spelling out because the obvious shortcut (`end: start`) type-checks
+/// and reads fine, and it is what this did: every generated word came back
+/// zero-length, so anything measuring a span — slicing a speaker's audio out
+/// of a take, say — silently got nothing.
+enum Dia2WordTiming {
+    static func aligned(_ words: [(String, Double)],
+                        sampleCount: Int, sampleRate: Int) -> [AlignedWordTiming] {
+        let duration = sampleRate > 0 ? Double(sampleCount) / Double(sampleRate) : 0
+        return words.enumerated().map { index, word in
+            let next = index + 1 < words.count ? words[index + 1].1 : duration
+            return AlignedWordTiming(text: word.0, start: word.1,
+                                     end: max(word.1, next))
+        }
+    }
+}
+
+enum Dia2RequestAdapter {
+    static func config(_ r: ProviderDialogueRequest) -> Dia2GenerationConfig {
+        var c = Dia2GenerationConfig()
+        if let t = r.textTemperature { c.textTemperature = t }
+        if let k = r.textTopK { c.textTopK = k }
+        if let t = r.audioTemperature ?? r.temperature { c.audioTemperature = t }
+        if let k = r.audioTopK ?? r.topK { c.audioTopK = k }
+        if let s = r.cfgScale { c.cfgScale = s }
+        if let p = r.maxPadding { c.maxPadding = p }
+        c.seed = r.seed
+        return c
+    }
+
+    /// Takes the clips already ordered by `DialogueSpeakerBinding`, not the
+    /// request's own array — the two differ exactly when a pass had to be
+    /// rebound, which is the case this all exists for.
+    static func prefixes(_ prefixes: [DialoguePrefix?])
+        -> (speaker1: Dia2PrefixInput?, speaker2: Dia2PrefixInput?)
+    {
+        func convert(_ p: DialoguePrefix?) -> Dia2PrefixInput? {
+            guard let p else { return nil }
+            return Dia2PrefixInput(
+                samples: p.samples,
+                words: p.words.map { Dia2Word(text: $0.text, start: $0.start, end: $0.end) })
+        }
+        return (convert(prefixes.first ?? nil),
+                convert(prefixes.count > 1 ? prefixes[1] : nil))
+    }
+
+}
+
+/// Bridges Dia2's actor session onto EngineKit's streaming protocol.
+struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
+    let session: Dia2Session
+    /// Needed to turn a chunk's sample count into the last word's end time.
+    let sampleRate: Int
+    /// Set when the opening lines were rebound to `[S1]`. Every line appended
+    /// later has to be flipped the same way, or a session that started out
+    /// corrected drifts back onto the wrong voices halfway through.
+    var swapped: Bool = false
+
+    func append(_ lines: [String]) async {
+        await session.append(swapped ? lines.map(DialogueSpeakerBinding.flippingTags) : lines)
+    }
+    func finish() async { await session.finish() }
+    func cancel() async { await session.cancel() }
+
+    var audio: AsyncThrowingStream<DialogueChunk, Error> {
+        let upstream = session.audio
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                // Drain MLX's uncapped Metal buffer-reuse cache once the whole
+                // exchange has streamed, mirroring the per-pass trim on the
+                // batch path — a long session otherwise accumulates GPU scratch
+                // just as a multi-pass take does (2026-09-08).
+                defer { Memory.clearCache() }
+                do {
+                    for try await c in upstream {
+                        continuation.yield(DialogueChunk(
+                            samples: c.samples,
+                            // A streamed chunk's last word ends at the chunk
+                            // boundary, which is the best available answer
+                            // until the next chunk arrives.
+                            words: Dia2WordTiming.aligned(c.words,
+                                                          sampleCount: c.samples.count,
+                                                          sampleRate: sampleRate)))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }

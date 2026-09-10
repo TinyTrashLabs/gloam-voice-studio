@@ -7,6 +7,7 @@ listing gets a 256px image and upscales it. This turns that into a build
 failure instead of a soft logo nobody notices until review.
 """
 import struct
+import subprocess
 import sys
 
 # icns element types for the two sizes that matter to the store listing.
@@ -29,8 +30,8 @@ def elements(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: verify-appicon-icns.py <path to .icns>")
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: verify-appicon-icns.py <path to .icns> [source PNG]")
     found = elements(sys.argv[1])
     missing = [f"{t} ({REQUIRED[t]})" for t in sorted(REQUIRED) if t not in found]
     if missing:
@@ -38,6 +39,18 @@ def main():
             "AppIcon.icns is missing " + ", ".join(missing)
             + " -- App Store Connect would upscale a small icon."
         )
+    if len(sys.argv) == 3:
+        details = subprocess.run(
+            ["/usr/bin/sips", "-g", "hasAlpha", sys.argv[2]],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if "hasAlpha: yes" not in details:
+            sys.exit(
+                f"{sys.argv[2]} has no transparency -- the macOS icon would "
+                "render as a square tile instead of an app-icon silhouette."
+            )
     print("AppIcon.icns carries the 512 and 1024 representations")
 
 

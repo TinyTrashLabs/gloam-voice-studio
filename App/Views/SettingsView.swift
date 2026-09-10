@@ -61,15 +61,18 @@ struct AboutSettings: View {
 struct BackendsSettings: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .kokoro, .supertonic, .luxTTS, .pocketTTS]
+    /// Everything installable, in `BackendID` declaration order — derived, not
+    /// curated, so a new model shows up here the day it's added.
+    private let downloadable: [BackendID] = BackendID.on(.downloadable)
+    /// Studio speak-backends. A subset: qwen3-design is downloadable but not
+    /// selectable here.
+    private let generators: [BackendID] = BackendID.on(.studio)
 
     var body: some View {
         @Bindable var model = model
         Form {
             Picker("Generate with", selection: $model.backend) {
-                ForEach(backends, id: \.self) { backend in
+                ForEach(generators, id: \.self) { backend in
                     Text(model.hasSufficientRAM(for: backend)
                          ? backend.rawValue
                          : "\(backend.rawValue) (\(model.ramRequirementLabel(minRAMBytes: backend.spec.minRAMBytes)))")
@@ -78,8 +81,14 @@ struct BackendsSettings: View {
                 }
             }
             Section("Downloads") {
-                ForEach(backends, id: \.self) { backend in
+                ForEach(downloadable, id: \.self) { backend in
                     backendRow(backend)
+                }
+                // Chat models live here too. They used to appear only inside
+                // the API-server section, so anyone looking for "the models"
+                // found the voices and concluded the LLMs were missing.
+                ForEach(LLMBackendID.allCases, id: \.self) { llm in
+                    llmRow(llm)
                 }
                 Toggle("Keep models loaded under memory pressure", isOn: $model.keepModelsResident)
                     .help("Stay loaded through memory-pressure warnings so chat and "
@@ -94,6 +103,63 @@ struct BackendsSettings: View {
             LicenseSheet()
         }
         .onAppear { model.downloads.refresh() }
+    }
+
+    /// Download/loaded state row for one chat LLM, alongside the voice models.
+    /// Both kinds of model are "models" to anyone looking for them.
+    @ViewBuilder
+    private func llmRow(_ llm: LLMBackendID) -> some View {
+        let state = model.downloads.state(for: llm)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(llm.rawValue)
+                Text("≈ " + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
+                                                      countStyle: .file))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !model.hasSufficientRAM(for: llm) {
+                Text(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes).capitalized)
+                    .foregroundStyle(.red)
+                    .help("This Mac's RAM is below what \(llm.rawValue) needs to run safely.")
+                if state != .notDownloaded {
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                }
+            } else {
+                switch state {
+                // Note the order: `.failed` is handled BEFORE the states that
+                // share its buttons, because a failure with no way to try
+                // again is a dead end — which is exactly what this row was.
+                case .notDownloaded:
+                    Button("Download") { model.downloads.download(llm) }
+                        .help("Download this model to your Mac")
+                case .downloading(let fraction):
+                    ProgressView(value: fraction).frame(width: 120)
+                    Text(String(format: "%.0f%%", fraction * 100))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Button("Cancel") { model.downloads.cancelDownload(llm) }
+                        .help("Cancel the download")
+                case .ready:
+                    if model.loadedLLM == llm {
+                        Text("Loaded").foregroundStyle(.green)
+                            .help("Resident in memory — answering requests with no load delay")
+                        Button("Unload") { Task { await model.unloadChatLLM() } }
+                            .help("Release this model from memory")
+                    } else {
+                        Text("On disk").foregroundStyle(.secondary)
+                            .help("Downloaded — loads into memory on the first request")
+                    }
+                    Button("Delete") { model.downloads.delete(llm) }
+                        .help("Delete this model from disk")
+                case .failed(let message):
+                    Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
+                    Button("Retry") { model.downloads.download(llm) }
+                        .help("Retry the download")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -321,9 +387,6 @@ struct ServerSettings: View {
                 .accessibilityIdentifier("server-default-llm-picker")
                 Text("Answers /v1/chat/completions requests that don't name a model. Requests can also name any downloaded model directly.")
                     .font(.caption).foregroundStyle(.secondary)
-                ForEach(LLMBackendID.allCases, id: \.self) { llm in
-                    llmRow(llm)
-                }
             }
             Section {
                 DisclosureGroup("For developers") {
@@ -383,74 +446,17 @@ struct ServerSettings: View {
         .task { await model.refreshEngineStatus() }
     }
 
-    /// Download/loaded state row for one chat LLM — mirrors the Backends tab's
-    /// model rows so the API-server tab is a complete picture of what
-    /// /v1/chat/completions can serve.
-    @ViewBuilder
-    private func llmRow(_ llm: LLMBackendID) -> some View {
-        let state = model.downloads.state(for: llm)
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(llm.rawValue)
-                Text("≈ " + ByteCountFormatter.string(fromByteCount: llm.approxBytes,
-                                                      countStyle: .file))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if !model.hasSufficientRAM(for: llm) {
-                Text(model.ramRequirementLabel(minRAMBytes: llm.minRAMBytes).capitalized)
-                    .foregroundStyle(.red)
-                    .help("This Mac's RAM is below what \(llm.rawValue) needs to run safely.")
-                if state != .notDownloaded {
-                    Button("Delete") { model.downloads.delete(llm) }
-                        .help("Delete this model from disk")
-                }
-            } else {
-                switch state {
-                case .notDownloaded:
-                    Button("Download") { model.downloads.download(llm) }
-                        .help("Download this model to your Mac")
-                case .downloading(let fraction):
-                    ProgressView(value: fraction).frame(width: 120)
-                    Text(String(format: "%.0f%%", fraction * 100))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Button("Cancel") { model.downloads.cancelDownload(llm) }
-                        .help("Cancel the download")
-                case .ready:
-                    if model.loadedLLM == llm {
-                        Text("Loaded").foregroundStyle(.green)
-                            .help("Resident in memory — answering requests with no load delay")
-                        Button("Unload") { Task { await model.unloadChatLLM() } }
-                            .help("Release this model from memory")
-                    } else {
-                        Text("On disk").foregroundStyle(.secondary)
-                            .help("Downloaded — loads into memory on the first request")
-                    }
-                    Button("Delete") { model.downloads.delete(llm) }
-                        .help("Delete this model from disk")
-                case .failed(let message):
-                    Text(message).foregroundStyle(.red).lineLimit(2).frame(maxWidth: 200)
-                    Button("Retry") { model.downloads.download(llm) }
-                        .help("Retry the download")
-                }
-            }
-        }
-    }
-
-    /// Same curated order as `ModelSettings.backends`. qwen3-design is offered
-    /// deliberately even though the Studio picker redirects away from it — an
-    /// API caller that always sends `instruct` may want the design model.
-    private let serverModelChoices: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
-         .luxTTS]
+    /// Backends declaring `.apiServer`. qwen3-design is among them deliberately
+    /// even though the Studio picker redirects away from it — an API caller that
+    /// always sends `instruct` may want the design model.
+    private let serverModelChoices: [BackendID] = BackendID.on(.apiServer)
 
     /// Voice library for the Default voice picker — re-reads on library
     /// mutations elsewhere in the app (bumps `voicesVersion`), same guard
     /// `VoiceSidebarView.voiceList` uses.
     private var defaultVoiceLibrary: [VoiceMeta] {
         _ = model.voicesVersion
-        return model.voices.list()
+        return model.voiceList
     }
 
 }
@@ -515,6 +521,24 @@ struct StorageSettings: View {
                     value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
             }
             Button("Recalculate") { recalc() }
+            Section("Advanced") {
+                Toggle("Enable Lab (advanced audio comparison)", isOn: $model.labModeEnabled)
+                    .accessibilityIdentifier("lab-mode-toggle")
+                Text("Adds a Lab tab (⌘5) for developers — a comparison shelf that collects "
+                     + "clips from any source side by side, with timestamp marks, comments, and "
+                     + "verdicts an agent can read back. Off by default; turning it off hides the "
+                     + "tab without deleting anything, and closes the Lab tools on the API "
+                     + "server too.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.labModeEnabled {
+                    Stepper("Keep last \(model.labClipRetentionCap) Lab clips",
+                            value: $model.labClipRetentionCap, in: 5...500, step: 5)
+                        .accessibilityIdentifier("lab-clip-retention-cap")
+                    Text("Older Lab clips beyond this count are pruned automatically, "
+                         + "oldest first.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Voice candidates") {
                 Stepper("Keep last \(model.foundryCandidateRetentionCap) candidates",
                         value: $model.foundryCandidateRetentionCap, in: 5...500, step: 5)
@@ -540,6 +564,7 @@ struct StorageSettings: View {
             ("History", StoragePaths.directorySize(StoragePaths.history)),
             ("Voice Candidates", StoragePaths.directorySize(StoragePaths.foundryCandidates)),
             ("Chat Audio", StoragePaths.directorySize(StoragePaths.chatAudio)),
+            ("Lab", StoragePaths.directorySize(StoragePaths.lab)),
             ("Models", StoragePaths.directorySize(StoragePaths.models)),
         ]
     }

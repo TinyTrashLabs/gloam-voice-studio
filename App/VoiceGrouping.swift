@@ -10,10 +10,18 @@ private let voiceVariantSuffixes = Set(
 /// some other voice present in `all`. Shared by the sidebar (edit routing) and the
 /// Direct-pane VOICE popover (grouped rendering).
 func voiceBaseSlug(for slug: String, in all: [VoiceMeta]) -> String? {
-    let slugs = Set(all.map { $0.slug })
+    voiceBaseSlug(for: slug, knownSlugs: Set(all.map { $0.slug }))
+}
+
+/// The same question asked with the slug set already built.
+///
+/// `groupedVoices` asks it once per voice, and building the set inside made
+/// grouping quadratic — with the grouping itself running inside a view body,
+/// that cost showed up on every redraw of the sidebar.
+func voiceBaseSlug(for slug: String, knownSlugs: Set<String>) -> String? {
     for suffix in voiceVariantSuffixes where slug.hasSuffix("-\(suffix)") {
         let base = String(slug.dropLast(suffix.count + 1))
-        if !base.isEmpty && slugs.contains(base) { return base }
+        if !base.isEmpty && knownSlugs.contains(base) { return base }
     }
     return nil
 }
@@ -25,8 +33,9 @@ func voiceBaseSlug(for slug: String, in all: [VoiceMeta]) -> String? {
 func groupedVoices(_ all: [VoiceMeta]) -> [(base: VoiceMeta, variants: [VoiceMeta])] {
     var variantsByBase: [String: [VoiceMeta]] = [:]
     var bases: [VoiceMeta] = []
+    let knownSlugs = Set(all.map { $0.slug })
     for meta in all {
-        if let base = voiceBaseSlug(for: meta.slug, in: all) {
+        if let base = voiceBaseSlug(for: meta.slug, knownSlugs: knownSlugs) {
             variantsByBase[base, default: []].append(meta)
         } else {
             bases.append(meta)

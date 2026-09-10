@@ -7,6 +7,10 @@ let package = Package(
     products: [
         .library(name: "EngineKit", targets: ["EngineKit"]),
         .library(name: "StudioKit", targets: ["StudioKit"]),
+        // The .gvoice format, on its own so an app can read and write packs
+        // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
+        // what gloam-voice-studio-ios depends on.
+        .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
     ],
     dependencies: [
@@ -28,9 +32,40 @@ let package = Package(
         // Bumped 2026-08-25 to the custom-style-path merge (our #7): supertonic
         // accepts an absolute {style_ttl, style_dp} .json path as `voice`, so
         // .gvoice packs' baked supertonic renditions actually drive synthesis.
+        // Bumped 2026-09-02 to the Dia2 merge (our #8): Nari Labs' streaming
+        // two-speaker dialogue model (model_type "dia2"), English only, Mimi
+        // codec at 24 kHz, with prefix conditioning driven by word timings.
+        // Includes our #9: the 8-bit tier — the one this app downloads by
+        // default — did not load at all before it.
+        // Bumped 2026-09-03 to the Dia2 parity fix (our #10): top-k sampling
+        // now retains the complete candidate set, BOS fallback matches the
+        // reference, and delayed codebooks are gathered from the right frame.
+        // Then to our #11, which is what makes prefix conditioning work at
+        // all: local Dia2 directories load, the reference audio no longer
+        // bleeds into the opening, Mimi stays warm across that boundary, and
+        // -- the one that mattered -- the forced new-word schedule is derived
+        // from the same clamped word start the entry is built from. Without
+        // that clamp a fifth of a prefix's words were dropped from the text
+        // stream while their audio was still being teacher-forced, so a
+        // speaker never bound firmly to its voice: an 8s male reference came
+        // back at 200 Hz, or as the other speaker outright.
+        // NOTE: this is #11's branch head, not main. Repin to the merge
+        // commit once TinyTrashLabs/mlx-audio-swift#11 lands.
+        // Pinned to fix/dia2-rope-context-overflow's head (pushed 2026-09-07):
+        // the revision the iOS engine spike measured EngineKit's LuxTTS against,
+        // and the one gloam-voice-studio-ios pins this package at by URL. A
+        // path override here breaks every URL consumer (SwiftPM resolves the
+        // path relative to the checkout, which has no sibling), so for LOCAL
+        // Dia2 work add `.package(path: "../mlx-audio-swift")` above this line
+        // — SwiftPM prefers a path over a URL pin for the same identity — and
+        // drop it again before pushing.
+        // spike/qwen-ios-speed head (2026-09-09): fused RoPE, greedy sub-codes
+        // and the hybrid fused decoder step (Qwen3TTSModel.fusedLayers) that
+        // put Qwen3-TTS 0.6B at real time on the iPhone 15 Pro. All behind
+        // statics that default off, so the Mac app is unchanged.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "a987e6a517bcf29f474692967919df6c289c551d"),
+            revision: "ddb122b0d65aff992b9227944c764a4f7c4e4057"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -146,19 +181,45 @@ let package = Package(
             dependencies: ["EngineKit", "StudioKit"],
             path: "Sources/spike"
         ),
+        // The `.gvoice` pack format and nothing else: manifest, zip layout,
+        // entry limits, pace/gain rules and the reference loudness standard.
+        // Foundation + ZIPFoundation ONLY -- deliberately no EngineKit, so a
+        // client gets the format without the engines. docs/gvoice-format.md is
+        // normative; this is its only Swift implementation.
+        .target(
+            name: "GVoiceKit",
+            dependencies: [
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
+            path: "Sources/GVoiceKit"
+        ),
         .target(
             name: "StudioKit",
             dependencies: [
+                "GVoiceKit",
                 "EngineKit",
+                // Dia2 needs word timings for a conditioning clip, and the
+                // transcriber that produces them lives in SpeechKit.
+                "SpeechKit",
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
-            path: "Sources/StudioKit"
+            path: "Sources/StudioKit",
+            // Prose about a vendored file, not something to ship in the bundle.
+            exclude: ["Article/Resources/README-Readability.md"],
+            resources: [
+                // Mozilla Readability, run against the rendered DOM by
+                // ReadabilityArticleReader. Vendored deliberately: article
+                // extraction must work without fetching and evaluating a
+                // script off the network at runtime.
+                .copy("Article/Resources/Readability.js")
+            ]
         ),
         .testTarget(
             name: "StudioKitTests",
             dependencies: [
                 "StudioKit",
+                "GVoiceKit",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
             path: "Tests/StudioKitTests"
