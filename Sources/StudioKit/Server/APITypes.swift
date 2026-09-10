@@ -190,6 +190,17 @@ public struct APIDependencies: Sendable {
     /// server-triggered synthesis must honor the same invariant as in-app
     /// renders. Defaults to a no-op.
     public let prepareTTS: @Sendable () async -> Void
+    /// Builds the word aligner Dia2 prefixes need. A closure because the real
+    /// one owns a transcriber the app makes on demand; defaults to one that
+    /// finds no timings, which the dialogue route reads as "no prefix" and
+    /// generates unconditioned rather than failing.
+    public let makeAligner: @Sendable () async -> any WordAligning
+    /// The in-app audio comparison shelf the Lab tools mutate. `nil` when Lab
+    /// is off in Settings, or the server is built without one (a test, a
+    /// headless run): the `/v1/lab/*` routes then 503, the `lab_*` MCP tools
+    /// return a tool error, and `tools/list` omits them entirely.
+    /// `@MainActor`-isolated, so the handlers hop to the main actor to touch it.
+    public let lab: LabStore?
 
     public init(engine: GloamEngine, voices: VoiceLibrary, defaultBackend: BackendID,
                 defaultLLM: LLMBackendID? = nil,
@@ -202,7 +213,10 @@ public struct APIDependencies: Sendable {
                     = { _, _ in throw STTUnavailable() },
                 listen: @escaping @Sendable (Double, Double, String?) async throws -> String
                     = { _, _, _ in throw STTUnavailable() },
-                prepareTTS: @escaping @Sendable () async -> Void = {}) {
+                prepareTTS: @escaping @Sendable () async -> Void = {},
+                makeAligner: @escaping @Sendable () async -> any WordAligning
+                    = { UntimedWordAligner() },
+                lab: LabStore? = nil) {
         self.engine = engine
         self.voices = voices
         self.defaultBackend = defaultBackend
@@ -215,8 +229,64 @@ public struct APIDependencies: Sendable {
         self.transcribe = transcribe
         self.listen = listen
         self.prepareTTS = prepareTTS
+        self.makeAligner = makeAligner
+        self.lab = lab
     }
+}
+
+/// Stand-in aligner for a server with no transcriber wired up. It reports no
+/// timings, and a prefix with no timings is no prefix at all — Dia2 then
+/// generates unconditioned, which varies the voice but still answers.
+public struct UntimedWordAligner: WordAligning {
+    public init() {}
+    public func align(audioURL: URL, transcript: String?) async throws -> [AlignedWord] { [] }
+}
+
+/// `POST /v1/audio/dialogue`.
+public struct DialogueBody: Codable, Sendable {
+    public struct Turn: Codable, Sendable {
+        public var speaker: Int
+        public var text: String
+    }
+    public var turns: [Turn]
+    /// Voice slug per speaker index; a null or a missing entry conditions
+    /// nothing for that speaker.
+    public var voices: [String?]?
+    public var stream: Bool?
+    /// Legacy aliases for the audio sampler, kept for clients written before
+    /// the split. The explicit `audio_*` fields below win when both are sent.
+    public var temperature: Float?
+    public var top_k: Int?
+    public var cfg_scale: Float?
+    /// Dia2 samples the text/action state machine separately from the audio
+    /// codebooks, so the two halves take their own settings.
+    public var text_temperature: Float?
+    public var text_top_k: Int?
+    public var audio_temperature: Float?
+    public var audio_top_k: Int?
+    public var max_padding: Int?
+    public var keep_prefix_audio: Bool?
 }
 
 // Make VoiceMeta ResponseEncodable so handlers can return it directly.
 extension VoiceMeta: ResponseEncodable {}
+
+/// `POST /v1/lab/groups` — create or update a comparison group. Mirrors the
+/// `lab_set_group` MCP tool; same snake_case field names.
+struct LabGroupRequest: Codable {
+    let heading: String
+    let listen_for: String?
+    let id: String?
+}
+
+/// `POST /v1/lab/clips` — add a WAV to a group. Mirrors `lab_put_clip`: address
+/// the group by `group_id` or by `group_heading` (create-if-absent), and supply
+/// the audio as `audio_b64` (inline base64 WAV) or `path` (a local file).
+struct LabClipRequest: Codable {
+    let group_id: String?
+    let group_heading: String?
+    let label: String
+    let note: String?
+    let audio_b64: String?
+    let path: String?
+}

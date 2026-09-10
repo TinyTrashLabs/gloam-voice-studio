@@ -43,6 +43,55 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 Backend gating errors are 400s (e.g. `qwen3-design requires 'instruct'`).
 Fish returns `403` with the license notice until acknowledged in-app.
 
+### `POST /v1/audio/dialogue`
+
+Two voices in one pass, on the `dia2` backend. Returns `audio/wav`. This is how
+an off-machine client (Gloam Radio's two-host segments) drives a conversation
+rather than stitching two single-voice takes together.
+
+```bash
+curl -s http://127.0.0.1:8790/v1/audio/dialogue \
+  -H 'content-type: application/json' \
+  -d '{"turns": [{"speaker": 1, "text": "Evening. (laughs)"},
+                 {"speaker": 2, "text": "Evening yourself."}],
+       "voices": ["midge", "wizard"]}' \
+  -o exchange.wav
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `turns` | array, required | `{"speaker": 1\|2, "text": "…"}` in order. Dia2 speaks exactly two speakers |
+| `voices` | array of string\|null | Voice slug per speaker index. Omit, or send `null`, to generate unconditioned — the voice then varies between requests |
+| `stream` | bool | Stream the WAV as it generates (open-ended header, then PCM frames) instead of buffering the whole take |
+| `cfg_scale` | number | Classifier-free guidance. 6 is the Dia2 default; lower drifts off the reference, higher gets clipped and shouty |
+| `text_temperature`, `text_top_k` | number | Sampler over the text/action state machine — what gets said, and when the speaker changes |
+| `audio_temperature`, `audio_top_k` | number | Sampler over the audio codebooks — how it is said |
+| `temperature`, `top_k` | number | Legacy aliases for `audio_temperature` / `audio_top_k`; the explicit fields win when both are sent |
+| `max_padding` | int | Frames of silence the model may pad a turn with before moving on |
+| `keep_prefix_audio` | bool | Return the conditioning clips ahead of the take. For hearing what the model was given while debugging — not for anything you ship |
+
+Errors are 400s: a speaker other than 1 or 2, an empty script, a `(tag)` the
+model does not know (it would be read aloud), or a `voices` entry naming no
+library slug. A voice that exists but has no recorded reference is **not** an
+error — that speaker simply conditions nothing.
+
+Because Dia2 cannot condition speaker 2 alone, a missing first prefix drops the
+second as well rather than misassigning it.
+
+One request is one Dia2 pass, and a pass has three ceilings: it stops hard at
+~118s of audio, the two speakers' identities merge from ~95s, and the
+similarity to the reference starts falling from ~45s. Keep a request under
+about 45 seconds of speech and split longer material into separate requests at
+a speaker change — each request re-conditions from the reference, so splitting
+resets the drift entirely. Studio's Dialogue mode does this planning for you;
+over HTTP it is the client's job.
+
+### `GET /v1/audio/dialogue/tags`
+
+The nonverbal tags the loaded Dia2 model actually knows, e.g.
+`{"tags": ["(laughs)", "(sighs)", …]}`. Offer these as chips: free text in
+brackets is spoken aloud, not performed. Loads the model if it is not resident.
+
 ### Voice resolution on cloning backends
 
 On a cloning backend (`qwen3-0.6b`, `qwen3-1.7b`, `chatterbox`,

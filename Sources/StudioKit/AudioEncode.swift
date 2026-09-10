@@ -52,6 +52,27 @@ public enum WAVEncoder {
         out.append(list)
         return out
     }
+
+    /// A 44-byte header for a WAV whose length is not known yet: the RIFF and
+    /// data sizes are 0xFFFFFFFF, the convention players accept for an
+    /// open-ended stream. Follow it with raw little-endian PCM16 frames.
+    public static func streamingHeader(sampleRate: Int, channels: Int = 1) -> Data {
+        var out = Data()
+        out.append(Data("RIFF".utf8))
+        out.append(UInt32.max.leData)
+        out.append(Data("WAVE".utf8))
+        out.append(Data("fmt ".utf8))
+        out.append(UInt32(16).leData)
+        out.append(UInt16(1).leData)
+        out.append(UInt16(channels).leData)
+        out.append(UInt32(sampleRate).leData)
+        out.append(UInt32(sampleRate * channels * 2).leData)
+        out.append(UInt16(channels * 2).leData)
+        out.append(UInt16(16).leData)
+        out.append(Data("data".utf8))
+        out.append(UInt32.max.leData)
+        return out
+    }
 }
 
 extension UInt32 { var leData: Data { withUnsafeBytes(of: littleEndian) { Data($0) } } }

@@ -1,5 +1,6 @@
 import XCTest
 import EngineKit
+@testable import GVoiceKit
 @testable import StudioKit
 
 final class PresetVoiceSeederTests: XCTestCase {

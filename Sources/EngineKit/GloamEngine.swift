@@ -276,6 +276,65 @@ public actor GloamEngine {
         return try await work.value
     }
 
+    /// Two voices in one pass. Serialised through the same tail chain as
+    /// `synthesize`, because it is the same GPU.
+    public func synthesizeDialogue(backend: BackendID, request: ProviderDialogueRequest)
+        async throws -> DialogueChunk
+    {
+        let previous = tail
+        let work = Task<DialogueChunk, Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            self.ttsBusy = true
+            defer { self.ttsWorkEnded() }
+            let model = try await self.residentModel(for: backend)
+            guard let dialogue = model as? any DialogueSpeechModel else {
+                throw EngineError.generationFailed(
+                    backend: backend,
+                    message: "\(backend.rawValue) speaks one voice at a time — "
+                        + "dialogue needs a two-speaker engine.")
+            }
+            return try await dialogue.synthesizeDialogue(request)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    /// The nonverbal tags this backend actually knows. Clients render them as
+    /// chips; free text would simply be read aloud, which is the whole reason
+    /// the list has to come from the model rather than a hardcoded table.
+    public func nonverbalTags(backend: BackendID) async throws -> [String] {
+        let previous = tail
+        let work = Task<[String], Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            let model = try await self.residentModel(for: backend)
+            return (model as? any DialogueSpeechModel)?.nonverbalTags ?? []
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
+    /// Opens a streaming dialogue session. The load is serialised; the session
+    /// itself then runs on its own, so `append` can keep feeding it script
+    /// while audio is already flowing.
+    public func openDialogueSession(backend: BackendID, request: ProviderDialogueRequest)
+        async throws -> any DialogueStreaming
+    {
+        let previous = tail
+        let work = Task<any DialogueStreaming, Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            let model = try await self.residentModel(for: backend)
+            guard let dialogue = model as? any DialogueSpeechModel else {
+                throw EngineError.generationFailed(
+                    backend: backend,
+                    message: "\(backend.rawValue) speaks one voice at a time — "
+                        + "dialogue needs a two-speaker engine.")
+            }
+            return try dialogue.openDialogueSession(request)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
     public func synthesize(backend: BackendID, request: SynthesisRequest)
         async throws -> SynthesisResult
     {
@@ -308,7 +367,29 @@ public actor GloamEngine {
         let plan = try RequestPlanner.plan(backend: backend, request: request)
         let model = try await self.residentModel(for: backend)
         let start = Date()
-        let raw = try await model.synthesize(plan)
+        let raw: [Float]
+        if backend.surfaces.contains(.dialogue), let dialogue = model as? any DialogueSpeechModel {
+            // A two-speaker engine asked for one line still goes through the
+            // dialogue entry point, because that is the ONLY one that accepts a
+            // word-aligned prefix. `SpeechModel.synthesize` would run the pass
+            // unconditioned and hand back a stranger's voice under the selected
+            // voice's name — the exact failure the app refuses everywhere else.
+            let script = try DialoguePlanner.script(
+                for: DialogueRequest(turns: [DialogueTurn(speaker: 1, text: plan.text)],
+                                     voices: []),
+                knownTags: [])
+            let chunk = try await dialogue.synthesizeDialogue(ProviderDialogueRequest(
+                script: script,
+                prefixes: [request.dialoguePrefix],
+                // Temperature and topK come from the Studio bench's knobs. CFG
+                // scale does not: `Knobs.cfgScale` has no bench control (the
+                // Dialogue composer owns that slider), so the model default
+                // stands rather than a silently-zero override.
+                temperature: plan.temperature, topK: plan.topK))
+            raw = chunk.samples
+        } else {
+            raw = try await model.synthesize(plan)
+        }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
         // If the plan carries a native `speed` (LuxTTS: applied inside the

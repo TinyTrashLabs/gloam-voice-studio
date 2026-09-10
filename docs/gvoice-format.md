@@ -46,6 +46,7 @@ backends vary in what they need:
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
 | `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
+| `dia2` | optional | none | — | Word-aligned reference audio; may carry a dedicated `dia2` clip |
 | `supertonic` | **none** | none | F1–F5 / M1–M5 (`supertonicVoices`) | `style.json` — `style_ttl` + `style_dp` |
 
 `supertonic` is one backend, not two — there is no separate `supertonic-2`/
@@ -64,6 +65,7 @@ not itself a licence to ship an empty pack.
 ```
 billie-frost.gvoice          (zip)
 ├── manifest.json            required
+├── avatar.png               optional — 256×256 PNG, named by the manifest's `avatar`
 ├── source/                  optional — the master; everything else derives from it
 │   ├── ref.wav
 │   └── ref-hype.wav
@@ -143,6 +145,54 @@ Transcript text lives inline in the manifest (`source.<key>.text`), not as a
 sibling file — there is no `transcript.txt` member. (An earlier draft of this
 doc showed one; it was never implemented and this is the correction.)
 
+### The `dia2` conditioning reference
+
+A pack MAY carry a dedicated `engines/dia2/ref.wav` and its word timings in
+`engines/dia2/alignment.json`. This lets producers select a complete, clean
+excerpt for dialogue conditioning while keeping the master recording intact.
+No new pack version is needed: both files belong to the engine's existing
+variant asset list.
+
+When present, Dia2 MUST use that reference instead of `source/ref.wav`.
+The alignment MUST describe the selected clip, with times in seconds relative
+to its beginning, not the master recording. It is an array of objects with
+`w` (word), `start`, and `end` fields. Replacing or trimming the dedicated
+reference requires replacing or regenerating its alignment too.
+
+If no dedicated reference exists, readers MAY use the master and its cached
+Dia2 alignment. If an alignment is missing, the app creates it from the audio
+it actually selected. The master's transcript is not passed to the aligner
+for a dedicated clip, since it may describe different material.
+
+Exporters MUST include both assets when present, and importers MUST preserve
+their association. Other engines continue to select their own assets or the
+master recording.
+
+### The avatar
+
+A pack MAY carry one picture of the voice, named by the manifest's `avatar`
+key. The canonical member is `avatar.png` at the pack root.
+
+- Writers MUST emit a PNG, square, exactly **256×256** pixels
+  (`AvatarImage.side`), and MUST NOT emit `avatar` without the member it
+  names. The size is fixed so every library shows every voice at the same
+  fidelity and no pack ships a camera-roll original: apps process the
+  user's photo on the way in (EXIF orientation applied, centre-cropped on
+  the short edge, resampled) — `GVoiceKit.AvatarImage` is that step, shared
+  by both apps.
+- Readers MUST accept a square PNG of any size and SHOULD display it scaled;
+  a reader MAY re-process it to 256×256 on import. Readers MUST reject —
+  by skipping, per Rule 1 — a member that is not a PNG, and MUST cap what
+  they read (`AvatarImage.maxBytes`, 4 MB) before decoding: the member is
+  attacker-controlled like every other.
+- The avatar is one picture per pack. Variants share it; there is no
+  per-variant avatar.
+- It travels whether or not `source/` does. A picture reveals no more than
+  the `name` already does, and a renditions-only pack still needs a face
+  in the recipient's library.
+- It is the one member that is not an asset in Rule 2's sense: a pack whose
+  only member beyond the manifest is an avatar is not importable.
+
 ## `manifest.json`
 
 ```json
@@ -170,7 +220,8 @@ doc showed one; it was never implemented and this is the correction.)
   "provenance": {
     "source": "latent-inversion",
     "config": { "…": "tool-specific; opaque to readers" }
-  }
+  },
+  "avatar": "avatar.png"
 }
 ```
 
@@ -187,6 +238,7 @@ doc showed one; it was never implemented and this is the correction.)
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
 | `source` | no | Variant key → `{ audio, text }`. Paths are pack-relative. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
+| `avatar` | no | Pack-relative path of the voice's picture — see "The avatar" below. Cosmetic, not identity: a reader that ignores it renders the voice exactly as before, so adding it did NOT bump `gvoice`. One per pack, shared by every variant. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
 
 Engine ids SHOULD match `BackendID.rawValue` where a backend exists in
@@ -206,7 +258,9 @@ meaning, a required-ness change, restructuring `source`/`engines`) justifies a
 bump.
 
 `enginePace` (added 2026-08-23) is the worked example: a new optional key that
-an old reader ignores, falling back to `pace`. No bump.
+an old reader ignores, falling back to `pace`. No bump. `avatar` (added
+2026-09-08) is another: an old reader imports the voice without its picture,
+which was the only outcome before the key existed.
 
 That split is what makes forward compatibility possible at all: readers
 reject `gvoice` values *above* what they implement (they don't understand the
@@ -302,11 +356,12 @@ producer metadata, not a local identifier this library owns.
 
 ## Known gaps
 
-- **`persona` and the avatar image are app-level metadata, not voice-identity
-  data, and are not currently packed.** A `.gvoice` pack carries what's needed
-  to *render* the voice; chat persona and avatar stay local to each library.
-  If that changes, it's an additive manifest/layout extension under the
-  Versioning policy above, not a `gvoice` bump.
+- **`persona` is app-level metadata, not voice-identity data, and is not
+  currently packed.** A `.gvoice` pack carries what's needed to *render* the
+  voice plus its picture (see "The avatar"); the chat persona stays local to
+  each library. If that changes, it's an additive manifest/layout extension
+  under the Versioning policy above, not a `gvoice` bump — exactly how the
+  avatar was added on 2026-09-08.
 - **Cross-implementation zip edge cases are untested.** Duplicate member
   names and directory-entry case sensitivity are handled however each zip
   library's reader happens to handle them (Swift's `ZIPFoundation` vs.
@@ -327,4 +382,6 @@ An implementation conforms when it can:
   leaving any other variant partially installed (Rule 3);
 - round-trip a multi-variant pack without dropping variants;
 - round-trip `provenance` unchanged even though its shape is not understood;
+- round-trip an `avatar`, and import a pack whose `avatar` names a missing
+  or non-PNG member without failing (Rule 1);
 - export with and without `source/`.

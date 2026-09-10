@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 11)
+        XCTAssertEqual(BackendID.allCases.count, 12)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 11)
+        XCTAssertEqual(BackendID.allCases.count, 12)
     }
 
     func testQwenFamilyFlag() {
@@ -150,7 +150,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 11)
+        XCTAssertEqual(BackendID.allCases.count, 12)
     }
 
     func testKokoroSpec() {
@@ -233,4 +233,64 @@ final class BackendTests: XCTestCase {
                        ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"])
         XCTAssertEqual(Set(controls.presetSpeakers).count, 10, "no duplicate voice names")
     }
+
+    // MARK: - Dia2
+
+    func testDia2RawValueAndCaseCount() {
+        XCTAssertEqual(BackendID.dia2.rawValue, "dia2")
+        XCTAssertTrue(BackendID.allCases.contains(.dia2))
+    }
+
+    func testDia2ResolvesRepoBySizeAndQuant() {
+        XCTAssertEqual(BackendID.dia2Repo(size: .b2, quant: .q8), "tinytrashlabs/dia2-2b-mlx-8bit")
+        XCTAssertEqual(BackendID.dia2Repo(size: .b1, quant: .q4), "tinytrashlabs/dia2-1b-mlx-4bit")
+        XCTAssertEqual(BackendID.dia2Repo(size: .b2, quant: nil), "tinytrashlabs/dia2-2b-mlx-8bit")
+    }
+
+    /// Precisions and sizes coexist on disk, like Qwen's quant folders.
+    func testDia2DiskFoldersAreDistinct() {
+        XCTAssertNotEqual(BackendID.dia2.diskFolder(quantRaw: "2b-8bit"),
+                          BackendID.dia2.diskFolder(quantRaw: "1b-8bit"))
+        XCTAssertEqual(BackendID.dia2.diskFolder(quantRaw: "2b-8bit"), "dia2@2b-8bit")
+        XCTAssertEqual(BackendID.dia2.diskFolder(quantRaw: nil), "dia2@2b-8bit")
+    }
+
+    func testDia2SizeRawValuesAndRAMFloors() {
+        XCTAssertEqual(Dia2Size.b2.rawValue, "2b")
+        XCTAssertEqual(Dia2Size.b1.rawValue, "1b")
+        XCTAssertGreaterThan(Dia2Size.b2.minRAMBytes, Dia2Size.b1.minRAMBytes)
+    }
+
+    func testDia2ControlSurfaceHasNoLanguageOrPresets() {
+        let controls = BackendID.dia2.controls
+        XCTAssertTrue(controls.presetSpeakers.isEmpty)
+        XCTAssertFalse(controls.language, "Dia2 is English only")
+        XCTAssertEqual(controls.voiceClone, .optional)
+        XCTAssertEqual(controls.instruct, .none)
+        XCTAssertNotNil(controls.knobs.cfgScale)
+        XCTAssertNotNil(controls.knobs.temperature)
+        XCTAssertNotNil(controls.knobs.topK)
+    }
+
+    /// cfgScale is additive: every other backend must still report nil for it.
+    func testCfgScaleIsNilForEveryOtherBackend() {
+        for backend in BackendID.allCases where backend != .dia2 {
+            XCTAssertNil(backend.controls.knobs.cfgScale, "\(backend.rawValue) gained a cfgScale knob")
+        }
+    }
+
+    func testDia2EmotionIsDialogueTags() {
+        XCTAssertEqual(BackendID.dia2.emotionMechanism, .dialogueTags)
+    }
+
+    /// The 2B tier is the default and needs real headroom; 1B is the light one.
+    func testDia2SpecDeclaresRamAndTagSupport() {
+        let spec = BackendID.dia2.spec
+        XCTAssertTrue(spec.honorsTags)
+        XCTAssertFalse(spec.needsLicenseAck, "Apache 2.0")
+        XCTAssertFalse(spec.needsRefAudio, "unconditioned generation is valid")
+        XCTAssertEqual(spec.defaultSampleRate, 24000)
+        XCTAssertGreaterThanOrEqual(spec.minRAMBytes, 16_000_000_000)
+    }
 }
+

@@ -46,6 +46,14 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var tShiftOverride: Float?
     /// LuxTTS dual-path 48k output toggle override (nil = model default true).
     public var returnSmoothOverride: Bool?
+    /// Dia2 only: the selected voice's word-aligned conditioning prefix.
+    ///
+    /// Dia2 does not clone from `refAudioPath` — it conditions on a prefix whose
+    /// words carry timings, which only the caller can build (it needs the word
+    /// aligner, and EngineKit has no transcriber). Present means "speak as this
+    /// voice"; nil means an unconditioned pass, which is a usable read but not
+    /// anybody's voice in particular.
+    public var dialoguePrefix: DialoguePrefix?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -55,7 +63,9 @@ public struct SynthesisRequest: Sendable, Equatable {
                 language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
-                tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil) {
+                tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
+                dialoguePrefix: DialoguePrefix? = nil) {
+        self.dialoguePrefix = dialoguePrefix
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText

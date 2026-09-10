@@ -43,13 +43,13 @@ struct VoiceEditorForm: View {
                 VoiceAvatarView(
                     slug: editingSlug ?? "",
                     name: name,
-                    avatarURL: editingSlug.flatMap { model.voices.avatarURL($0) },
+                    avatarURL: editingSlug.flatMap { model.voiceAvatarURL($0) },
                     size: 72)
                 VStack(alignment: .leading, spacing: 6) {
                     if editingSlug != nil {
                         Button("Upload Photo…") { avatarImporterPresented = true }
                             .accessibilityIdentifier("avatar-upload")
-                        if let slug = editingSlug, model.voices.avatarURL(slug) != nil {
+                        if let slug = editingSlug, model.voiceAvatarURL(slug) != nil {
                             Button("Remove") {
                                 do {
                                     try model.voices.removeAvatar(slug)
@@ -185,6 +185,9 @@ struct VoiceEditorForm: View {
             do {
                 try model.voices.saveAvatar(slug, pngData: png)
                 avatarVersion += 1
+                // An avatar is what makes a bundled preset the user's, so the
+                // sidebar's grouping has to be re-derived, not just the image.
+                model.voicesVersion += 1
             } catch { self.error = model.describeAny(error) }
         }
     }

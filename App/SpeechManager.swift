@@ -53,6 +53,17 @@ final class SpeechManager {
         whisperModels.state(for: whisperVariant) == .ready
     }
 
+    /// The Whisper model folder for Dia2 word timings, or nil when it isn't
+    /// downloaded yet.
+    ///
+    /// Separate from `makeTranscriber()` on purpose. That one answers "what did
+    /// the user pick for DICTATION", and its answer defaults to Apple, whose
+    /// recognizer has no word timings — Dia2 alignment built from it always
+    /// threw. Dia2 does not get a choice: Whisper or nothing.
+    var wordTimingModelFolder: URL? {
+        whisperReady ? whisperModels.directory(for: whisperVariant) : nil
+    }
+
     /// Build a transcriber for the current choice. Falls back to Apple when
     /// Whisper is selected but its model isn't downloaded.
     func makeTranscriber() -> any Transcriber {

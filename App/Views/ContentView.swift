@@ -3,8 +3,10 @@ import SwiftUI
 
 /// Top-level main-pane section. `Studio` speaks with reusable voices; `createVoice`
 /// is the Voice Foundry where `qwen3-design` mints new ones; `chat` converses with
-/// a voice's persona through a local LLM.
-enum StudioSection: String { case studio, createVoice, chat }
+/// a voice's persona through a local LLM; `dialogue` writes a two-speaker exchange
+/// for Dia2, which is the one engine that speaks both voices in a single pass.
+/// `lab` is the advanced audio-comparison shelf, shown only when Lab mode is on.
+enum StudioSection: String { case studio, createVoice, chat, dialogue, lab }
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
@@ -13,9 +15,14 @@ struct ContentView: View {
     @State private var llmPickerOpen = false
     @AppStorage("studioSection") private var sectionRaw = StudioSection.studio.rawValue
     @AppStorage("didShowOnboarding") private var didShowOnboarding = false
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
 
     private var section: StudioSection {
-        StudioSection(rawValue: sectionRaw) ?? .studio
+        let resolved = StudioSection(rawValue: sectionRaw) ?? .studio
+        // Turning Lab mode off while it's the selected section would strand the
+        // user on a tab with no picker entry — fall back to Studio.
+        if resolved == .lab && !labModeEnabled { return .studio }
+        return resolved
     }
 
     var body: some View {
@@ -34,6 +41,8 @@ struct ContentView: View {
                     case .studio: StudioView()
                     case .createVoice: CreateVoiceView()
                     case .chat: ChatView()
+                    case .dialogue: DialogueView()
+                    case .lab: LabView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,6 +90,58 @@ struct ContentView: View {
             set: { if !$0 { model.cancelLicensePrompt() } })) {
             LicenseSheet()
         }
+        // The one-time "bake this voice for Dia" offer, raised from AppModel so
+        // the bench and the Dialogue composer ask the identical question.
+        //
+        // The binding's setter is deliberately inert: the two buttons are what
+        // answer, and letting a dismissal answer too would race them — SwiftUI
+        // flips `isPresented` around the action, so a setter that answered
+        // could resolve "Not now" before the "Bake" button ran. Esc runs the
+        // .cancel button, which does answer.
+        .alert("Bake in Dia compatibility?",
+               isPresented: Binding(get: { model.diaBakeOffer != nil }, set: { _ in }),
+               presenting: model.diaBakeOffer) { _ in
+            Button("Bake") { model.answerDiaBake(true) }
+            Button("Not now", role: .cancel) { model.answerDiaBake(false) }
+        } message: { offer in
+            Text(diaBakeMessage(offer))
+        }
+        .alert("Dia", isPresented: Binding(get: { model.diaError != nil },
+                                           set: { if !$0 { model.diaError = nil } })) {
+            Button("OK") { model.diaError = nil }
+        } message: { Text(model.diaError ?? "") }
+        .overlay(alignment: .bottom) {
+            if let status = model.diaBakeStatus {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(status).font(.callout).foregroundStyle(Brand.fg)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(Brand.ink2))
+                .overlay(Capsule().stroke(Color.white.opacity(0.08)))
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .accessibilityIdentifier("dia-bake-status")
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: model.diaBakeStatus)
+    }
+
+    /// What baking will actually do for this voice, in the user's terms.
+    private func diaBakeMessage(_ offer: AppModel.DiaBakeOffer) -> String {
+        var lines = ["“\(offer.voiceName)” isn't set up for Dia yet."]
+        lines.append(offer.needsReference
+            ? "This voice has no recording, so its own engine will speak a short "
+              + "line to record one, then that clip is analyzed for word timings."
+            : "Its reference clip gets analyzed for word timings, which is what "
+              + "Dia conditions on.")
+        if offer.needsWhisperDownload {
+            lines.append("The Whisper speech model isn't downloaded yet — that "
+                         + "happens first (about 650 MB).")
+        }
+        lines.append("Done once. After this the voice is ready every time.")
+        return lines.joined(separator: "\n\n")
     }
 
     // macOS merges all automatic toolbar items into ONE "Liquid Glass" capsule.
@@ -92,7 +153,7 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
         // Section switcher — the standard toolbar-level scope control (was a
-        // custom segmented picker buried in the sidebar header). ⌘1/2/3 via
+        // custom segmented picker buried in the sidebar header). ⌘1/2/3/4 via
         // the View menu (SectionCommands).
         ToolbarItem(placement: .navigation) {
             Picker("Section", selection: Binding(
@@ -106,11 +167,17 @@ struct ContentView: View {
                 Text("Studio").tag(StudioSection.studio)
                 Text("Create Voice").tag(StudioSection.createVoice)
                 Text("Chat").tag(StudioSection.chat)
+                Text("Dialogue").tag(StudioSection.dialogue)
+                // Advanced developer surface — only offered when Lab mode is on.
+                if labModeEnabled {
+                    Text("Lab").tag(StudioSection.lab)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .accessibilityIdentifier("studio-section-picker")
-            .help("Switch between the studio, the voice foundry, and voice chat (⌘1/⌘2/⌘3)")
+            .help("Switch between the studio, the voice foundry, voice chat, and "
+                  + "two-speaker dialogue (⌘1/⌘2/⌘3/⌘4)")
         }
 
         // 0. Global download progress — appears only while a model is downloading,
@@ -200,18 +267,13 @@ struct ContentView: View {
         }
     }
 
-    // Models offered in the chooser, in priority order.
-    // Qwen3 (multilingual cloning) and turbo/Fish up top; regular chatterbox is
-    // demoted to last for historical reasons (it used to double the line —
-    // fixed 2026-07-02: CFG uncond-stream position embeddings, missing [SPACE]
-    // tokenization, and uninitialized S3Gen attention biases, all in the vendored
-    // mlx-audio-swift fork).
-    private var pickerBackends: [BackendID] {
-        // qwen3-design is intentionally absent — it's Creation-only, in the Voice
-        // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
-         .supertonic, .luxTTS, .pocketTTS]
-    }
+    // Models offered in the chooser, in `BackendID` declaration order. Never a
+    // curated list: a backend appears here because it declares `.studio` in
+    // `BackendID.surfaces`, so a newly added model can't go missing from the
+    // picker without someone deciding it should. (qwen3-design declares
+    // `.creation` instead — it lives in the Voice Foundry, and has its own row
+    // below.)
+    private var pickerBackends: [BackendID] { BackendID.on(.studio) }
 
     private func modelDisplayName(_ b: BackendID) -> String {
         switch b {
@@ -459,20 +521,22 @@ struct ContentView: View {
         .task { await model.refreshEngineStatus() }
     }
 
-    /// Load/Unload for the Foundry's qwen3-design — residency only (never sets the
-    /// Studio backend), so it stays Creation-only while still being manageable here.
+    /// Load/Unload for a residency-only backend — one that is NOT a Studio
+    /// speak-engine (qwen3-design for Create Voice; dia2 for Dialogue). Loading
+    /// never sets the Studio backend (refreshEngineStatus carves out non-`.studio`
+    /// residents), so these stay manageable here without hijacking the bench.
     @ViewBuilder
-    private var foundryLoadButton: some View {
-        if model.loadedBackend == .qwenDesign {
+    private func residencyLoadButton(_ b: BackendID) -> some View {
+        if model.loadedBackend == b {
             Button("Unload") { Task { await model.unloadModel() }; modelPickerOpen = false }
                 .font(.caption).disabled(model.isGenerating || model.modelOpInFlight)
         } else {
-            switch model.downloads.state(for: .qwenDesign) {
+            switch model.downloads.state(for: b) {
             case .ready:
-                Button("Load") { Task { await model.loadModel(.qwenDesign) }; modelPickerOpen = false }
+                Button("Load") { Task { await model.loadModel(b) }; modelPickerOpen = false }
                     .font(.caption).disabled(model.modelOpInFlight)
             case .notDownloaded, .failed:
-                Button("Download") { model.downloads.download(.qwenDesign) }.font(.caption)
+                Button("Download") { model.downloads.download(b) }.font(.caption)
             case .downloading:
                 ProgressView().controlSize(.small)
             }
@@ -548,8 +612,11 @@ struct ContentView: View {
                 .disabled(model.modelOpInFlight || !ramOK)
                 .help(ramOK ? "" : "This Mac doesn't have enough RAM for \(modelDisplayName(b)) — \(model.ramRequirementLabel(minRAMBytes: b.spec.minRAMBytes)).")
             }
-            // Voice Foundry model — residency only. It's Creation-only, so this row
-            // loads/unloads qwen3-design WITHOUT making it the Studio speak-backend.
+            // Residency-only engines — NOT Studio speak-backends, so each loads/
+            // unloads here without becoming the bench engine. qwen3-design powers
+            // Create Voice; dia2 powers Dialogue (issue #56: too weak for a single
+            // Studio line, so it is Dialogue-only and lives in its own row here
+            // rather than in the speak-picker above).
             Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
             HStack(spacing: 8) {
                 dot(statusDot(for: .qwenDesign))
@@ -559,7 +626,18 @@ struct ContentView: View {
                         .font(.caption2).foregroundStyle(Brand.fgDim)
                 }
                 Spacer(minLength: 12)
-                foundryLoadButton
+                residencyLoadButton(.qwenDesign)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            HStack(spacing: 8) {
+                dot(statusDot(for: .dia2))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("dia2").foregroundStyle(Brand.fg)
+                    Text("Dialogue · " + modelStateText(.dia2))
+                        .font(.caption2).foregroundStyle(Brand.fgDim)
+                }
+                Spacer(minLength: 12)
+                residencyLoadButton(.dia2)
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
             Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
@@ -591,8 +669,7 @@ struct ContentView: View {
 struct ModelManagerView: View {
     @Environment(AppModel.self) private var model
 
-    private let backends: [BackendID] =
-        [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .luxTTS]
+    private let backends: [BackendID] = BackendID.on(.downloadable)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

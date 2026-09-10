@@ -39,7 +39,11 @@ public enum RefAudioCombiner {
     /// a reference whose bytes are not WAV at all — six library voices hold
     /// MP3/M4A under a `.wav` name, which the loudness standard cannot touch and
     /// `voice-level --transcode` repairs through here.
-    public static func decodeMono(_ data: Data) throws -> [Float] {
+    ///
+    /// `sampleRate` defaults to the cloning rate; Dia2 prefixes ask for Mimi's
+    /// 24 kHz instead, and resampling twice would cost quality for nothing.
+    public static func decodeMono(_ data: Data,
+                                  sampleRate: Double = targetSampleRate) throws -> [Float] {
         // AVAudioFile needs a URL; stage the bytes in a temp file.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("refcombine-\(UUID().uuidString).audio")
@@ -48,7 +52,7 @@ public enum RefAudioCombiner {
 
         let file = try AVAudioFile(forReading: url)
         guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                            sampleRate: targetSampleRate,
+                                            sampleRate: sampleRate,
                                             channels: 1, interleaved: false),
               let converter = AVAudioConverter(from: file.processingFormat, to: outFormat)
         else { throw StudioError.invalidRefAudio("unsupported audio format") }

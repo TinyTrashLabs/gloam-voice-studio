@@ -19,6 +19,7 @@
 // (1, C, 1) → (1, 1, C)). Use `LuxVocoder.sanitize(torchWeights:)` /
 // `loadTorchWeights(_:)` to convert a flat torch-key dictionary.
 
+import Accelerate
 import Foundation
 import MLX
 import MLXNN
@@ -352,31 +353,131 @@ public final class LuxUpSamplerBlock: Module, UnaryLayer {
 
 // MARK: - FFT helpers
 
-/// Smallest power of 2 >= n. MLX's FFT falls back to a Bluestein algorithm
-/// for non-power-of-2 sizes — including 5-smooth (factors only 2, 3, 5)
-/// composites, empirically confirmed by this crashing even after padding to
-/// a 5-smooth length — and that Bluestein path has a real crash (an internal
-/// assertion failure, observed as SIGABRT in mlx::core::fft_op/four_step_fft)
-/// for certain — apparently prime-heavy — sub-factor sizes. Audio lengths
-/// here vary per voice/text (no fixed prompt truncation), so any length can
-/// occur; every MLXFFT.rfft/irfft call in this file zero-pads up to a power
-/// of 2 first (the one size class every FFT implementation's fast path is
-/// guaranteed to support) and trims back down after.
+// MARK: - Whole-chunk FFT post-processing (vDSP)
+
+/// Both helpers below operate on a WHOLE chunk in one transform, so their
+/// transform length scales with the render. They ran on MLX's Metal FFT until
+/// 2026-09-08, whose four-step path hard-asserts (uncatchable SIGABRT) at
+/// 2^21 points — reached once a chunk passes 2^19 samples ≈ 21.8 s at 24 kHz.
+/// vDSP's real DFT has no such ceiling and costs a few milliseconds per chunk,
+/// so the transforms now run there; the math (zero-pad to a power of two,
+/// transform, trim) is unchanged and `LuxVocoderResampleTests` pins parity
+/// with the MLX version.
+
+/// Smallest power of 2 >= n, and at least 8 (vDSP's smallest real DFT). The
+/// power-of-two pad predates the vDSP port: audio lengths vary per voice and
+/// text, and a power of two is the one size class every FFT's fast path
+/// supports.
 private func nextFFTFriendlySize(_ n: Int) -> Int {
-    guard n > 1 else { return max(n, 1) }
-    var candidate = 1
+    var candidate = 8
     while candidate < n { candidate <<= 1 }
     return candidate
 }
 
-/// Zero-pads only the last axis of `x` up to `target` samples (no-op if
-/// already that length).
-private func padLastAxis(_ x: MLXArray, to target: Int) -> MLXArray {
+/// Real DFT plans (vDSP twiddle tables) cached per length: a plan for 2^21
+/// points takes tens of milliseconds to build and every chunk of a read
+/// wants the same few sizes.
+private enum LuxRealDFT {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var forward: [Int: vDSP_DFT_Setup] = [:]
+    nonisolated(unsafe) private static var inverse: [Int: vDSP_DFT_Setup] = [:]
+
+    private static func setup(n: Int, direction: vDSP_DFT_Direction) -> vDSP_DFT_Setup {
+        lock.lock()
+        defer { lock.unlock() }
+        let isForward = direction == .FORWARD
+        if let cached = isForward ? forward[n] : inverse[n] { return cached }
+        guard let made = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(n), direction) else {
+            fatalError("vDSP has no real DFT plan for n=\(n) (must be a power of two >= 8)")
+        }
+        if isForward { forward[n] = made } else { inverse[n] = made }
+        return made
+    }
+
+    /// rfft of `x` (exactly `n` samples, `n` a power of two): n/2 + 1 bins
+    /// scaled like numpy/MLX (vDSP's forward output is 2x the DFT; halved here).
+    static func rfft(_ x: [Float], n: Int) -> (re: [Float], im: [Float]) {
+        precondition(x.count == n)
+        let half = n / 2
+        var inRe = [Float](repeating: 0, count: half)
+        var inIm = [Float](repeating: 0, count: half)
+        var outRe = [Float](repeating: 0, count: half)
+        var outIm = [Float](repeating: 0, count: half)
+        x.withUnsafeBufferPointer { xp in
+            xp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { packed in
+                inRe.withUnsafeMutableBufferPointer { rp in
+                    inIm.withUnsafeMutableBufferPointer { ip in
+                        var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                        vDSP_ctoz(packed, 2, &split, 1, vDSP_Length(half))
+                    }
+                }
+            }
+        }
+        vDSP_DFT_Execute(setup(n: n, direction: .FORWARD), inRe, inIm, &outRe, &outIm)
+        // Unpack: bin 0 = DC (real), bin n/2 = Nyquist (stored in imag[0]).
+        var re = [Float](repeating: 0, count: half + 1)
+        var im = [Float](repeating: 0, count: half + 1)
+        re[0] = outRe[0] * 0.5
+        re[half] = outIm[0] * 0.5
+        for k in 1 ..< half {
+            re[k] = outRe[k] * 0.5
+            im[k] = outIm[k] * 0.5
+        }
+        return (re, im)
+    }
+
+    /// irfft at length `n` (a power of two), normalised by 1/n like MLX; the
+    /// spectrum is zero-padded or truncated to n/2 + 1 bins first, which is
+    /// how MLX's `irfft(spec, n:)` treats a mismatched bin count.
+    static func irfft(re: [Float], im: [Float], n: Int) -> [Float] {
+        precondition(re.count == im.count)
+        let half = n / 2
+        var inRe = [Float](repeating: 0, count: half)
+        var inIm = [Float](repeating: 0, count: half)
+        let bins = min(re.count, half + 1)
+        for k in 0 ..< bins {
+            if k == 0 {
+                inRe[0] = re[0]
+            } else if k == half {
+                inIm[0] = re[half]
+            } else {
+                inRe[k] = re[k]
+                inIm[k] = im[k]
+            }
+        }
+        var outRe = [Float](repeating: 0, count: half)
+        var outIm = [Float](repeating: 0, count: half)
+        vDSP_DFT_Execute(setup(n: n, direction: .INVERSE), inRe, inIm, &outRe, &outIm)
+        var y = [Float](repeating: 0, count: n)
+        y.withUnsafeMutableBufferPointer { yp in
+            yp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { packed in
+                outRe.withUnsafeMutableBufferPointer { rp in
+                    outIm.withUnsafeMutableBufferPointer { ip in
+                        var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                        vDSP_ztoc(&split, 1, packed, 2, vDSP_Length(half))
+                    }
+                }
+            }
+        }
+        var scale = 1.0 / Float(n)
+        vDSP_vsmul(y, 1, &scale, &y, 1, vDSP_Length(n))
+        return y
+    }
+}
+
+/// Rows of `x` (any leading shape, last axis = samples) as CPU buffers.
+private func luxRows(_ x: MLXArray) -> (rows: [[Float]], leading: [Int]) {
     let n = x.dim(-1)
-    guard target != n else { return x }
-    var widths = Array(repeating: IntOrPair([0, 0]), count: x.ndim)
-    widths[widths.count - 1] = IntOrPair([0, target - n])
-    return padded(x, widths: widths)
+    let leading = Array(x.shape.dropLast())
+    let flat = x.asArray(Float.self)
+    let count = n == 0 ? 0 : flat.count / n
+    let rows = (0 ..< count).map { Array(flat[($0 * n) ..< (($0 + 1) * n)]) }
+    return (rows, leading)
+}
+
+private func luxArray(rows: [[Float]], leading: [Int]) -> MLXArray {
+    let n = rows.first?.count ?? 0
+    return MLXArray(rows.flatMap { $0 }).reshaped(leading + [n])
 }
 
 /// Ports LuxTTS-mlx `_fft_resample_np` (vocoder.py): zero-pad/truncate the
@@ -395,14 +496,18 @@ func luxFFTResample(_ audio: MLXArray, from srcRate: Int, to dstRate: Int) -> ML
     guard newN > 1, newN != n else { return audio }
 
     let paddedN = nextFFTFriendlySize(n)
-    let paddedAudio = padLastAxis(audio, to: paddedN)
     let paddedNewN = Int((Double(paddedN) * Double(dstRate) / Double(srcRate)).rounded())
+    let gain = Float(newN) / Float(n)
 
-    let spec = MLXFFT.rfft(paddedAudio, axis: -1)
-    // MLX irfft pads/truncates the spectrum internally, matching the
-    // reference's explicit pad/slice; trim back to the true (unpadded) target.
-    let resampled = MLXFFT.irfft(spec, n: paddedNewN, axis: -1)
-    return resampled[.ellipsis, 0 ..< newN] * (Float(newN) / Float(n))
+    let (rows, leading) = luxRows(audio)
+    let out = rows.map { row -> [Float] in
+        var padded = row
+        padded.append(contentsOf: repeatElement(0, count: paddedN - row.count))
+        let spec = LuxRealDFT.rfft(padded, n: paddedN)
+        let resampled = LuxRealDFT.irfft(re: spec.re, im: spec.im, n: paddedNewN)
+        return resampled[0 ..< newN].map { $0 * gain }
+    }
+    return luxArray(rows: out, leading: leading)
 }
 
 /// Ports linacodec `crossover_merge_linkwitz_riley` (linkwitz.py), identically
@@ -420,11 +525,10 @@ func luxCrossoverMergeLinkwitzRiley(
     transitionBins: Int = 8
 ) -> MLXArray {
     let n = highPath.dim(-1)
+    precondition(lowPath.dim(-1) == n, "crossover paths must be sample-aligned")
     let paddedN = nextFFTFriendlySize(n)
-    let specHigh = MLXFFT.rfft(padLastAxis(highPath, to: paddedN), axis: -1)
-    let specLow = MLXFFT.rfft(padLastAxis(lowPath, to: paddedN), axis: -1)
+    let nBins = paddedN / 2 + 1
 
-    let nBins = specHigh.dim(-1)
     // Reference maps cutoff with n_bins (not n_bins - 1) and truncates —
     // one-bin-scale bias kept intentionally for parity.
     let cutoffBin = Int((cutoff / (Float(sampleRate) / 2.0)) * Float(nBins))
@@ -444,10 +548,27 @@ func luxCrossoverMergeLinkwitzRiley(
         }
     }
 
-    let maskArray = MLXArray(mask)  // broadcasts over leading axes
-    let merged = specHigh * maskArray + specLow * (1.0 - maskArray)
-    let result = MLXFFT.irfft(merged, n: paddedN, axis: -1)
-    return paddedN == n ? result : result[.ellipsis, 0 ..< n]
+    let (highRows, leading) = luxRows(highPath)
+    let (lowRows, _) = luxRows(lowPath)
+    precondition(highRows.count == lowRows.count, "crossover paths must share a batch shape")
+    let out = zip(highRows, lowRows).map { high, low -> [Float] in
+        var paddedHigh = high
+        paddedHigh.append(contentsOf: repeatElement(0, count: paddedN - high.count))
+        var paddedLow = low
+        paddedLow.append(contentsOf: repeatElement(0, count: paddedN - low.count))
+        let specHigh = LuxRealDFT.rfft(paddedHigh, n: paddedN)
+        let specLow = LuxRealDFT.rfft(paddedLow, n: paddedN)
+        var re = [Float](repeating: 0, count: nBins)
+        var im = [Float](repeating: 0, count: nBins)
+        for k in 0 ..< nBins {
+            let m = mask[k]
+            re[k] = specHigh.re[k] * m + specLow.re[k] * (1 - m)
+            im[k] = specHigh.im[k] * m + specLow.im[k] * (1 - m)
+        }
+        let merged = LuxRealDFT.irfft(re: re, im: im, n: paddedN)
+        return paddedN == n ? merged : Array(merged[0 ..< n])
+    }
+    return luxArray(rows: out, leading: leading)
 }
 
 // MARK: - Vocoder

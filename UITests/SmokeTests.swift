@@ -499,4 +499,39 @@ final class SmokeTests: XCTestCase {
                        "the legacy New Emotion Variant… menu item should be gone")
         app.typeKey(.escape, modifierFlags: [])
     }
+
+    @MainActor
+    func testDialogueVoicePickerSearchFiltersVoices() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest"]
+        app.launch()
+
+        // Use the visible scope control instead of the menu shortcut: a newly
+        // launched macOS app is not guaranteed to own keyboard focus yet.
+        let dialogueSection = app.radioButtons["Dialogue"].firstMatch
+        XCTAssertTrue(dialogueSection.waitForExistence(timeout: 5))
+        dialogueSection.click()
+
+        // The model gate uses the fake provider in UI-test mode, so loading is
+        // immediate.
+        let loadDia2 = app.buttons["dialogue-load-dia2"].firstMatch
+        XCTAssertTrue(loadDia2.waitForExistence(timeout: 5),
+                      "Dia2 load gate should appear. debugDescription:\n\(app.debugDescription)")
+        loadDia2.click()
+
+        let picker = app.buttons["dialogue-voice-picker-1"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.click()
+
+        let search = app.textFields["dialogue-voice-search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5),
+                      "the dialogue voice popover should expose a search field")
+        search.click()
+        search.typeText("Aiden")
+
+        let aiden = app.buttons["dialogue-voice-option-qwen3-custom-aiden"].firstMatch
+        XCTAssertTrue(aiden.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["dialogue-voice-option-qwen3-custom-dylan"].exists,
+                       "non-matching voices should be filtered out")
+    }
 }

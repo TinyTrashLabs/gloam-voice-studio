@@ -1,5 +1,6 @@
 import XCTest
 import ZIPFoundation
+@testable import GVoiceKit
 @testable import StudioKit
 
 /// The per-voice loudness trim.

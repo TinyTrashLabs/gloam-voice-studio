@@ -1,8 +1,8 @@
 # App Guide
 
-Gloam Voice Studio has three sections, switched in the sidebar:
-**Studio | Create Voice | Chat**. The sidebar's voice library is shared by all
-three.
+Gloam Voice Studio has four sections, switched in the toolbar (⌘1–⌘4):
+**Studio | Create Voice | Chat | Dialogue**. The sidebar's voice library is
+shared by all four.
 
 ## Voices and the library
 
@@ -90,6 +90,39 @@ picker since it's too slow for real-time — regenerate has no such
 constraint), and export the current take as a WAV; image attachment for
 vision models (gemma-4); dictating silences speech so replies can't
 transcribe themselves into your draft.
+
+## Dialogue
+
+Two speakers in one Dia2 pass — an actual exchange, with the overlaps and
+turn-taking a pair of separately-rendered single-voice takes can never have.
+
+Dia2 is the only engine that speaks two voices at once, and only one speech
+model stays in memory, so opening Dialogue asks before it unloads whatever
+engine is resident and loads Dia2. That switch takes minutes on a cold start,
+which is why it is a question and not a spinner.
+
+Pick a voice per speaker and the app aligns that voice's reference clip right
+away, so you learn whether it can condition the pass while you are still
+choosing rather than at Generate. A voice with no recorded reference is fine —
+that speaker simply conditions nothing, and its voice varies between takes.
+
+**Passes.** Dia2 stops hard at about two minutes of audio, but it goes wrong
+well before that: the two speakers' identities start merging around 95s, and a
+voice stops matching its reference from about 45s. So the app splits a long
+exchange into 45-second passes and shows you the plan — how many passes, and
+which turns the seams land after — before you generate. Seams only ever land
+where the speaker changes. Each pass starts from the reference clips again, so
+the drift resets at every seam instead of accumulating; one speaker talking
+past the budget can't be split without cutting mid-sentence, and the plan says
+so.
+
+**Inspector:** CFG scale (6 is the measured sweet spot — lower drifts off the
+voice, higher clips and shouts), separate temperature/top-k for the text side
+(what is said, and when the speaker changes) and the audio side (how it is
+said), max padding for the beat between turns, and a keep-prefix-audio toggle
+that prepends the conditioning clips so you can hear what the model was given.
+
+Play the take, or export it as a WAV.
 
 ## Settings
 

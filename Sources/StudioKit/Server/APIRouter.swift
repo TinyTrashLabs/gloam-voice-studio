@@ -338,6 +338,21 @@ public enum APIRouter {
             }
             let knobEmotion = usedVariant ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
+            // Dia2 conditions on a word-aligned prefix, not on `refAudioPath`, so
+            // the single-voice route has to build one too — otherwise a request
+            // that named a voice would come back unconditioned, which is the
+            // "randomly invented speaker" this route refuses above.
+            let speechPrefix: DialoguePrefix? = try await {
+                guard backend.surfaces.contains(.dialogue), let slug = trimSlug else { return nil }
+                guard let prefix = try await dialoguePrefixes([slug], deps: deps).first ?? nil
+                else {
+                    logError("/v1/audio/speech: no dia2 prefix for voice '\(slug)'"
+                        + " — refusing to synthesize an unconditioned speaker")
+                    throw APIError(status: .badRequest,
+                                   detail: "voice '\(slug)' can't be aligned for dia2")
+                }
+                return prefix
+            }()
             do {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
@@ -360,7 +375,9 @@ public enum APIRouter {
                                     exaggerationCeiling: req.exaggeration_ceiling,
                                     instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
                                     styleURL: styleURL, language: req.language,
-                                    topP: req.top_p, topK: req.top_k, repetitionPenalty: req.repetition_penalty))
+                                    topP: req.top_p, topK: req.top_k,
+                                    repetitionPenalty: req.repetition_penalty,
+                                    dialoguePrefix: speechPrefix))
                         }
                     }.value
                 } catch is RequestGate.Busy {
@@ -396,6 +413,84 @@ public enum APIRouter {
             }
         }
 
+        // Dialogue: two voices in one pass. Gloam Radio drives two-host
+        // segments over this, so it cannot be Studio-only.
+        router.get("v1/audio/dialogue/tags") { _, _ in
+            // Clients render these as chips; free text would be spoken aloud,
+            // which is why the list comes from the model and not a table here.
+            DialogueTagsResponse(tags: try await deps.engine.nonverbalTags(backend: .dia2))
+        }
+
+        router.post("v1/audio/dialogue") { request, context -> Response in
+            let start = Date()
+            let body = try await request.decode(as: DialogueBody.self, context: context)
+            // Same contract as /v1/audio/speech since #28: an unusable request
+            // is an explicit 4xx, never a quietly wrong take.
+            let dialogue = DialogueRequest(
+                turns: body.turns.map { DialogueTurn(speaker: $0.speaker, text: $0.text) },
+                voices: body.voices ?? [],
+                temperature: body.temperature, topK: body.top_k, cfgScale: body.cfg_scale,
+                textTemperature: body.text_temperature, textTopK: body.text_top_k,
+                audioTemperature: body.audio_temperature, audioTopK: body.audio_top_k,
+                maxPadding: body.max_padding,
+                keepPrefixAudio: body.keep_prefix_audio ?? false)
+            let tags = Set(try await deps.engine.nonverbalTags(backend: .dia2))
+            let script: [String]
+            do {
+                script = try DialoguePlanner.script(for: dialogue, knownTags: tags)
+            } catch {
+                throw APIError(status: .badRequest,
+                               detail: error.localizedDescription)
+            }
+
+            let prefixes = try await dialoguePrefixes(dialogue.voices, deps: deps)
+            let providerRequest = ProviderDialogueRequest(
+                dialogue, script: script, prefixes: prefixes)
+            let rate = BackendID.dia2.spec.defaultSampleRate
+
+            do {
+                if body.stream == true {
+                    let session = try await Task(priority: GloamEngine.modelWorkPriority) {
+                        try await deps.gate.run {
+                            await deps.prepareTTS()
+                            return try await deps.engine.openDialogueSession(
+                                backend: .dia2, request: providerRequest)
+                        }
+                    }.value
+                    deps.log.record(.init(
+                        method: "POST", path: "/v1/audio/dialogue", status: 200,
+                        model: BackendID.dia2.rawValue, voice: nil, instruct: nil,
+                        durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                    return streamingWAVResponse(session: session, sampleRate: rate)
+                }
+                let chunk: DialogueChunk
+                do {
+                    chunk = try await Task(priority: GloamEngine.modelWorkPriority) {
+                        try await deps.gate.run {
+                            await deps.prepareTTS()
+                            return try await deps.engine.synthesizeDialogue(
+                                backend: .dia2, request: providerRequest)
+                        }
+                    }.value
+                } catch is RequestGate.Busy {
+                    throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+                }
+                let wav = WAVEncoder.encode(pcm16: PCM16.data(from: chunk.samples),
+                                            sampleRate: rate)
+                deps.log.record(.init(
+                    method: "POST", path: "/v1/audio/dialogue", status: 200,
+                    model: BackendID.dia2.rawValue, voice: nil, instruct: nil,
+                    durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                return Response(status: .ok,
+                                headers: [.contentType: "audio/wav"],
+                                body: .init(byteBuffer: ByteBuffer(data: wav)))
+            } catch EngineError.licenseAckRequired(let b) {
+                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
+            } catch let error as EngineError {
+                throw APIError(status: .internalServerError, detail: "\(error)")
+            }
+        }
+
         router.post("listen") { request, context in
             let req = try await request.decode(as: ListenRequest.self, context: context)
             do {
@@ -411,7 +506,103 @@ public enum APIRouter {
             }
         }
 
+        // Lab: the in-app audio-comparison shelf, mirroring the `lab_*` MCP tools
+        // for curl/API fallback. Same JSON in and out — the store work lives in
+        // LabTools, called on the main actor since LabStore is @MainActor.
+        router.post("v1/lab/groups") { request, context -> Response in
+            let req = try await request.decode(as: LabGroupRequest.self, context: context)
+            let out = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.setGroup(try LabTools.store(deps), heading: req.heading,
+                                          listenFor: req.listen_for ?? "", id: req.id)
+                }
+            }
+            return jsonResponse(out)
+        }
+
+        router.post("v1/lab/clips") { request, context -> Response in
+            // A clip carries a whole WAV in `audio_b64`, so `request.decode`'s
+            // default 2 MB body cap rejects real audio. Collect the body
+            // directly at a Lab-sized limit (this is a local dev tool) the way
+            // the MCP route does, then decode from the buffer.
+            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            guard let data = buffer.readData(length: buffer.readableBytes),
+                  let req = try? JSONDecoder().decode(LabClipRequest.self, from: data)
+            else {
+                throw APIError(status: .badRequest, detail: "invalid lab clip body")
+            }
+            let out = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.putClip(try LabTools.store(deps),
+                                         groupID: req.group_id, groupHeading: req.group_heading,
+                                         label: req.label, note: req.note,
+                                         audioB64: req.audio_b64, path: req.path, source: .mcp)
+                }
+            }
+            return jsonResponse(out)
+        }
+
+        router.get("v1/lab/list") { _, _ -> Response in
+            let out = try await mapLabErrors {
+                try await MainActor.run { LabTools.list(try LabTools.store(deps)) }
+            }
+            return jsonResponse(out)
+        }
+
+        router.get("v1/lab/feedback") { request, _ -> Response in
+            let groupID = request.uri.queryParameters["group_id"].map(String.init)
+            let data = try await mapLabErrors {
+                try await MainActor.run {
+                    try LabTools.feedbackJSON(try LabTools.store(deps), groupID: groupID)
+                }
+            }
+            return Response(status: .ok,
+                            headers: [.contentType: "application/json"],
+                            body: .init(byteBuffer: ByteBuffer(data: data)))
+        }
+
+        router.delete("v1/lab/groups/:id") { _, context -> Response in
+            let id = try context.parameters.require("id")
+            try await mapLabErrors {
+                try await MainActor.run { try LabTools.deleteGroup(try LabTools.store(deps), groupID: id) }
+            }
+            return jsonResponse(Data(#"{"ok":true}"#.utf8))
+        }
+
+        router.delete("v1/lab/clips/:id") { _, context -> Response in
+            let id = try context.parameters.require("id")
+            try await mapLabErrors {
+                try await MainActor.run { try LabTools.deleteClip(try LabTools.store(deps), clipID: id) }
+            }
+            return jsonResponse(Data(#"{"ok":true}"#.utf8))
+        }
+
         return router
+    }
+
+    /// Wrap already-serialized JSON bytes in a 200 response — the Lab routes hand
+    /// back JSON that LabTools built.
+    static func jsonResponse(_ data: Data) -> Response {
+        Response(status: .ok,
+                 headers: [.contentType: "application/json"],
+                 body: .init(byteBuffer: ByteBuffer(data: data)))
+    }
+
+    /// LabTools.Error → FastAPI-parity status + detail. `.unknownGroup` is a 404
+    /// (the named group isn't there); `.badInput` a 400 (a caller mistake);
+    /// `.disabled` a 503 (Lab is off — the surface exists but is not serving).
+    static func mapLabErrors<T>(_ body: () async throws -> T) async throws -> T {
+        do { return try await body() }
+        catch let error as LabTools.Error {
+            switch error {
+            case .unknownGroup:
+                throw APIError(status: .notFound, detail: error.description)
+            case .badInput:
+                throw APIError(status: .badRequest, detail: error.description)
+            case .disabled:
+                throw APIError(status: .serviceUnavailable, detail: error.description)
+            }
+        }
     }
 
     /// StudioError → FastAPI-parity status + detail strings.
@@ -496,4 +687,62 @@ struct APILogMiddleware<Context: RequestContext>: RouterMiddleware {
             throw error
         }
     }
+}
+
+/// The tag vocabulary, as chips a client can offer rather than free text.
+struct DialogueTagsResponse: ResponseEncodable {
+    let tags: [String]
+}
+
+/// A speaker's conditioning clip, or nil. A voice with no reference audio —
+/// or no word timings for it — conditions nothing rather than failing the
+/// request: unconditioned Dia2 is valid, it just varies.
+private func dialoguePrefixes(_ voices: [String?],
+                              deps: APIDependencies) async throws -> [DialoguePrefix?] {
+    var prefixes: [DialoguePrefix?] = []
+    var aligner: (any WordAligning)?
+    for slug in voices.prefix(2) {
+        guard let slug else { prefixes.append(nil); continue }
+        guard let entry = try? deps.voices.entry(slug) else {
+            throw APIError(status: .badRequest, detail: "Unknown voice: \(slug)")
+        }
+        guard let refURL = entry.engines["dia2"]?["ref.wav"] ?? entry.refURL else {
+            prefixes.append(nil); continue
+        }
+        if aligner == nil { aligner = await deps.makeAligner() }
+        let words = (try? await Dia2Alignment.resolve(slug, in: deps.voices,
+                                                      using: aligner!)) ?? []
+        guard !words.isEmpty,
+              let samples = try? RefAudioCombiner.decodeMono(
+                  try Data(contentsOf: refURL),
+                  sampleRate: Double(BackendID.dia2.spec.defaultSampleRate))
+        else { prefixes.append(nil); continue }
+        prefixes.append(DialoguePrefix(
+            samples: samples,
+            words: words.map { AlignedWordTiming(text: $0.w, start: $0.start, end: $0.end) }))
+    }
+    // Dia2 cannot condition speaker 2 alone, so a missing first prefix drops
+    // the second rather than misassigning it.
+    if case .some(nil) = prefixes.first {
+        prefixes = Array(repeating: nil, count: prefixes.count)
+    }
+    return prefixes
+}
+
+/// Streams a WAV whose length is not known up front: a 44-byte header with
+/// 0xFFFFFFFF sizes (the convention players accept for an open-ended stream),
+/// then each chunk's samples as little-endian 16-bit PCM as they arrive.
+private func streamingWAVResponse(session: any DialogueStreaming,
+                                  sampleRate: Int) -> Response {
+    Response(
+        status: .ok,
+        headers: [.contentType: "audio/wav"],
+        body: ResponseBody { writer in
+            try await writer.write(ByteBuffer(data: WAVEncoder.streamingHeader(
+                sampleRate: sampleRate)))
+            for try await chunk in session.audio {
+                try await writer.write(ByteBuffer(data: PCM16.data(from: chunk.samples)))
+            }
+            try await writer.finish(nil)
+        })
 }

@@ -54,33 +54,9 @@ public enum AudioAssembler {
 
     // MARK: - Loudness standard
 
-    /// The reference-audio loudness standard, in LUFS (ITU-R BS.1770 K-weighted).
-    ///
-    /// A clone sounds as loud as the reference it was built from, and nothing
-    /// downstream re-levels it: on iOS the voice path is a straight gain
-    /// multiply (VoiceMixer.setGain) with no compressor at all. So a quietly
-    /// recorded voice is quiet on every device, at every gain setting, forever —
-    /// an imported voice came in ~2.3 dB under the shipped hosts and was
-    /// audibly quieter on an iPhone at the same setting (David, 2026-08-29).
-    ///
-    /// The anchor is not a preference: it is measured from `billie-frost`, the
-    /// bundled host whose level is known-good, which sits at **-18.2 LUFS**.
-    /// Matching it is what makes "gain 1" mean the same thing for every voice —
-    /// the contract the UI already implies.
-    ///
-    /// The target is that anchor raised **1.2 dB** (≈15% in linear amplitude).
-    /// Levelling the set to billie-frost made every voice CONSISTENT but left the
-    /// whole set quiet against the music bed (David, 2026-08-29). Consistency was
-    /// the bug; absolute level is a separate, deliberate choice on top of it.
-    ///
-    /// LUFS rather than RMS, and RMS rather than peak, for the same reason twice
-    /// over — each is a closer model of what an ear reports than the last.
-    /// `normalizePeak` equalises the loudest SAMPLE, which one transient
-    /// dominates. Plain RMS equalises energy, but weights 60 Hz the same as
-    /// 3 kHz: measured over the real library, `maceo-sad` and `david` sit at an
-    /// identical -18.0 dBFS RMS and still differ by 2.0 LU, in the direction the
-    /// ear reports. K-weighting costs two biquads and removes most of that gap.
-    public static let referenceLoudnessLUFS: Float = -17.0
+    /// Moved to `Loudness` in GVoiceKit with the rest of the reference-audio
+    /// standard; kept here as an alias so call sites did not have to churn.
+    public static let referenceLoudnessLUFS: Float = Loudness.referenceLoudnessLUFS
 
     /// Apply a per-voice loudness trim, in dB, to rendered output.
     ///
@@ -109,7 +85,9 @@ public enum AudioAssembler {
     /// 7.8 dB under target and `morgan-freeman` 4.3 dB under. Bending those
     /// transients is a far smaller edit to a reference than leaving the voice
     /// permanently quiet on every device.
-    public static let referencePeakCeilingDbFS: Float = -1.0
+    /// Moved to `Loudness` in GVoiceKit with the rest of the reference-audio
+    /// standard; kept here as an alias so call sites did not have to churn.
+    public static let referencePeakCeilingDbFS: Float = Loudness.referencePeakCeilingDbFS
 
     public static func normalizePeak(_ pcm: Data, target: Float = 0.98) -> Data {
         var peak: Int32 = 0

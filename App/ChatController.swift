@@ -93,6 +93,21 @@ final class ChatController {
     private var pendingSaveConvoID: String?
     private var pendingSaveMessageID: String?
 
+    // Dia2 speaks a whole reply in one streamed pass, so there is nothing to
+    // chunk: words go in as the LLM produces them and audio comes back while
+    // it is still producing. The sentence queue above stays untouched for
+    // every other backend, and is also the fallback if a session fails.
+    private var dialogueSession: (any DialogueStreaming)?
+    /// Set the moment the reply starts, before the session has finished
+    /// opening, so no delta is misrouted to the sentence queue in the gap.
+    private var dialogueActive = false
+    /// Whole words waiting to be appended, and the signal that wakes the
+    /// feeder. Kept in order: Dia2 is reading a script, not a bag of words.
+    private var dialogueOutbox: [String] = []
+    private var dialogueSignal: AsyncStream<Void>.Continuation?
+    /// Text not yet released as whole words (a partial word at the delta edge).
+    private var dialogueTail = ""
+
     init(app: AppModel, store: ChatStore) {
         self.app = app
         self.store = store
@@ -231,7 +246,11 @@ final class ChatController {
         isStreaming = true
         streamingText = ""
         if app.chatAutoSpeak, !micCaptureActive {
-            startLiveSpeech(voiceSlug: convo.voiceSlug, convoID: convo.id)
+            if app.chatTTSBackend == .dia2 {
+                startDialogueSession(voiceSlug: convo.voiceSlug, convoID: convo.id)
+            } else {
+                startLiveSpeech(voiceSlug: convo.voiceSlug, convoID: convo.id)
+            }
         }
         streamTask = Task { [weak self] in
             guard let self else { return }
@@ -244,7 +263,11 @@ final class ChatController {
                     switch event {
                     case .delta(let d):
                         self.streamingText += d
-                        self.feedLiveSentences(self.liveSegmenter.consume(d))
+                        if self.dialogueActive {
+                            self.feedDialogue(d)
+                        } else {
+                            self.feedLiveSentences(self.liveSegmenter.consume(d))
+                        }
                     case .finished(let result):
                         sawFinished = true
                         self.finishReply(result, convoID: convoID)
@@ -290,6 +313,7 @@ final class ChatController {
     /// Stop button: cancels the in-flight stream AND clears queued speech.
     func stop() {
         streamTask?.cancel()
+        cancelDialogueSession()
         endLiveSpeech()
         speechTask?.cancel()
         speech.stop()
@@ -628,6 +652,7 @@ final class ChatController {
     private func endLiveSpeech() {
         liveSignal?.finish()
         liveSignal = nil
+        endDialogueSession()
     }
 
     /// Sentence-chunked synthesis into the FIFO queue. Uses the current Studio
@@ -748,4 +773,140 @@ final class ChatController {
             interleaved: true,
             backendOverride: app.chatTTSBackend)
     }
+    // MARK: - Dia2 dialogue streaming
+
+    /// Opens one streamed Dia2 pass for the whole reply. Words go in as the
+    /// LLM produces them and audio comes back while it is still producing, so
+    /// the model hears its own turn-taking instead of being restarted per
+    /// sentence.
+    ///
+    /// If the session cannot open — no model, no dialogue backend — the reply
+    /// falls back to the sentence-chunked path rather than going silent.
+    private func startDialogueSession(voiceSlug: String, convoID: String) {
+        speechTask?.cancel()
+        speech.stop()
+        liveSegmenter = LiveSpeechSegmenter()
+        liveQueue.removeAll()
+        liveSpokeAnything = false
+        liveSpeechInterrupted = false
+        pendingSaveChunks = []
+        pendingSaveSampleRate = nil
+        pendingSaveBackend = nil
+        pendingSaveConvoID = convoID
+        pendingSaveMessageID = nil
+        dialogueOutbox.removeAll()
+        dialogueTail = ""
+        dialogueActive = true
+        let (signals, continuation) = AsyncStream<Void>.makeStream()
+        dialogueSignal = continuation
+        speechGeneration += 1
+        let generation = speechGeneration
+
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.speechGeneration == generation {
+                    self.speechTask = nil
+                    self.isSynthesizing = false
+                    self.finishPendingSave()
+                }
+                self.dialogueSession = nil
+                self.dialogueActive = false
+            }
+            let prefix = await self.app.dia2ChatPrefix(for: voiceSlug)
+            if Task.isCancelled { return }
+            let session: any DialogueStreaming
+            do {
+                session = try await self.app.engine.openDialogueSession(
+                    backend: .dia2,
+                    request: ProviderDialogueRequest(script: [], prefixes: [prefix]))
+            } catch {
+                if error is CancellationError || Task.isCancelled { return }
+                // The reply itself is unaffected; speak it the ordinary way.
+                AppLog.chat.error(
+                    "dia2 session failed, falling back to sentences: \(String(describing: error), privacy: .public)")
+                self.dialogueActive = false
+                self.startLiveSpeech(voiceSlug: voiceSlug, convoID: convoID)
+                self.feedLiveSentences(self.liveSegmenter.consume(self.streamingText))
+                return
+            }
+            self.dialogueSession = session
+            self.setSynthesizing(true, ifGeneration: generation)
+
+            // One task feeds script in order; this one plays what comes back.
+            let feeder = Task { [weak self] in
+                for await _ in signals {
+                    guard let self else { return }
+                    while !self.dialogueOutbox.isEmpty {
+                        let lines = self.dialogueOutbox
+                        self.dialogueOutbox.removeAll()
+                        await session.append(lines)
+                    }
+                }
+                guard let self else { return }
+                let rest = self.dialogueOutbox
+                self.dialogueOutbox.removeAll()
+                if !rest.isEmpty { await session.append(rest) }
+                await session.finish()
+            }
+            defer { feeder.cancel() }
+
+            do {
+                for try await chunk in session.audio {
+                    if Task.isCancelled { return }
+                    self.enqueueDialogueChunk(chunk)
+                }
+            } catch {
+                if error is CancellationError || Task.isCancelled { return }
+                self.speechWarning = "Speech unavailable: \(self.app.describeAny(error))"
+            }
+            self.setSynthesizing(false, ifGeneration: generation)
+        }
+    }
+
+    /// Releases whole words from a delta. A partial word at the edge waits for
+    /// the next delta — half a word would be spoken as a different one.
+    private func feedDialogue(_ delta: String) {
+        dialogueTail += delta
+        guard let lastBreak = dialogueTail.lastIndex(where: { $0.isWhitespace }) else { return }
+        let ready = String(dialogueTail[..<lastBreak])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        dialogueTail = String(dialogueTail[dialogueTail.index(after: lastBreak)...])
+        guard !ready.isEmpty else { return }
+        dialogueOutbox.append("[S1] " + ready)
+        dialogueSignal?.yield(())
+    }
+
+    /// The reply is complete: flush the last partial word and close the feed.
+    /// The model still finishes speaking what it was given.
+    private func endDialogueSession() {
+        guard dialogueSignal != nil else { return }
+        let tail = dialogueTail.trimmingCharacters(in: .whitespacesAndNewlines)
+        dialogueTail = ""
+        if !tail.isEmpty { dialogueOutbox.append("[S1] " + tail) }
+        dialogueSignal?.yield(())
+        dialogueSignal?.finish()
+        dialogueSignal = nil
+    }
+
+    /// Stop: the session dies where it stands, unlike `endDialogueSession`.
+    private func cancelDialogueSession() {
+        guard let session = dialogueSession else { return }
+        dialogueSession = nil
+        dialogueActive = false
+        Task { await session.cancel() }
+    }
+
+    private func enqueueDialogueChunk(_ chunk: DialogueChunk) {
+        let rate = BackendID.dia2.spec.defaultSampleRate
+        pendingSaveChunks.append(chunk.samples)
+        pendingSaveSampleRate = rate
+        pendingSaveBackend = .dia2
+        let faded = AudioAssembler.fadeEdges(chunk.samples, sampleRate: rate)
+        speech.enqueue(wav: WAVEncoder.encode(pcm16: PCM16.data(from: faded), sampleRate: rate),
+                       text: chunk.words.map(\.text).joined(separator: " "),
+                       voiced: ChatSpeechQueue.voicedBounds(samples: faded, sampleRate: rate))
+        liveSpokeAnything = true
+    }
+
 }

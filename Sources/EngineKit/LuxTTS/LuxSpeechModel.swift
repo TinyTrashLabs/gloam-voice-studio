@@ -149,10 +149,19 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
     private var promptCache: [CachedPrompt] = []
     private let promptCacheLock = NSLock()
 
-    public init(model: ZipVoiceDistill, vocoder: LuxVocoder, tokenizer: LuxTokenizer) {
+    /// Whether `synthesize` runs `LuxLeadInTrimmer` (an on-device Speech
+    /// recognition pass per call, active only once the app holds Speech
+    /// authorisation). Off for clients that do not own that permission.
+    private let leadInTrimming: Bool
+
+    public init(
+        model: ZipVoiceDistill, vocoder: LuxVocoder, tokenizer: LuxTokenizer,
+        leadInTrimming: Bool = true
+    ) {
         self.model = model
         self.vocoder = vocoder
         self.tokenizer = tokenizer
+        self.leadInTrimming = leadInTrimming
     }
 
     public var sampleRate: Int { LuxVocoder.outputSampleRate }
@@ -332,8 +341,10 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
 
             var samples = samplesArray.asArray(Float.self)
             Memory.clearCache()
-            samples = await LuxLeadInTrimmer.trimLeadIn(
-                samples: samples, sampleRate: sampleRate, expectedText: request.text)
+            if leadInTrimming {
+                samples = await LuxLeadInTrimmer.trimLeadIn(
+                    samples: samples, sampleRate: sampleRate, expectedText: request.text)
+            }
             return samples
         } catch let error as EngineError {
             throw error
@@ -361,25 +372,46 @@ extension LuxSpeechModel {
     /// `convert_weights.py --layout mlx` produces both when pointed at
     /// `model.pt` and `vocoder/vocos.bin` respectively.
     ///
+    /// The macOS studio's entry point: misaki G2P and the lead-in trimmer on.
     /// Async because the default phonemizer (`MisakiPhonemizer`, the
     /// license-clean in-process G2P — see MisakiPhonemizer.swift) resolves its
     /// dictionaries + BART fallback checkpoint from cache or HuggingFace on
     /// first use.
     public static func load(from directory: URL) async throws -> LuxSpeechModel {
-        // Fire-and-forget: surfaces the Speech Recognition permission prompt
-        // once, predictably, when the backend loads — not blocking on it (the
-        // lead-in trim is best-effort and works fine without it), and not
-        // buried inside every synthesize() call.
-        Task { await LuxLeadInTrimmer.requestAuthorizationIfNeeded() }
+        // Weights first: a missing install must not trigger misaki's download.
+        _ = try weightURLs(in: directory)
+        // In-process, MIT-licensed G2P (misaki port from mlx-audio-swift) —
+        // works inside the App Store sandbox, unlike the previous
+        // EspeakProcessPhonemizer which shelled out to a GPL espeak-ng binary
+        // (kept in LuxTokenizer.swift for dev-CLI parity testing only).
+        let phonemizer: any PhonemizerProviding
+        do {
+            phonemizer = try await MisakiPhonemizer.prepared()
+        } catch {
+            throw LuxModelLoadError.phonemizerUnavailable("\(error)")
+        }
+        return try await load(from: directory, phonemizer: phonemizer, leadInTrimming: true)
+    }
 
-        let modelWeightsURL = directory.appendingPathComponent("lux_model.safetensors")
-        let vocoderWeightsURL = directory.appendingPathComponent("lux_vocoder.safetensors")
-        guard FileManager.default.fileExists(atPath: modelWeightsURL.path) else {
-            throw LuxModelLoadError.weightsNotFound(modelWeightsURL.path)
+    /// Loads with a caller-supplied G2P and an explicit say on the lead-in
+    /// trimmer. This is what an App Store client wants: `load(from:)` reaches
+    /// HuggingFace for misaki's dictionaries on first use and requests Speech
+    /// authorisation unprompted, and a client that bundles its own
+    /// `PhonemizerProviding` (gloam-voice-studio-ios's `LuxG2P`) and owns its
+    /// permission prompts needs neither. Nothing here touches the network.
+    ///
+    /// `leadInTrimming: false` also skips the Speech authorisation request;
+    /// `true` requests it fire-and-forget on load — the trimmer is
+    /// best-effort and works without it — so the system prompt appears once,
+    /// predictably, rather than inside a synthesize() call.
+    public static func load(
+        from directory: URL, phonemizer: any PhonemizerProviding, leadInTrimming: Bool
+    ) async throws -> LuxSpeechModel {
+        if leadInTrimming {
+            Task { await LuxLeadInTrimmer.requestAuthorizationIfNeeded() }
         }
-        guard FileManager.default.fileExists(atPath: vocoderWeightsURL.path) else {
-            throw LuxModelLoadError.weightsNotFound(vocoderWeightsURL.path)
-        }
+
+        let (modelWeightsURL, vocoderWeightsURL) = try weightURLs(in: directory)
 
         let config = LuxTTSConfig()
         let model = ZipVoiceDistill(config: config)
@@ -407,18 +439,22 @@ extension LuxSpeechModel {
         try vocoder.loadTorchWeights(vocoderWeights)
         eval(vocoder)
 
-        // In-process, MIT-licensed G2P (misaki port from mlx-audio-swift) —
-        // works inside the App Store sandbox, unlike the previous
-        // EspeakProcessPhonemizer which shelled out to a GPL espeak-ng binary
-        // (kept in LuxTokenizer.swift for dev-CLI parity testing only).
-        let phonemizer: any PhonemizerProviding
-        do {
-            phonemizer = try await MisakiPhonemizer.prepared()
-        } catch {
-            throw LuxModelLoadError.phonemizerUnavailable("\(error)")
-        }
         let tokenizer = try LuxTokenizer(phonemizer: phonemizer)
 
-        return LuxSpeechModel(model: model, vocoder: vocoder, tokenizer: tokenizer)
+        return LuxSpeechModel(
+            model: model, vocoder: vocoder, tokenizer: tokenizer,
+            leadInTrimming: leadInTrimming)
+    }
+
+    private static func weightURLs(in directory: URL) throws -> (model: URL, vocoder: URL) {
+        let modelWeightsURL = directory.appendingPathComponent("lux_model.safetensors")
+        let vocoderWeightsURL = directory.appendingPathComponent("lux_vocoder.safetensors")
+        guard FileManager.default.fileExists(atPath: modelWeightsURL.path) else {
+            throw LuxModelLoadError.weightsNotFound(modelWeightsURL.path)
+        }
+        guard FileManager.default.fileExists(atPath: vocoderWeightsURL.path) else {
+            throw LuxModelLoadError.weightsNotFound(vocoderWeightsURL.path)
+        }
+        return (modelWeightsURL, vocoderWeightsURL)
     }
 }

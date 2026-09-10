@@ -1,17 +1,44 @@
 import Foundation
 
+/// A word and when it is spoken, as the dialogue engine reported it.
+public struct ScriptWordTiming: Codable, Equatable, Sendable {
+    public var text: String
+    public var start: Double
+    public var end: Double
+    public init(text: String, start: Double, end: Double) {
+        self.text = text; self.start = start; self.end = end
+    }
+}
+
 /// One generated take inside a script line.
+///
+/// `voices`, `words` and `note` are the dialogue path's additions and stay
+/// optional: a session written by an older build decodes unchanged.
 public struct ScriptTake: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var createdAt: String
     public var sampleRate: Int
     public var seconds: Double
     public var wallSeconds: Double
+    /// Every voice heard in this take. A dialogue scene has two; a single
+    /// line has none, because the line already names its own voice.
+    public var voices: [String]?
+    public var words: [ScriptWordTiming]?
+    /// Why the take is not quite what was asked for — a dropped prefix, say.
+    public var note: String?
 }
 
 /// One line (cue) of a script with optional per-line direction overrides.
 public struct ScriptLine: Codable, Equatable, Sendable, Identifiable {
+    /// What the line contributes to the export. `nil` decodes as `.speech`, so
+    /// sessions written before pauses existed load unchanged.
+    public enum Kind: Codable, Equatable, Sendable {
+        case speech
+        case pause(seconds: Double)
+    }
+
     public var id: UUID
+    public var kind: Kind?
     public var text: String
     public var voiceSlug: String?
     public var emotion: String?      // Emotion rawValue; nil = session default
@@ -19,10 +46,17 @@ public struct ScriptLine: Codable, Equatable, Sendable, Identifiable {
     public var takes: [ScriptTake]
     public var starredTakeID: String?
 
-    public init(id: UUID = UUID(), text: String = "") {
+    public init(id: UUID = UUID(), text: String = "", kind: Kind = .speech) {
         self.id = id
+        self.kind = kind
         self.text = text
         self.takes = []
+    }
+
+    /// A pause has no text to speak; every other line does.
+    public var pauseSeconds: Double? {
+        if case .pause(let seconds)? = kind { return seconds }
+        return nil
     }
 }
 
@@ -56,8 +90,10 @@ public final class SessionStore: @unchecked Sendable {
         try JSONEncoder().encode(session).write(to: sessionURL)
     }
 
-    public func saveTake(pcm: Data, sampleRate: Int,
-                         wallSeconds: Double) throws -> ScriptTake {
+    public func saveTake(pcm: Data, sampleRate: Int, wallSeconds: Double,
+                         voices: [String]? = nil,
+                         words: [ScriptWordTiming]? = nil,
+                         note: String? = nil) throws -> ScriptTake {
         try FileManager.default.createDirectory(at: directory,
                                                 withIntermediateDirectories: true)
         let n: UInt32 = lock.withLock { seq &+= 1; return seq }
@@ -67,7 +103,8 @@ public final class SessionStore: @unchecked Sendable {
             ? Double(pcm.count) / 2 / Double(sampleRate) : 0
         let take = ScriptTake(id: id, createdAt: HistoryStore.timestamp(),
                               sampleRate: sampleRate, seconds: seconds,
-                              wallSeconds: wallSeconds)
+                              wallSeconds: wallSeconds, voices: voices,
+                              words: words, note: note)
         try WAVEncoder.encode(pcm16: pcm, sampleRate: sampleRate)
             .write(to: directory.appendingPathComponent("\(take.id).wav"))
         return take

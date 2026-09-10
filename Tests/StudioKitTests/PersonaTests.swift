@@ -1,4 +1,5 @@
 import XCTest
+@testable import GVoiceKit
 @testable import StudioKit
 
 final class PersonaTests: XCTestCase {

@@ -21,6 +21,7 @@ struct StudioView: View {
     @State private var lineSelection = NSRange(location: 0, length: 0)
     @AppStorage("studioMode") private var modeRaw: String = StudioMode.single.rawValue
     @AppStorage("studioInspectorVisible") private var inspectorVisible = true
+    @AppStorage("labModeEnabled") private var labModeEnabled = false
     @State private var transcribingSlug: String?
     @State private var transcribeError: String?
 
@@ -135,7 +136,7 @@ struct StudioView: View {
             // Read voicesVersion so a saved transcript re-derives capabilities
             // (and re-lights the engine chips) without reselecting the voice.
             let _ = model.voicesVersion
-            let caps = model.voices.capabilities(slug)
+            let caps = model.voiceCapabilities(slug)
             let renderable = caps.supports(model.backend)
             // What can SPEAK this voice, which is not what the pack contains.
             // `engines/` ids answer a different question: they include ids this
@@ -154,13 +155,20 @@ struct StudioView: View {
             // Partitioned rather than sorted by a `contains`-pair predicate:
             // that comparator is not a strict weak ordering, which can trap
             // inside Swift's sort.
-            let compatible = BackendID.allCases.filter { caps.supports($0) }
+            // Gated on the `.studio` surface, not `supports` alone: dia2 can
+            // speak this voice (Dialogue uses it) but is not a single-line Studio
+            // engine — a lone S1 prefix clones too weakly (issue #56). Same shape
+            // that keeps qwen3-design out of the bench. Dialogue-only backends
+            // stay off the "Works with" row and out of the speak picker.
+            let compatible = BackendID.allCases.filter {
+                $0.surfaces.contains(.studio) && caps.supports($0)
+            }
             let orderedCompatible = compatible.filter { caps.engines.contains($0.rawValue) }
                 + compatible.filter { !caps.engines.contains($0.rawValue) }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     VoiceAvatarView(slug: slug, name: meta.name,
-                                    avatarURL: model.voices.avatarURL(slug), size: 20)
+                                    avatarURL: model.voiceAvatarURL(slug), size: 20)
                     Text(meta.name).font(.callout.weight(.semibold))
                     Text("Works with:").font(.caption).foregroundStyle(Brand.fgFaint)
                     ForEach(orderedCompatible, id: \.self) { backend in
@@ -288,47 +296,56 @@ struct StudioView: View {
         showSaveDirection = false
     }
 
-    /// The whole bench scrolls: expanded disclosures (tags, fine-tune) must
-    /// never force the stack taller than the window — SwiftUI centers
-    /// overflowing stacks, shoving everything off-screen ("blank window").
+    /// One scrolling page of sections — VOICE, WRITE, tags, then TAKES — with
+    /// the Generate bar pinned underneath it.
+    ///
+    /// It used to be a `VSplitView` of two independently scrolling panes. That
+    /// gave the bench its own small viewport, and on an engine whose tag list
+    /// runs to three rows the Generate button fell past the bottom of it; with
+    /// scroll indicators hidden and the takes shelf directly below, the button
+    /// read as simply missing. Sections in one scroll view cannot do that.
+    ///
+    /// The Generate bar stays outside the scroll view deliberately: the button
+    /// you press to do the thing must never be the thing that scrolled away.
     @ViewBuilder
     private var singleModeStack: some View {
         @Bindable var model = model
-        VSplitView {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     benchControls
+                    tagSection
+                    actBar
+
+                    // TAKES is a section of the same page now, not a pane. An
+                    // inner ScrollView here would fight this one, so the takes
+                    // simply lay out at full height and the page scrolls them.
+                    VStack(alignment: .leading, spacing: 0) {
+                        zoneLabel("TAKES")
+                        if model.variants.isEmpty {
+                            VStack(spacing: 10) {
+                                Text("No takes yet — write a line and press Generate (⌘↩).")
+                                    .font(.caption).foregroundStyle(Brand.fgFaint)
+                                SiblingAppsFootnote(campaign: .takesEmptyState)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(model.variants) { variant in
+                                    variantCard(variant)
+                                }
+                            }
+                            .padding(.top, 6)
+                        }
+                    }
+                    .accessibilityIdentifier("takes-region")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .scrollIndicators(.never)
-            .frame(minHeight: 220)
-            // TAKES takes the rest of the column rather than a 240pt shelf at
-            // the bottom: the shelf left a band of dead space between the bench
-            // and the takes, and hid entirely until the first take existed, so
-            // the space was empty in the one state where a hint would help.
-            VStack(alignment: .leading, spacing: 0) {
-                zoneLabel("TAKES")
-                if model.variants.isEmpty {
-                    VStack(spacing: 10) {
-                        Text("No takes yet — write a line and press Generate (⌘↩).")
-                            .font(.caption).foregroundStyle(Brand.fgFaint)
-                        SiblingAppsFootnote(campaign: .takesEmptyState)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 10) {
-                            ForEach(model.variants) { variant in
-                                variantCard(variant)
-                            }
-                        }
-                        .padding(.top, 6)
-                    }
-                }
-            }
-            .frame(minHeight: 120, maxHeight: .infinity)
-            .accessibilityIdentifier("takes-region")
+            // Always shown, never the overlay kind that fades out. The bug
+            // this screen just had was a control below the fold with nothing
+            // on screen suggesting there WAS a fold.
+            .scrollIndicators(.visible)
         }
     }
 
@@ -339,7 +356,15 @@ struct StudioView: View {
     private var studioInspector: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                zoneLabel("DIRECT")
+                HStack {
+                    zoneLabel("DIRECT")
+                    Spacer()
+                    Button("Reset to defaults") { model.resetGenerationSettings() }
+                        .font(.caption)
+                        .disabled(model.isGenerating)
+                        .accessibilityIdentifier("reset-knobs")
+                        .help("Restore delivery, speed, direction, language, and sampling defaults")
+                }
                 directCard
             }
             .padding(14)
@@ -414,6 +439,10 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
+        case .dialogueTags:
+            // Delivery comes from the model's own inline (laughs)-style vocabulary.
+            // The chips that insert them arrive with Script mode; nothing to render yet.
+            EmptyView()
         case .textDriven, .none:
             EmptyView()
         }
@@ -540,12 +569,6 @@ struct StudioView: View {
                         }
                     }
                 }
-                HStack {
-                    Spacer()
-                    Button("Reset to defaults") { model.resetDeliveryKnobs() }
-                        .font(.caption)
-                        .accessibilityIdentifier("reset-knobs")
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
@@ -598,6 +621,9 @@ struct StudioView: View {
         case .pocketTTS:
             "Clones a voice from a reference clip (first ~10s) — the prosody comes from that "
             + "clip. No free-text Direction and no delivery knobs; each take samples fresh."
+        case .dia2:
+            "Two-speaker dialogue in one pass, English only. Delivery comes from inline "
+            + "(laughs)-style tags; an optional reference clip conditions the voice."
         }
     }
 
@@ -613,7 +639,7 @@ struct StudioView: View {
         if !model.backend.controls.presetSpeakers.isEmpty
             || model.backend.controls.voiceClone != .none {
             zoneLabel("VOICE")
-            let voices = model.voices.list()
+            let voices = model.voiceList
             // Custom popover dropdown (not a native Menu): AppKit menus flatten
             // custom SwiftUI views, so VoiceAvatarView collapsed to a bare monogram
             // and names dropped. A popover renders full SwiftUI, avatars included.
@@ -626,7 +652,7 @@ struct StudioView: View {
                         VoiceAvatarView(
                             slug: voice.slug,
                             name: voice.name,
-                            avatarURL: model.voices.avatarURL(voice.slug),
+                            avatarURL: model.voiceAvatarURL(voice.slug),
                             size: 22)
                         Text(voice.name)
                             .font(.system(.callout, design: .default))
@@ -663,10 +689,33 @@ struct StudioView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
             DictationButton(text: $model.text)
         }
-        if model.backend.spec.honorsTags {
-            TagChipsView(text: $model.text, selection: $lineSelection)
-        }
+    }
 
+    /// TAGS, its own section between WRITE and the Generate bar.
+    ///
+    /// Still live after Dia2 left this screen, for exactly one engine: Fish
+    /// (`fish-s2-pro`) is the other backend with `honorsTags`, and it takes the
+    /// curated free-form `[tag]` vocabulary TagChipsView carries by default —
+    /// which is what the `.inlineMarker` copy under EMOTION points the user at.
+    /// Dia2's own `(parenthesised)` sounds now live in the Dialogue composer.
+    @ViewBuilder
+    var tagSection: some View {
+        if model.backend.spec.honorsTags {
+            @Bindable var model = model
+            zoneLabel("TAGS")
+            // An engine with a fixed vocabulary supplies it; one without gets
+            // the curated free-form list. Dia2 is the first of the former, and
+            // showing it the free-form list meant every chip inserted words it
+            // would read out loud.
+            let engineTags = model.nonverbalTags(for: model.backend)
+            TagChipsView(text: $model.text, selection: $lineSelection,
+                         engineTags: engineTags, allowsCustomTags: engineTags.isEmpty)
+        }
+    }
+
+    /// The Generate row — its own section, between TAGS and TAKES.
+    @ViewBuilder
+    var actBar: some View {
         // ── ACT zone (no label per spec) ─────────────────────────────────────
         Divider().overlay(Color.white.opacity(0.06))
         // Why generation is blocked, or nil when it isn't. The engine/voice
@@ -677,7 +726,7 @@ struct StudioView: View {
                 return "Pick a voice in the sidebar."
             }
             let _ = model.voicesVersion
-            guard !model.voices.capabilities(slug).supports(model.backend) else { return nil }
+            guard !model.voiceCapabilities(slug).supports(model.backend) else { return nil }
             let name = (try? model.voices.meta(slug).name) ?? slug
             return "\(model.backend.rawValue) can't speak “\(name)” — switch engine, "
                 + "or pick a voice it can render."
@@ -819,7 +868,9 @@ struct StudioView: View {
                         .foregroundStyle(Brand.fgDim)
                         .padding(10)
                 }
-                ForEach(groupedVoices(voices), id: \.base.slug) { group in
+                // The cached grouping, not a fresh one: this popover's list is
+                // rebuilt on every redraw while it is open.
+                ForEach(model.groupedVoiceList, id: \.base.slug) { group in
                     voicePickerRow(group.base, isVariant: false, variantCount: group.variants.count)
                     if pickerExpandedBases.contains(group.base.slug) {
                         ForEach(group.variants, id: \.slug) { variant in
@@ -847,7 +898,7 @@ struct StudioView: View {
         // This popover picks the voice the CURRENT backend will speak with, so
         // (unlike the sidebar, where selection also means editing) rows the
         // backend can't render are disabled outright.
-        let renderable = model.voices.capabilities(voice.slug).supports(model.backend)
+        let renderable = model.voiceCapabilities(voice.slug).supports(model.backend)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -877,7 +928,7 @@ struct StudioView: View {
                     VoiceAvatarView(
                         slug: voice.slug,
                         name: voice.name,
-                        avatarURL: model.voices.avatarURL(voice.slug),
+                        avatarURL: model.voiceAvatarURL(voice.slug),
                         size: isVariant ? 18 : 22)
                     Text(voice.name).foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
                     if !renderable {
@@ -931,7 +982,8 @@ struct StudioView: View {
                     .padding(6)
                     .background(Circle().fill(Brand.gradient.opacity(0.25)))
                     .accessibilityIdentifier("variant-badge-\(variant.label)")
-                WaveformView(wavData: variant.wavData)
+                SeekableWaveformView(wavData: variant.wavData,
+                                     id: variant.id.uuidString, player: player)
                     .frame(height: 44)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(String(format: "%.2fs · wall %.2fs", variant.seconds,
@@ -940,8 +992,8 @@ struct StudioView: View {
                 }
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Brand.fgDim)
-                Button(player.playingID == variant.id.uuidString ? "Stop" : "Play") {
-                    player.toggle(id: variant.id.uuidString, data: variant.wavData)
+                Button(player.playingID == variant.id.uuidString ? "Pause" : "Play") {
+                    player.togglePlayback(id: variant.id.uuidString, data: variant.wavData)
                 }
                 .accessibilityIdentifier("play-\(variant.label)")
                 Button("Export…") {
@@ -952,10 +1004,29 @@ struct StudioView: View {
                         provenance: WAVEncoder.provenanceComment))
                 }
                 .help("Export this variant as a WAV file")
+                // Advanced: send this take to a Lab comparison. `wavData` is a
+                // complete WAV (44-byte header + PCM), which is exactly what the
+                // Lab ingests, so it goes across untouched.
+                if labModeEnabled {
+                    SendToLabMenu(label: studioClipLabel(variant), source: .studio) {
+                        variant.wavData
+                    }
+                }
             }
             .padding(6)
         }
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// A legible Lab label for a Studio take: which variant (A/B), the voice, and
+    /// a snippet of the line it spoke.
+    private func studioClipLabel(_ variant: Variant) -> String {
+        let voice = model.selectedVoiceSlug
+            .flatMap { slug in model.voiceList.first { $0.slug == slug }?.name }
+        let line = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let snippet = line.isEmpty ? "take" : String(line.prefix(40))
+        let who = voice.map { "\($0) · " } ?? ""
+        return "\(variant.label) · \(who)\(snippet)"
     }
 
 }
