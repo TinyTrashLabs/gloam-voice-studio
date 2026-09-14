@@ -756,8 +756,21 @@ final class AppModel {
                     atPath: dir.appendingPathComponent("config.json").path)
                 return hasConfig ? dir.path : nil
             }
+            // LuxTTS can run on either runtime (see EngineKit's LuxRuntime).
+            // Read the same way qwenQuant is above -- a defaults key, resolved
+            // as the provider is built. The ONNX graphs are not downloadable
+            // in-app; they are dropped into Models/lux-tts-onnx by hand, which
+            // is why the picker reports whether they are there.
+            let luxRuntime = LuxRuntime(
+                rawValue: UserDefaults.standard.string(forKey: "luxRuntime") ?? "")
+                ?? .default
+            let luxOnnxDir: @Sendable () -> URL? = {
+                modelRoot.appendingPathComponent("lux-tts-onnx")
+            }
             engine = GloamEngine(
-                provider: MLXModelProvider(modelPathResolver: ttsResolver),
+                provider: MLXModelProvider(modelPathResolver: ttsResolver,
+                                           luxRuntime: luxRuntime,
+                                           luxOnnxDirResolver: luxOnnxDir),
                 languageProvider: MLXLanguageModelProvider(modelDirectoryResolver: { backend in
                     // Mirror ModelDownloadManager.llmDirectory(for:).
                     modelRoot.appendingPathComponent(backend.diskFolder)
@@ -768,7 +781,9 @@ final class AppModel {
             // front). This is what makes spoken replies ~gapless instead of
             // trading 8s of GPU per sentence with the LLM.
             chatSpeechEngine = GloamEngine(
-                provider: MLXModelProvider(modelPathResolver: ttsResolver))
+                provider: MLXModelProvider(modelPathResolver: ttsResolver,
+                                           luxRuntime: luxRuntime,
+                                           luxOnnxDirResolver: luxOnnxDir))
         }
         // One TTS model resident across BOTH engines: the two engines exist
         // for concurrency (TTS overlapping LLM decode), not so two models can

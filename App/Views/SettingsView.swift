@@ -510,6 +510,25 @@ struct ConsoleLog: View {
 }
 
 struct StorageSettings: View {
+    @AppStorage("luxRuntime") private var luxRuntime = LuxRuntime.default.rawValue
+
+    /// Says plainly whether the choice can take effect, because the ONNX
+    /// graphs are not downloadable in-app -- an option that silently did
+    /// nothing would make every A/B a lie.
+    private var luxRuntimeNote: String {
+        let dir = StoragePaths.models.appendingPathComponent("lux-tts-onnx")
+        if luxRuntime == LuxRuntime.onnx.rawValue {
+            if let missing = LuxOnnx.missingModelFile(in: dir) {
+                return "ONNX graphs are not installed — missing \(missing). Put the "
+                    + "exported LuxTTS graphs in \(dir.path), then relaunch."
+            }
+            return "Takes effect on relaunch. ONNX uses roughly 2.6 GB against MLX's "
+                + "0.7 GB and runs slower; it is for comparison, not for listening."
+        }
+        return "MLX is the shipping runtime. Switch to ONNX only to A/B a render "
+            + "you think the runtime is spoiling."
+    }
+
     @Environment(AppModel.self) private var model
     @State private var sizes: [(String, Int64)] = []
 
@@ -522,6 +541,19 @@ struct StorageSettings: View {
             }
             Button("Recalculate") { recalc() }
             Section("Advanced") {
+                // The two LuxTTS runtimes exist to be compared. MLX is what
+                // ships (less memory, faster); ONNX is the reference when a
+                // render sounds wrong and the question is whether the runtime
+                // is why. Nothing surfaced the choice before this.
+                Picker("LuxTTS runtime", selection: $luxRuntime) {
+                    ForEach(LuxRuntime.allCases, id: \.self) { runtime in
+                        Text(runtime.label).tag(runtime.rawValue)
+                    }
+                }
+                .accessibilityIdentifier("lux-runtime-picker")
+                Text(luxRuntimeNote)
+                    .font(.caption).foregroundStyle(.secondary)
+
                 Toggle("Enable Lab (advanced audio comparison)", isOn: $model.labModeEnabled)
                     .accessibilityIdentifier("lab-mode-toggle")
                 Text("Adds a Lab tab (⌘5) for developers — a comparison shelf that collects "

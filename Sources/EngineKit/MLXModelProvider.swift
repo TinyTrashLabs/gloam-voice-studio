@@ -14,8 +14,23 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     /// downloads always go through the in-app download manager.
     private let modelPathResolver: (@Sendable (BackendID) -> String?)?
 
-    public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
+    /// Which LuxTTS implementation `.luxTTS` loads. MLX unless an app asks
+    /// otherwise -- see `LuxRuntime`.
+    private let luxRuntime: LuxRuntime
+
+    /// Where the ONNX graphs live, when `luxRuntime` is `.onnx`. Separate from
+    /// `modelPathResolver` because the two runtimes want different artifacts
+    /// from the same model: MLX reads converted safetensors beside a
+    /// config.json, ONNX reads exported graphs beside tokens.txt. One
+    /// directory cannot answer for both.
+    private let luxOnnxDirResolver: (@Sendable () -> URL?)?
+
+    public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil,
+                luxRuntime: LuxRuntime = .default,
+                luxOnnxDirResolver: (@Sendable () -> URL?)? = nil) {
         self.modelPathResolver = modelPathResolver
+        self.luxRuntime = luxRuntime
+        self.luxOnnxDirResolver = luxOnnxDirResolver
         // MLX's global RNG starts from a fixed default seed, so every fresh
         // process would sample the identical token sequence — the first take
         // after app launch (or every spike run) is otherwise always the same
@@ -24,20 +39,36 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     }
 
     public func loadModel(backend: BackendID) async throws -> any SpeechModel {
+        if backend == .luxTTS, luxRuntime == .onnx {
+            // The ONNX runtime is a testing/A-B affordance, so it fails loudly
+            // and specifically: a picker that silently fell back to MLX would
+            // make every comparison meaningless.
+            guard let dir = luxOnnxDirResolver?() else {
+                throw EngineError.generationFailed(
+                    backend: .luxTTS,
+                    message: "lux-tts ONNX graphs are not installed")
+            }
+            if let missing = LuxOnnx.missingModelFile(in: dir) {
+                throw EngineError.generationFailed(
+                    backend: .luxTTS, message: "lux-tts ONNX is missing \(missing)")
+            }
+            return try await LuxOnnxSpeechModel.load(modelDir: dir)
+        }
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
             // through TTS.loadModel like every other case here. It needs a
-            // LOCAL directory holding the converted safetensors (see
-            // LuxSpeechModel.load's doc comment) — there is no HF-repo-string
-            // fallback yet because that requires running the equivalent of
-            // LuxTTS/convert_weights.py in-app first (not implemented in this
-            // pass; the raw YatharthS/LuxTTS repo ships torch/ONNX, not
-            // MLX-ready weights).
+            // LOCAL directory holding the MLX safetensors (see
+            // LuxSpeechModel.load's doc comment). Those are now a published
+            // repo — tinytrashlabs/LuxTTS-mlx, see Backend.swift — so the
+            // normal downloader fills this directory like any other backend.
+            // It could not before: the spec pointed at the torch/ONNX upstream,
+            // nothing converted in-app, and this threw on every machine where
+            // convert_weights.py had not been run by hand.
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "lux-tts weights are not installed — this model is not "
-                        + "downloadable in-app.")
+                    message: "lux-tts weights are not installed — download them "
+                        + "in Settings → Models.")
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
