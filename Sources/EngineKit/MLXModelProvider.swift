@@ -14,8 +14,23 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     /// downloads always go through the in-app download manager.
     private let modelPathResolver: (@Sendable (BackendID) -> String?)?
 
-    public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil) {
+    /// Which LuxTTS implementation `.luxTTS` loads. MLX unless an app asks
+    /// otherwise -- see `LuxRuntime`.
+    private let luxRuntime: LuxRuntime
+
+    /// Where the ONNX graphs live, when `luxRuntime` is `.onnx`. Separate from
+    /// `modelPathResolver` because the two runtimes want different artifacts
+    /// from the same model: MLX reads converted safetensors beside a
+    /// config.json, ONNX reads exported graphs beside tokens.txt. One
+    /// directory cannot answer for both.
+    private let luxOnnxDirResolver: (@Sendable () -> URL?)?
+
+    public init(modelPathResolver: (@Sendable (BackendID) -> String?)? = nil,
+                luxRuntime: LuxRuntime = .default,
+                luxOnnxDirResolver: (@Sendable () -> URL?)? = nil) {
         self.modelPathResolver = modelPathResolver
+        self.luxRuntime = luxRuntime
+        self.luxOnnxDirResolver = luxOnnxDirResolver
         // MLX's global RNG starts from a fixed default seed, so every fresh
         // process would sample the identical token sequence — the first take
         // after app launch (or every spike run) is otherwise always the same
@@ -24,6 +39,21 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
     }
 
     public func loadModel(backend: BackendID) async throws -> any SpeechModel {
+        if backend == .luxTTS, luxRuntime == .onnx {
+            // The ONNX runtime is a testing/A-B affordance, so it fails loudly
+            // and specifically: a picker that silently fell back to MLX would
+            // make every comparison meaningless.
+            guard let dir = luxOnnxDirResolver?() else {
+                throw EngineError.generationFailed(
+                    backend: .luxTTS,
+                    message: "lux-tts ONNX graphs are not installed")
+            }
+            if let missing = LuxOnnx.missingModelFile(in: dir) {
+                throw EngineError.generationFailed(
+                    backend: .luxTTS, message: "lux-tts ONNX is missing \(missing)")
+            }
+            return try await LuxOnnxSpeechModel.load(modelDir: dir)
+        }
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
             // through TTS.loadModel like every other case here. It needs a
