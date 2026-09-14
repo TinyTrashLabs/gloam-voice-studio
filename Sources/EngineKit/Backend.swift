@@ -416,15 +416,23 @@ extension BackendID {
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
         case .luxTTS:
-            // NOTE: unlike every other backend here, "YatharthS/LuxTTS" does NOT
-            // ship MLX-native weights — it's the torch/ONNX source of truth.
-            // LuxSpeechModel's loadModel must run the LuxTTS/convert_weights.py
-            // key-remap (weight-norm fold, conv-layout transpose) once and cache
-            // the result locally rather than handing this repo id to
-            // mlx-audio-swift's generic HF downloader like the other cases do.
-            // Total weights ~560MB fp32 (477.5MB decoder + 17.6MB encoder +
-            // ~64MB vocoder) — far lighter than the other backends.
-            BackendSpec(modelRepo: "YatharthS/LuxTTS",
+            // This used to point at "YatharthS/LuxTTS", which ships torch and
+            // ONNX but no MLX-native weights — so `directory(for:)` filled with
+            // model.pt and .onnx files, LuxSpeechModel.load went looking for
+            // lux_model.safetensors, found nothing, and every shipped Mac build
+            // threw "lux-tts weights are not installed — this model is not
+            // downloadable in-app". It only worked on machines where someone
+            // had run LuxTTS/convert_weights.py by hand and left the result in
+            // the group container.
+            //
+            // tinytrashlabs/LuxTTS-mlx is that conversion, published once
+            // (Apache-2.0, inherited from upstream), so the generic HF
+            // downloader can do what it does for every other backend. ~529 MB
+            // fp32: 468 MB model + 61 MB vocoder, plus config.json and
+            // tokens.txt. fp32 on purpose — fp16 is indistinguishable on a long
+            // clean reference and audibly worse on a short phone recording,
+            // which is the case that matters for cloning.
+            BackendSpec(modelRepo: "tinytrashlabs/LuxTTS-mlx",
                         defaultSampleRate: 48000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 2_000_000_000)

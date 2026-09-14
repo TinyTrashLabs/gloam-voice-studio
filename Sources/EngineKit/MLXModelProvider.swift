@@ -57,17 +57,18 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
             // through TTS.loadModel like every other case here. It needs a
-            // LOCAL directory holding the converted safetensors (see
-            // LuxSpeechModel.load's doc comment) — there is no HF-repo-string
-            // fallback yet because that requires running the equivalent of
-            // LuxTTS/convert_weights.py in-app first (not implemented in this
-            // pass; the raw YatharthS/LuxTTS repo ships torch/ONNX, not
-            // MLX-ready weights).
+            // LOCAL directory holding the MLX safetensors (see
+            // LuxSpeechModel.load's doc comment). Those are now a published
+            // repo — tinytrashlabs/LuxTTS-mlx, see Backend.swift — so the
+            // normal downloader fills this directory like any other backend.
+            // It could not before: the spec pointed at the torch/ONNX upstream,
+            // nothing converted in-app, and this threw on every machine where
+            // convert_weights.py had not been run by hand.
             guard let localPath = modelPathResolver?(backend) else {
                 throw EngineError.generationFailed(
                     backend: backend,
-                    message: "lux-tts weights are not installed — this model is not "
-                        + "downloadable in-app.")
+                    message: "lux-tts weights are not installed — download them "
+                        + "in Settings → Models.")
             }
             return try await LuxSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
