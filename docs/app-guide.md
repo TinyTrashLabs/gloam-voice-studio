@@ -33,6 +33,14 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
 - `chatterbox` / `chatterbox-turbo` — expressive cloning; turbo is the fast one
 - `fish-s2-pro` — quality-first cloning (research/non-commercial license;
   acknowledge in Settings)
+- `lux-tts` — fast cloning-only English, 48 kHz, the lightest of the set
+  (~529 MB). Weights come from
+  [`tinytrashlabs/LuxTTS-mlx`](https://huggingface.co/tinytrashlabs/LuxTTS-mlx),
+  the MLX conversion of [LuxTTS](https://huggingface.co/YatharthS/LuxTTS)
+  (Apache-2.0) — upstream ships torch and ONNX, which MLX cannot load. Until
+  2026-09-14 the backend pointed at upstream directly and every machine
+  without a hand-run conversion got "lux-tts weights are not installed"; it
+  downloads like any other model now.
 
 ## Create Voice
 
