@@ -98,6 +98,17 @@ public struct FXPreset: Codable, Sendable, Equatable {
             d.gain = min(max(d.gain, 0), 4)
             copy.detune = d
         }
+        if var d = copy.drive {
+            // Deliberately wide: DriveStage's waveshaper already guards its
+            // own non-finite results by emitting 0, so these bounds only
+            // need to keep a runaway value in the region that still
+            // produces sound. Wrong-sounding is fine; silence is not.
+            d.preGain = min(max(d.preGain, 0), 20)
+            d.postGain = min(max(d.postGain, 0), 4)
+            d.shape1 = min(max(d.shape1, -10), 10)
+            d.shape2 = min(max(d.shape2, -10), 10)
+            copy.drive = d
+        }
         if var r = copy.ringMod {
             r.frequencyHz = min(max(r.frequencyHz, 0), 20_000)
             r.mix = min(max(r.mix, 0), 1)

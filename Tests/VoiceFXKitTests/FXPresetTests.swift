@@ -53,6 +53,7 @@ final class FXPresetTests: XCTestCase {
         let json = """
         {"version":1,"name":"wild",
          "pitch":{"transposeSemitones":-99,"formantSemitones":200,"formantBaseHz":-5},
+         "drive":{"preGain":999,"postGain":-5,"shape1":50,"shape2":-50},
          "reverb":{"feedback":1.8,"lowpassHz":99999,"mix":3.0},
          "limiter":{"ceiling":9.0,"releaseSeconds":0.0}}
         """.data(using: .utf8)!
@@ -60,6 +61,10 @@ final class FXPresetTests: XCTestCase {
         XCTAssertEqual(preset.pitch?.transposeSemitones, -36)
         XCTAssertEqual(preset.pitch?.formantSemitones, 36)
         XCTAssertEqual(preset.pitch?.formantBaseHz, 0)
+        XCTAssertEqual(preset.drive?.preGain, 20)
+        XCTAssertEqual(preset.drive?.postGain, 0)
+        XCTAssertEqual(preset.drive?.shape1, 10)
+        XCTAssertEqual(preset.drive?.shape2, -10)
         XCTAssertEqual(try XCTUnwrap(preset.reverb?.feedback), 0.99, accuracy: 1e-9)
         XCTAssertEqual(preset.reverb?.mix, 1.0)
         XCTAssertEqual(preset.limiter?.ceiling, 1.0)
