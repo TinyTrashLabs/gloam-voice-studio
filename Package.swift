@@ -122,8 +122,28 @@ let package = Package(
             name: "COnnxRuntime",
             path: "Sources/COnnxRuntime"
         ),
+        // signalsmith-stretch (MIT) behind a C API. Headers are vendored under
+        // Sources/CSignalsmithStretch/vendor by scripts/fetch-signalsmith.sh —
+        // committed, like CSherpaOnnx's include/. Accelerate backs its FFT.
+        .target(
+            name: "CSignalsmithStretch",
+            path: "Sources/CSignalsmithStretch",
+            exclude: [
+                // Multi-arch xsimd dispatch shim — only meant to be compiled
+                // when SIGNALSMITH_USE_XSIMD_DISPATCH is set; unconditionally
+                // #errors otherwise. We use the Accelerate backend instead.
+                "vendor/signalsmith-linear/platform/linear-xsimd-dispatch.cpp",
+            ],
+            cxxSettings: [
+                .define("SIGNALSMITH_USE_ACCELERATE", to: "1", .when(platforms: [.macOS, .iOS])),
+            ],
+            linkerSettings: [
+                .linkedFramework("Accelerate"),
+            ]
+        ),
         .target(
             name: "VoiceFXKit",
+            dependencies: ["CSignalsmithStretch"],
             path: "Sources/VoiceFXKit"
         ),
         .target(
@@ -261,5 +281,6 @@ let package = Package(
             dependencies: ["VoiceFXKit"],
             path: "Tests/VoiceFXKitTests"
         ),
-    ]
+    ],
+    cxxLanguageStandard: .cxx17
 )
