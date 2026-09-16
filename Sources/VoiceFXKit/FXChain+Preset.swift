@@ -17,23 +17,27 @@ public extension FXChain {
             stages.append(ButterworthStage(kind: .highpass, frequency: hz))
         }
 
-        if let pitch = preset.pitch {
-            let main = PitchFormantStage(transposeSemitones: pitch.transposeSemitones,
-                                         formantSemitones: pitch.formantSemitones,
-                                         formantBaseHz: pitch.formantBaseHz)
-            if let detune = preset.detune {
-                let branch = PitchFormantStage(transposeSemitones: detune.transposeSemitones,
-                                               formantSemitones: detune.formantSemitones,
-                                               formantBaseHz: detune.formantBaseHz)
-                // ONE stage holding both shifters, not two stages in series —
-                // in series the branch would shift the main path's output and
-                // the two transpositions would compose instead of doubling.
-                stages.append(ParallelMixStage(primary: main, branch: branch,
-                                               primaryGain: 1.0,
-                                               branchGain: detune.gain))
-            } else {
-                stages.append(main)
-            }
+        let main: PitchFormantStage? = preset.pitch.map {
+            PitchFormantStage(transposeSemitones: $0.transposeSemitones,
+                              formantSemitones: $0.formantSemitones,
+                              formantBaseHz: $0.formantBaseHz)
+        }
+
+        if let detune = preset.detune {
+            let branch = PitchFormantStage(transposeSemitones: detune.transposeSemitones,
+                                           formantSemitones: detune.formantSemitones,
+                                           formantBaseHz: detune.formantBaseHz)
+            // ONE stage holding both shifters, not two stages in series —
+            // in series the branch would shift the main path's output and
+            // the two transpositions would compose instead of doubling.
+            // When there is no `pitch` section, `primary: nil` means the dry
+            // voice passes through unshifted and is summed with the detuned
+            // branch — still a single ParallelMixStage, not a dropped stage.
+            stages.append(ParallelMixStage(primary: main, branch: branch,
+                                           primaryGain: 1.0,
+                                           branchGain: detune.gain))
+        } else if let main {
+            stages.append(main)
         }
 
         if let ring = preset.ringMod, ring.mix > 0 {

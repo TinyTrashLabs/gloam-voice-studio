@@ -91,6 +91,42 @@ final class PresetChainTests: XCTestCase {
         }
     }
 
+    /// A preset with a `detune` section but no `pitch` section must still get
+    /// a detuned voice in the chain (summed with the dry pass-through), not
+    /// have the branch silently dropped.
+    func testDetuneWithoutPitchStillProducesDetunedVoice() throws {
+        let json = """
+        {
+          "version": 1,
+          "name": "detune-only",
+          "detune": {
+            "transposeSemitones": 7,
+            "formantSemitones": 0,
+            "formantBaseHz": 0,
+            "gain": 0.8
+          },
+          "limiter": { "ceiling": 0.98, "releaseSeconds": 0.05 }
+        }
+        """
+        let preset = try JSONDecoder().decode(FXPreset.self, from: Data(json.utf8))
+        XCTAssertNotNil(preset.detune)
+        XCTAssertNil(preset.pitch)
+
+        let chain = FXChain.make(from: preset)
+        chain.prepare(sampleRate: 48_000, maxBlock: 24_000)
+        let input = speechLike(24_000)
+        let out = chain.applyWhole(input)
+
+        // A dry pass-through alone (no detune branch) would be identical to
+        // the (limited) input; the detuned voice summed in must change it.
+        XCTAssertTrue(out.allSatisfy { $0.isFinite })
+        var maxDiff: Float = 0
+        for k in 0..<out.count {
+            maxDiff = max(maxDiff, abs(out[k] - input[k]))
+        }
+        XCTAssertGreaterThan(maxDiff, 0.01, "detune-only preset produced output indistinguishable from dry input")
+    }
+
     func testResetClearsTailsBetweenUtterances() throws {
         let preset = try XCTUnwrap(FXPreset.builtIn(named: "demon"))
         let chain = FXChain.make(from: preset)
