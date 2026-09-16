@@ -111,4 +111,96 @@ final class PitchFormantTests: XCTestCase {
             XCTAssertEqual(actual[k], expected[k], accuracy: 1e-4, "mismatch at \(k)")
         }
     }
+
+    // MARK: - Formant direction/effect
+
+    /// A crude but deterministic voice-like signal: a fundamental around
+    /// 200 Hz plus several harmonics, giving real spectral content from
+    /// 200 Hz up through 5 kHz so a formant shift has something to move.
+    private func voiceLike(f0: Double = 200, sr: Double = 48_000, n: Int = 48_000) -> [Float] {
+        let harmonics = 1...25 // up to ~5 kHz
+        var out = [Float](repeating: 0, count: n)
+        for h in harmonics {
+            let amp = Float(1.0 / Double(h)) // rolling off, like a voice source
+            let hz = f0 * Double(h)
+            for i in 0..<n {
+                out[i] += amp * Float(sin(2 * Double.pi * hz * Double(i) / sr))
+            }
+        }
+        let peak = out.map { abs($0) }.max() ?? 1
+        if peak > 0 {
+            for i in 0..<n { out[i] /= peak }
+        }
+        return out
+    }
+
+    /// Naive DFT magnitude at a single frequency bin. O(n) per bin, fine for
+    /// the handful of bins a coarse spectral-balance proxy needs.
+    private func goertzelMagnitude(_ x: [Float], targetHz: Double, sr: Double) -> Double {
+        let n = x.count
+        let w = 2 * Double.pi * targetHz / sr
+        let coeff = 2 * cos(w)
+        var s0 = 0.0, s1 = 0.0, s2 = 0.0
+        for i in 0..<n {
+            s0 = Double(x[i]) + coeff * s1 - s2
+            s2 = s1
+            s1 = s0
+        }
+        let real = s1 - s2 * cos(w)
+        let imag = s2 * sin(w)
+        return (real * real + imag * imag).squareRoot()
+    }
+
+    /// Fraction of total energy (summed over 200..5000 Hz in 50 Hz steps)
+    /// that falls below ~800 Hz. A simple, deterministic spectral-balance
+    /// proxy standing in for a proper formant/envelope analysis.
+    private func lowEnergyFraction(_ x: [Float], sr: Double = 48_000) -> Double {
+        // Use the settled second half to avoid filter/pitch-shifter onset
+        // transients skewing the balance.
+        let settled = Array(x[(x.count / 2)...])
+        var total = 0.0
+        var low = 0.0
+        var hz = 200.0
+        while hz <= 5000.0 {
+            let mag = goertzelMagnitude(settled, targetHz: hz, sr: sr)
+            let energy = mag * mag
+            total += energy
+            if hz < 800 { low += energy }
+            hz += 50
+        }
+        return total > 0 ? low / total : 0
+    }
+
+    func testFormantShiftMovesSpectralBalanceInTheRightDirection() {
+        let input = voiceLike()
+
+        let down = lowEnergyFraction(run(PitchFormantStage(transposeSemitones: 0,
+                                                            formantSemitones: -12,
+                                                            formantBaseHz: 0), input))
+        let neutral = lowEnergyFraction(run(PitchFormantStage(transposeSemitones: 0,
+                                                               formantSemitones: 0,
+                                                               formantBaseHz: 0), input))
+        let up = lowEnergyFraction(run(PitchFormantStage(transposeSemitones: 0,
+                                                          formantSemitones: 12,
+                                                          formantBaseHz: 0), input))
+
+        // Real margins, not just inequality, so this can't pass on noise.
+        XCTAssertGreaterThan(down, neutral + 0.03,
+                              "formants -12 should put noticeably MORE energy below 800 Hz than neutral " +
+                              "(down=\(down), neutral=\(neutral))")
+        XCTAssertLessThan(up, neutral - 0.03,
+                           "formants +12 should put noticeably LESS energy below 800 Hz than neutral " +
+                           "(up=\(up), neutral=\(neutral))")
+    }
+
+    func testFormantNeutralIsNearPassThrough() {
+        let input = voiceLike()
+        let neutralFraction = lowEnergyFraction(run(PitchFormantStage(transposeSemitones: 0,
+                                                                       formantSemitones: 0,
+                                                                       formantBaseHz: 0), input))
+        let dryFraction = lowEnergyFraction(input)
+        XCTAssertEqual(neutralFraction, dryFraction, accuracy: 0.03,
+                        "formantSemitones: 0 should not meaningfully alter spectral balance " +
+                        "(neutral=\(neutralFraction), dry=\(dryFraction))")
+    }
 }
