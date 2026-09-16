@@ -12,6 +12,10 @@ let package = Package(
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
+        // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
+        // deliberately no EngineKit, so the Furby control app (and anything
+        // else) can get a voice changer without linking a TTS stack.
+        .library(name: "VoiceFXKit", targets: ["VoiceFXKit"]),
     ],
     dependencies: [
         // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
@@ -117,6 +121,10 @@ let package = Package(
         .target(
             name: "COnnxRuntime",
             path: "Sources/COnnxRuntime"
+        ),
+        .target(
+            name: "VoiceFXKit",
+            path: "Sources/VoiceFXKit"
         ),
         .target(
             name: "EngineKit",
@@ -247,6 +255,11 @@ let package = Package(
             name: "SpeechKitTests",
             dependencies: ["SpeechKit"],
             path: "Tests/SpeechKitTests"
+        ),
+        .testTarget(
+            name: "VoiceFXKitTests",
+            dependencies: ["VoiceFXKit"],
+            path: "Tests/VoiceFXKitTests"
         ),
     ]
 )
