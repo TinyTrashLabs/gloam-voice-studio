@@ -144,7 +144,8 @@ let package = Package(
         .target(
             name: "VoiceFXKit",
             dependencies: ["CSignalsmithStretch"],
-            path: "Sources/VoiceFXKit"
+            path: "Sources/VoiceFXKit",
+            resources: [.process("Resources")]
         ),
         .target(
             name: "EngineKit",
