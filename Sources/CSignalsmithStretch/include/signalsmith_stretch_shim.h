@@ -27,8 +27,9 @@ void gvfx_stretch_set_transpose_semitones(GVFXStretchRef ref, float semitones);
 /// that makes a voice read as monstrous rather than merely slowed down.
 void gvfx_stretch_set_formant_semitones(GVFXStretchRef ref, float semitones);
 
-/// Rough fundamental-frequency hint for formant analysis, in Hz.
-/// Pass 0 to let the library detect the pitch itself.
+/// Rough fundamental-frequency hint for formant analysis, normalised by
+/// sample rate (f0 / sampleRate) — NOT Hz. Pass 0 to let the library detect
+/// the pitch itself.
 void gvfx_stretch_set_formant_base(GVFXStretchRef ref, float baseFreqHz);
 
 int gvfx_stretch_input_latency(GVFXStretchRef ref);

@@ -46,7 +46,9 @@ public final class ButterworthStage: FXStage {
                         _ output: UnsafeMutablePointer<Float>,
                         frames: Int) {
         guard frequency > 0 else {
-            for i in 0..<frames { output[i] = 0 }
+            // A silent Furby is a worse failure than an unprocessed one —
+            // match every other stage's degraded path and pass audio through.
+            output.update(from: input, count: frames)
             return
         }
         let a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3], a4 = a[4]

@@ -130,6 +130,12 @@ public struct FXPreset: Codable, Sendable, Equatable {
             l.ceiling = min(max(l.ceiling, 0.01), 1.0)
             l.releaseSeconds = min(max(l.releaseSeconds, 0.001), 2.0)
             copy.limiter = l
+        } else {
+            // "The limiter is last, always" (see FXChain+Preset) is not
+            // optional over the network: an inline preset with no limiter
+            // section still gets the safety stage, since the eventual
+            // playback target is a small toy speaker.
+            copy.limiter = Limiter(ceiling: 0.95, releaseSeconds: 0.05)
         }
         return copy
     }

@@ -127,6 +127,47 @@ final class PresetChainTests: XCTestCase {
         XCTAssertGreaterThan(maxDiff, 0.01, "detune-only preset produced output indistinguishable from dry input")
     }
 
+    /// Finding 1: the pitch shifter's declared latency must be compensated,
+    /// not just logged, or a short/tightly-trimmed line loses its tail.
+    /// Builds a signal silent for its first half then a loud burst, runs it
+    /// through a pitch-bearing preset with latency compensation applied, and
+    /// asserts the burst's onset in the output lands close to its onset in
+    /// the input (rather than shifted late by ~latencyFrames, or with the
+    /// tail chopped off by the plain `applyWhole`).
+    func testLatencyCompensationPreservesOnsetAlignment() throws {
+        let sr = 48_000.0
+        let n = 24_000
+        let halfway = n / 2
+        var input = [Float](repeating: 0, count: n)
+        for i in halfway..<n {
+            let t = Double(i - halfway) / sr
+            input[i] = Float(sin(2 * Double.pi * 220 * t) * 0.8)
+        }
+
+        let preset = try XCTUnwrap(FXPreset.builtIn(named: "demon"))
+        XCTAssertNotNil(preset.pitch, "demon preset must carry a pitch stage for this test to be meaningful")
+
+        let chain = FXChain.make(from: preset)
+        chain.prepare(sampleRate: sr, maxBlock: n)
+        XCTAssertGreaterThan(chain.latencyFrames, 0)
+
+        let out = chain.applyWholeLatencyCompensated(input)
+        XCTAssertEqual(out.count, input.count)
+
+        // Find the first sample in the output whose magnitude clears a
+        // threshold well above noise floor — that's the burst's onset.
+        let threshold: Float = 0.05
+        let onset = out.firstIndex { abs($0) > threshold }
+        let onsetIndex = try XCTUnwrap(onset, "no burst detected in compensated output")
+
+        // Without compensation the onset would land ~latencyFrames late (or,
+        // with the naive un-trimmed approach, the tail could be missing
+        // entirely). Allow a small tolerance for filter ringing/smearing.
+        let tolerance = 2_400 // 50 ms @ 48k
+        XCTAssertLessThan(abs(onsetIndex - halfway), tolerance,
+                          "burst onset at \(onsetIndex) is not aligned with input onset at \(halfway)")
+    }
+
     func testResetClearsTailsBetweenUtterances() throws {
         let preset = try XCTUnwrap(FXPreset.builtIn(named: "demon"))
         let chain = FXChain.make(from: preset)

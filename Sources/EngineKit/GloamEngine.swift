@@ -405,7 +405,10 @@ public actor GloamEngine {
             // drift from the streamed one.
             let chain = FXChain.make(from: preset)
             chain.prepare(sampleRate: Double(model.sampleRate), maxBlock: 4096)
-            samples = chain.applyWhole(samples)
+            // Compensate for the chain's declared latency (the pitch shifter's
+            // ~120 ms) rather than letting a short/tightly-trimmed line lose
+            // its tail: pad, flush, and trim back to the original length.
+            samples = chain.applyWholeLatencyCompensated(samples)
             engineLog.log("fx \(preset.name, privacy: .public) applied, latency \(chain.latencyFrames, privacy: .public) frames")
         }
         return SynthesisResult(
