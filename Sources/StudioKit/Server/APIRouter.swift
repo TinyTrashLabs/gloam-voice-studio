@@ -1,6 +1,7 @@
 import EngineKit
 import Foundation
 import Hummingbird
+import VoiceFXKit
 
 #if canImport(Darwin)
 import Darwin
@@ -353,6 +354,20 @@ public enum APIRouter {
                 }
                 return prefix
             }()
+            // An unknown preset name is a client error, not a silent fallback:
+            // a Furby that quietly speaks in its own voice on a typo is worse
+            // than one that tells you the name was wrong.
+            // `let` (not `var`) so it can be captured unchanged by the
+            // Task closure below under Swift 6 strict concurrency.
+            let fxPreset: FXPreset? = try {
+                guard let selector = req.fx else { return nil }
+                guard let resolved = selector.preset else {
+                    throw APIError(status: .badRequest,
+                                   detail: "unknown fx preset — known presets: "
+                                           + FXPreset.builtInNames.joined(separator: ", "))
+                }
+                return resolved.clamped()
+            }()
             do {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
@@ -377,7 +392,8 @@ public enum APIRouter {
                                     styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k,
                                     repetitionPenalty: req.repetition_penalty,
-                                    dialoguePrefix: speechPrefix))
+                                    dialoguePrefix: speechPrefix,
+                                    fx: fxPreset))
                         }
                     }.value
                 } catch is RequestGate.Busy {

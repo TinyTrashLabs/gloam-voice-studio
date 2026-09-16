@@ -1,5 +1,6 @@
 import Foundation
 import os
+import VoiceFXKit
 
 /// Residency + timing log: `log stream --predicate 'subsystem == "fm.gloam.studio"'`.
 private let engineLog = Logger(subsystem: "fm.gloam.studio", category: "engine")
@@ -396,8 +397,19 @@ public actor GloamEngine {
         // flow-matching duration conditioning), the provider already handled it —
         // skip the generic post-hoc resample so speed isn't applied twice.
         let postHocSpeed = plan.speed != nil ? 1.0 : request.speed
+        var samples = SpeedAdjust.apply(raw, speed: postHocSpeed)
+        if let preset = request.fx {
+            // Effects run after the speed resample so a preset's tuning is not
+            // altered by an unrelated `speed`. Driven through the same block
+            // loop a chunked caller would use, so the offline result cannot
+            // drift from the streamed one.
+            let chain = FXChain.make(from: preset)
+            chain.prepare(sampleRate: Double(model.sampleRate), maxBlock: 4096)
+            samples = chain.applyWhole(samples)
+            engineLog.log("fx \(preset.name, privacy: .public) applied, latency \(chain.latencyFrames, privacy: .public) frames")
+        }
         return SynthesisResult(
-            samples: SpeedAdjust.apply(raw, speed: postHocSpeed),
+            samples: samples,
             sampleRate: model.sampleRate,
             wallSeconds: wall)
     }

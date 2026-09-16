@@ -190,6 +190,7 @@ let package = Package(
                 // sherpa-onnx C struct layouts for the Pocket TTS backend
                 // (PocketSpeechModel dlopens the actual library at runtime).
                 "CSherpaOnnx",
+                "VoiceFXKit",
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
@@ -202,7 +203,7 @@ let package = Package(
         ),
         .testTarget(
             name: "EngineKitTests",
-            dependencies: ["EngineKit"],
+            dependencies: ["EngineKit", "VoiceFXKit"],
             path: "Tests/EngineKitTests"
         ),
         .executableTarget(
@@ -227,6 +228,7 @@ let package = Package(
             dependencies: [
                 "GVoiceKit",
                 "EngineKit",
+                "VoiceFXKit",
                 // Dia2 needs word timings for a conditioning clip, and the
                 // transcriber that produces them lives in SpeechKit.
                 "SpeechKit",
