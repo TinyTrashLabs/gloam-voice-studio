@@ -132,7 +132,11 @@ public final class ReverbStage: FXStage {
             return
         }
         for frame in 0..<frames {
-            let dry = Double(input[frame])
+            let raw = Double(input[frame])
+            // Sanitise at the input: a non-finite sample must never enter the
+            // feedback path, or it poisons filterState/buffer forever and the
+            // stage goes permanently silent (masked by the output guard below).
+            let dry = raw.isFinite ? raw : 0
 
             // "Resultant junction pressure": every line's damped state, summed
             // and scaled, mixed back into the inputs.

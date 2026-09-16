@@ -55,6 +55,24 @@ final class ReverbTests: XCTestCase {
         }
     }
 
+    /// A non-finite input sample must be sanitised before it reaches the
+    /// feedback path. If it instead poisons filterState/buffer, the output
+    /// guard masks it as silence rather than NaN — so the real assertion
+    /// here is that the stage keeps passing signal, not just that it's finite.
+    func testNonFiniteInputDoesNotPoisonDelayLines() {
+        var input = (0..<8_000).map { Float(sin(Double($0) * 0.05)) }
+        input[0] = Float.nan
+        input[1] = Float.infinity
+        input[2] = -Float.infinity
+        let out = run(ReverbStage(feedback: 0.9, lowpassHz: 10_000, mix: 1.0), input)
+
+        XCTAssertTrue(out.allSatisfy { $0.isFinite }, "output must stay finite")
+
+        let tail = out[(out.count * 3 / 4)...]
+        let rms = (tail.reduce(0) { $0 + $1 * $1 } / Float(tail.count)).squareRoot()
+        XCTAssertGreaterThan(rms, 0, "stage must recover and keep passing signal, not go permanently silent")
+    }
+
     /// Eight modulated delay lines with fractional read positions — by far the
     /// most state of any stage, and the place a chunking bug would hide.
     func testChunkInvariance() {
