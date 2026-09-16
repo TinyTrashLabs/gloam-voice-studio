@@ -20,14 +20,8 @@ public final class PitchFormantStage: FXStage {
     private let formantBaseHz: Float
     private var handle: GVFXStretchRef?
 
-    /// Measured on real speech: setFormantSemitones(+N) moves the spectral
-    /// envelope DOWN by about 0.7*N semitones. Both the inversion and the
-    /// scale are absorbed here so presets can use the intuitive convention
-    /// (negative = formants down). See handoffs/ for the calibration data.
-    private static let formantDeliveredPerRequested: Float = 0.70
-
     /// Sane clamp so an extreme preset can't drive the library argument to a
-    /// wild value once it's been divided by the (sub-1) scale factor above.
+    /// wild value.
     private static let formantArgumentClamp: Float = 36
 
     public init(transposeSemitones: Float,
@@ -53,13 +47,11 @@ public final class PitchFormantStage: FXStage {
         guard let handle else { return }   // degrades to pass-through
         gvfx_stretch_set_transpose_semitones(handle, transposeSemitones)
 
-        // EMPIRICAL: the library's formant shift is inverted and scaled
-        // relative to the requested semitones (setFormantSemitones(+N)
-        // measured to move the envelope DOWN by ~0.7*N). Negate and rescale
-        // here so preset authors can keep using the intuitive convention
-        // (negative = formants down) without knowing about the quirk.
-        let requested = -formantSemitones / Self.formantDeliveredPerRequested
-        let clamped = max(-Self.formantArgumentClamp, min(Self.formantArgumentClamp, requested))
+        // The library's formant-semitones sign is natural (negative = formants
+        // down), confirmed on real speech across five independent spectral
+        // metrics — no inversion needed here. Just clamp against extreme
+        // preset values.
+        let clamped = max(-Self.formantArgumentClamp, min(Self.formantArgumentClamp, formantSemitones))
         gvfx_stretch_set_formant_semitones(handle, clamped)
 
         // EMPIRICAL: the library documents its formant-base argument as a

@@ -114,15 +114,29 @@ final class PitchFormantTests: XCTestCase {
 
     // MARK: - Formant direction/effect
 
-    /// A crude but deterministic voice-like signal: a fundamental around
-    /// 200 Hz plus several harmonics, giving real spectral content from
-    /// 200 Hz up through 5 kHz so a formant shift has something to move.
+    /// A deterministic voice-like signal built source-filter style: a
+    /// harmonic source (200 Hz fundamental) shaped by three resonant peaks
+    /// at roughly 700 Hz, 1200 Hz and 2600 Hz — a crude vowel-like formant
+    /// structure. A bare harmonic comb has no spectral envelope for the
+    /// library's formant shift to move; these Gaussian resonance bumps give
+    /// it one.
     private func voiceLike(f0: Double = 200, sr: Double = 48_000, n: Int = 48_000) -> [Float] {
         let harmonics = 1...25 // up to ~5 kHz
+        let formants: [(center: Double, bandwidth: Double)] = [
+            (700, 80), (1200, 90), (2600, 120)
+        ]
+        func envelope(_ hz: Double) -> Double {
+            var gain = 0.15 // floor so non-resonant harmonics still contribute
+            for f in formants {
+                let d = (hz - f.center) / f.bandwidth
+                gain += exp(-0.5 * d * d)
+            }
+            return gain
+        }
         var out = [Float](repeating: 0, count: n)
         for h in harmonics {
-            let amp = Float(1.0 / Double(h)) // rolling off, like a voice source
             let hz = f0 * Double(h)
+            let amp = Float((1.0 / Double(h)) * envelope(hz)) // source rolloff * formant shaping
             for i in 0..<n {
                 out[i] += amp * Float(sin(2 * Double.pi * hz * Double(i) / sr))
             }
