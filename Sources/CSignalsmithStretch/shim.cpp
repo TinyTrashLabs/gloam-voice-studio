@@ -6,23 +6,30 @@
 #include "include/signalsmith_stretch_shim.h"
 #include "vendor/signalsmith-stretch.h"
 
+#include <new>
 #include <vector>
 
 namespace {
 struct Wrapper {
     signalsmith::stretch::SignalsmithStretch<float> stretch;
-    int channels = 1;
 };
 }
 
 extern "C" {
 
 GVFXStretchRef gvfx_stretch_create(int channels, float sampleRate) {
-    if (channels < 1 || sampleRate <= 0) return nullptr;
+    // Only mono is supported: process() below hands the library a single-
+    // element pointer array, and VoiceFXKit's FXStage protocol is mono end
+    // to end, so anything else would be unused (and unsafe) surface area.
+    if (channels != 1 || sampleRate <= 0) return nullptr;
     auto *w = new (std::nothrow) Wrapper();
     if (!w) return nullptr;
-    w->channels = channels;
-    w->stretch.presetDefault(channels, sampleRate);
+    try {
+        w->stretch.presetDefault(channels, sampleRate);
+    } catch (...) {
+        delete w;
+        return nullptr;
+    }
     return reinterpret_cast<GVFXStretchRef>(w);
 }
 
@@ -60,12 +67,22 @@ void gvfx_stretch_process(GVFXStretchRef ref,
     auto *w = reinterpret_cast<Wrapper *>(ref);
     const float *inPtrs[1] = { input };
     float *outPtrs[1] = { output };
-    w->stretch.process(inPtrs, inCount, outPtrs, outCount);
+    try {
+        w->stretch.process(inPtrs, inCount, outPtrs, outCount);
+    } catch (...) {
+        // Nothing may propagate across the extern "C" boundary. Best we can
+        // do is leave `output` as-is (already caller-owned, possibly
+        // partially written) and swallow the exception.
+    }
 }
 
 void gvfx_stretch_reset(GVFXStretchRef ref) {
     if (!ref) return;
-    reinterpret_cast<Wrapper *>(ref)->stretch.reset();
+    try {
+        reinterpret_cast<Wrapper *>(ref)->stretch.reset();
+    } catch (...) {
+        // See gvfx_stretch_process: exceptions must not cross extern "C".
+    }
 }
 
 }

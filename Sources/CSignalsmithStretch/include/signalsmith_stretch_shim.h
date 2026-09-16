@@ -14,7 +14,9 @@ extern "C" {
 typedef struct GVFXStretchOpaque *GVFXStretchRef;
 
 /// Allocates a shifter configured for `channels` at `sampleRate`.
-/// Returns NULL on failure. Caller owns the result; free with destroy.
+/// Only `channels == 1` (mono) is supported; any other value returns NULL,
+/// as does a non-positive `sampleRate` or an allocation/configuration
+/// failure. Caller owns the result; free with destroy.
 GVFXStretchRef gvfx_stretch_create(int channels, float sampleRate);
 void gvfx_stretch_destroy(GVFXStretchRef ref);
 

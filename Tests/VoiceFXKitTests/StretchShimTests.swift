@@ -16,6 +16,13 @@ final class StretchShimTests: XCTestCase {
         XCTAssertNil(gvfx_stretch_create(1, 0))
     }
 
+    /// Only mono is supported — process() hands the library a single-element
+    /// pointer array, so a multi-channel handle would read past the end of
+    /// it. gvfx_stretch_create must refuse to construct one.
+    func testRejectsMultiChannel() {
+        XCTAssertNil(gvfx_stretch_create(2, 48_000))
+    }
+
     func testReportsLatency() {
         let ref = gvfx_stretch_create(1, 48_000)
         defer { gvfx_stretch_destroy(ref) }
