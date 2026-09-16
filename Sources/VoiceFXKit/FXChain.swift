@@ -30,6 +30,7 @@ public final class FXChain {
     public func process(_ input: UnsafePointer<Float>,
                         _ output: UnsafeMutablePointer<Float>,
                         frames: Int) {
+        precondition(maxBlock > 0, "FXChain used before prepare(sampleRate:maxBlock:); call prepare first")
         precondition(frames <= maxBlock, "frames (\(frames)) exceeds maxBlock (\(maxBlock)); call prepare with a larger maxBlock")
         guard !stages.isEmpty else {
             output.update(from: input, count: frames)
@@ -56,6 +57,7 @@ public final class FXChain {
     /// path rather than being a separate implementation, so the offline result
     /// cannot drift from the chunked one.
     public func applyWhole(_ input: [Float]) -> [Float] {
+        precondition(maxBlock > 0, "FXChain used before prepare(sampleRate:maxBlock:); call prepare first")
         guard !input.isEmpty else { return [] }
         var out = [Float](repeating: 0, count: input.count)
         var i = 0

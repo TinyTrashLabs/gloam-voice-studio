@@ -53,6 +53,21 @@ final class FXChainTests: XCTestCase {
         chain.prepare(sampleRate: 48_000, maxBlock: 512)
         XCTAssertEqual(chain.applyWhole([1, 2, 3]), [1, 2, 3])
     }
+
+    /// Pins the maxBlock > 0 guard's positive invariant: after a correct
+    /// `prepare`, applyWhole terminates (rather than spinning forever, which
+    /// is what happened before the guard when maxBlock was left at 0) and
+    /// correctly handles an input length that is not a multiple of maxBlock.
+    func testApplyWholeTerminatesOnNonMultipleLengths() {
+        let chain = FXChain(stages: [GainStage(gain: 2)])
+        chain.prepare(sampleRate: 48_000, maxBlock: 300)
+        let input = (0..<1000).map { Float($0) }
+        let out = chain.applyWhole(input)
+        XCTAssertEqual(out.count, 1000)
+        for k in 0..<1000 {
+            XCTAssertEqual(out[k], input[k] * 2, accuracy: 1e-6)
+        }
+    }
 }
 
 /// Declares latency without doing anything to the signal, so latency
