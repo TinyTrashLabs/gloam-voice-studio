@@ -363,24 +363,27 @@ if CommandLine.arguments.dropFirst().first == "test-istft" {
 }
 
 func usage() -> Never {
-    FileHandle.standardError.write(Data(
-        ("usage: spike --backend <qwen3-0.6b|qwen3-1.7b|qwen3-design|qwen3-custom|"
-         + "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> "
-         + "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] "
-         + "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] "
-         + "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n"
-         + "   or: spike serve-llm <llm-backend-id> [port]   "
-         + "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n"
-         + "   or: spike bakeoff [outPath] [--dry]   "
-         + "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n"
-         + "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> "
-         + "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] "
-         + "[--engine <id>:<file>=<value>]... [--no-source]\n"
-         + "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> "
-         + "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n"
-         + "   or: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav> "
-         + "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] "
-         + "[--precision <fp32|int8>] [--temp <t>]\n").utf8))
+    // One literal per piece: a long `+` chain times out the type checker.
+    let pieces: [String] = [
+        "usage: spike --backend <qwen3-0.6b|qwen3-1.7b|qwen3-design|qwen3-custom|",
+        "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> ",
+        "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] ",
+        "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] ",
+        "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n",
+        "   or: spike serve-llm <llm-backend-id> [port]   ",
+        "(ids: \(LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")))\n",
+        "   or: spike bakeoff [outPath] [--dry]   ",
+        "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n",
+        "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> ",
+        "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] ",
+        "[--engine <id>:<file>=<value>]... [--no-source]\n",
+        "   or: spike lux-compare --ref <ref.wav> --ref-text <transcript> --text <line> ",
+        "--onnx-dir <dir> [--mlx-dir <dir>] [--out-dir <dir>] [--speed <s>]\n",
+        "   or: spike pocket --backend <onnx|sherpa> --ref <ref.wav> --text <line> --out <file.wav> ",
+        "[--ref-text <transcript>] [--model-dir <dir>] [--seed <n>] ",
+        "[--precision <fp32|int8>] [--temp <t>]\n",
+    ]
+    FileHandle.standardError.write(Data(pieces.joined().utf8))
     exit(2)
 }
 

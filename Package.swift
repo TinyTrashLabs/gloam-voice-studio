@@ -121,6 +121,9 @@ let package = Package(
         .target(
             name: "EngineKit",
             dependencies: [
+                // WAV parsing for ReferenceTail (RefLoudness.dataChunk);
+                // Foundation + ZIPFoundation only, so no cycle.
+                "GVoiceKit",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
@@ -232,6 +235,7 @@ let package = Package(
             name: "voice-level",
             dependencies: [
                 "StudioKit",
+                "EngineKit",   // ReferenceStandard / ReferenceTail
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/voice-level"

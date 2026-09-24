@@ -96,12 +96,13 @@ public struct VoiceLibrary: Sendable {
             throw StudioError.invalidArchive("voice \(slug) has neither reference audio nor engine assets")
         }
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        // Every reference meets the loudness standard on the way in (RefLoudness).
+        // Every reference meets the standard on the way in (ReferenceStandard:
+        // no cut-off ending, then RefLoudness).
         // A clone is exactly as loud as what it was cloned from and nothing
         // downstream re-levels it, so this write is the one boundary where "gain
         // 1 means the same thing for every voice" can actually be made true —
         // and every voice crosses it exactly once, however it arrived.
-        if let refWav { try RefLoudness.normalized(wav: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        if let refWav { try ReferenceStandard.applied(to: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
@@ -128,7 +129,7 @@ public struct VoiceLibrary: Sendable {
         let safeSlug = try GVoice.safeComponent(slug)
         let voiceDir = directory.appendingPathComponent(safeSlug)
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
-        if let refWav { try RefLoudness.normalized(wav: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
+        if let refWav { try ReferenceStandard.applied(to: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
         let meta = VoiceMeta(name: name, slug: safeSlug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance, variantOf: variantOf,
@@ -298,7 +299,7 @@ public struct VoiceLibrary: Sendable {
                 // RefLoudness only touches WAV it recognises, so this is safe to
                 // apply by name.
                 let safe = try GVoice.safeComponent(filename)
-                let data = safe.hasSuffix(".wav") ? RefLoudness.normalized(wav: blob) : blob
+                let data = safe.hasSuffix(".wav") ? ReferenceStandard.applied(to: blob) : blob
                 try data.write(to: engineDir.appendingPathComponent(safe))
             }
         }
@@ -418,7 +419,7 @@ public struct VoiceLibrary: Sendable {
             // through `update` dropped it back to whatever level the microphone
             // happened to give, silently undoing the standard for that voice
             // while `save` and `saveAt` still honoured it.
-            try RefLoudness.normalized(wav: refWav)
+            try ReferenceStandard.applied(to: refWav)
                 .write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
