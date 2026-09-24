@@ -1,5 +1,9 @@
 import Foundation
 
+// LuxEngine (the ONNX graphs) is macOS-only in EngineKit -- see
+// LuxOnnxEngine.swift: iOS consumers vendor their own ONNX Runtime.
+#if os(macOS)
+
 /// LuxTTS on ONNX Runtime, behind the same `SpeechModel` the MLX path
 /// implements — so an app can choose a runtime instead of being handed one.
 ///
@@ -76,6 +80,7 @@ public final class LuxOnnxSpeechModel: SpeechModel, @unchecked Sendable {
         }
     }
 }
+#endif
 
 /// Which implementation answers for `.luxTTS`.
 ///

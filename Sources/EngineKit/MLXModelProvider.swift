@@ -52,7 +52,13 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
                 throw EngineError.generationFailed(
                     backend: .luxTTS, message: "lux-tts ONNX is missing \(missing)")
             }
+            #if os(macOS)
             return try await LuxOnnxSpeechModel.load(modelDir: dir)
+            #else
+            // EngineKit links ONNX Runtime on macOS only (LuxOnnxEngine.swift).
+            throw EngineError.generationFailed(
+                backend: .luxTTS, message: "lux-tts ONNX runs through EngineKit on macOS only")
+            #endif
         }
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
