@@ -278,6 +278,7 @@ struct ContentView: View {
     private func modelDisplayName(_ b: BackendID) -> String {
         switch b {
         case .qwen06B: "qwen3-0.6b · clone a voice"
+        case .qwen06BMobile: "qwen3-0.6b-mobile · clone a voice (smaller, phone bake)"
         case .qwen17B: "qwen3-1.7b · clone a voice"
         case .qwenDesign: "qwen3-design · design from text"
         case .qwenCustom: "qwen3-custom · direct a preset voice"

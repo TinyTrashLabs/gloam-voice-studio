@@ -4,6 +4,7 @@
 public protocol SpeechModel: AnyObject, Sendable {
     var sampleRate: Int { get }
     func synthesize(_ request: ProviderRequest) async throws -> [Float]
+    func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error>
 }
 
 /// Loads models. Real implementation wraps mlx-audio-swift; tests use fakes.

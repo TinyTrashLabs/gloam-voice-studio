@@ -53,6 +53,28 @@ private final class LoggingSpeechModel: SpeechModel, @unchecked Sendable {
     }
 }
 
+private final class StreamingLoggingSpeechModel: SpeechModel, @unchecked Sendable {
+    let sampleRate = 24_000
+    private let log: EventLog
+    init(log: EventLog) { self.log = log }
+
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        [0.1, 0.2, 0.3, 0.4]
+    }
+
+    func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                await log.add("audio:first")
+                continuation.yield([0.1, 0.2])
+                await log.add("audio:last")
+                continuation.yield([0.3, 0.4])
+                continuation.finish()
+            }
+        }
+    }
+}
+
 private final class SingleModelLanguageProvider: LanguageModelProviding, @unchecked Sendable {
     let model: any LanguageModel
     init(model: any LanguageModel) { self.model = model }
@@ -61,6 +83,51 @@ private final class SingleModelLanguageProvider: LanguageModelProviding, @unchec
 }
 
 final class InterleavedSynthesisTests: XCTestCase {
+    func testInterleavedStreamYieldsAudioBeforeChatFinishes() async throws {
+        let log = EventLog()
+        let llm = GatedPacedModel(log: log)
+        let provider = FakeProvider()
+        provider.models[.qwen17B] = StreamingLoggingSpeechModel(log: log)
+        let engine = GloamEngine(provider: provider,
+                                 languageProvider: SingleModelLanguageProvider(model: llm))
+
+        let chatTask = Task {
+            for try await event in await engine.chatStream(
+                backend: .qwen3_1_7b,
+                request: ChatRequest(messages: [.init(role: .user, content: "hi")]))
+            {
+                if case .delta(let text) = event { await log.add("delta:\(text)") }
+            }
+        }
+        for _ in 0..<200 {
+            if await log.contains("delta:one.") { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let speechTask = Task { () throws -> [[Float]] in
+            var chunks: [[Float]] = []
+            for try await chunk in await engine.synthesizeStreamInterleaved(
+                backend: .qwen17B, request: SynthesisRequest(text: "one."))
+            {
+                chunks.append(chunk.samples)
+            }
+            return chunks
+        }
+        for _ in 0..<200 {
+            if await engine._pendingInterleavedCount() > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        llm.openGate.yield()
+
+        let speechChunks = try await speechTask.value
+        XCTAssertEqual(speechChunks, [[0.1, 0.2], [0.3, 0.4]])
+        try await chatTask.value
+        let events = await log.events
+        let audioIndex = try XCTUnwrap(events.firstIndex(of: "audio:first"))
+        let finishedIndex = try XCTUnwrap(events.firstIndex(of: "emit-finished"))
+        XCTAssertLessThan(audioIndex, finishedIndex)
+    }
+
     /// A synthesis queued mid-stream runs in the between-deltas gap — before
     /// the language model emits its finished event — not after the chat
     /// released the tail. Both markers are logged on the engine's serialized

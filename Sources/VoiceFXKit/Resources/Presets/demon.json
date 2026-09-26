@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "demon",
+  "highpassHz": 70,
+  "pitch": { "transposeSemitones": -7, "formantSemitones": -11, "formantBaseHz": 180 },
+  "detune": { "transposeSemitones": -12, "formantSemitones": -14, "formantBaseHz": 180, "gain": 0.45 },
+  "ringMod": { "frequencyHz": 28, "mix": 0.18 },
+  "drive": { "preGain": 2.6, "postGain": 0.55, "shape1": 0.0, "shape2": 0.0 },
+  "dcBlock": true,
+  "reverb": { "feedback": 0.88, "lowpassHz": 6000, "mix": 0.32 },
+  "limiter": { "ceiling": 0.95, "releaseSeconds": 0.05 }
+}

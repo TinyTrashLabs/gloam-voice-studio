@@ -1,4 +1,5 @@
 import Foundation
+import VoiceFXKit
 
 /// What callers (UI, API server) ask for.
 public struct SynthesisRequest: Sendable, Equatable {
@@ -54,6 +55,10 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// voice"; nil means an unconditioned pass, which is a usable read but not
     /// anybody's voice in particular.
     public var dialoguePrefix: DialoguePrefix?
+    /// Character-voice effects to apply after generation. nil = untouched
+    /// audio, today's behaviour. Applied post-`SpeedAdjust` so a preset's
+    /// tuning is not silently altered by an unrelated `speed` value.
+    public var fx: FXPreset?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -64,8 +69,10 @@ public struct SynthesisRequest: Sendable, Equatable {
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
-                dialoguePrefix: DialoguePrefix? = nil) {
+                dialoguePrefix: DialoguePrefix? = nil,
+                fx: FXPreset? = nil) {
         self.dialoguePrefix = dialoguePrefix
+        self.fx = fx
         self.text = text
         self.refAudioPath = refAudioPath
         self.refText = refText
@@ -154,6 +161,17 @@ public struct SynthesisResult: Sendable {
         self.samples = samples
         self.sampleRate = sampleRate
         self.wallSeconds = wallSeconds
+    }
+}
+
+/// One independently playable piece of a streamed synthesis result.
+public struct SynthesisChunk: Sendable {
+    public let samples: [Float]
+    public let sampleRate: Int
+
+    public init(samples: [Float], sampleRate: Int) {
+        self.samples = samples
+        self.sampleRate = sampleRate
     }
 }
 

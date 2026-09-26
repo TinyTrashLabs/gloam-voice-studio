@@ -12,6 +12,10 @@ let package = Package(
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
+        // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
+        // deliberately no EngineKit, so the Furby control app (and anything
+        // else) can get a voice changer without linking a TTS stack.
+        .library(name: "VoiceFXKit", targets: ["VoiceFXKit"]),
     ],
     dependencies: [
         // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
@@ -63,9 +67,11 @@ let package = Package(
         // and the hybrid fused decoder step (Qwen3TTSModel.fusedLayers) that
         // put Qwen3-TTS 0.6B at real time on the iPhone 15 Pro. All behind
         // statics that default off, so the Mac app is unchanged.
+        // a206f70 (2026-09-26) adds the 8-bit fused step,
+        // frame pipelining and the async-decode silence-stop fix.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "ddb122b0d65aff992b9227944c764a4f7c4e4057"),
+            revision: "a206f703540cb326d97f65669daeee947a6b793f"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -118,6 +124,31 @@ let package = Package(
             name: "COnnxRuntime",
             path: "Sources/COnnxRuntime"
         ),
+        // signalsmith-stretch (MIT) behind a C API. Headers are vendored under
+        // Sources/CSignalsmithStretch/vendor by scripts/fetch-signalsmith.sh —
+        // committed, like CSherpaOnnx's include/. Accelerate backs its FFT.
+        .target(
+            name: "CSignalsmithStretch",
+            path: "Sources/CSignalsmithStretch",
+            exclude: [
+                // Multi-arch xsimd dispatch shim — only meant to be compiled
+                // when SIGNALSMITH_USE_XSIMD_DISPATCH is set; unconditionally
+                // #errors otherwise. We use the Accelerate backend instead.
+                "vendor/signalsmith-linear/platform/linear-xsimd-dispatch.cpp",
+            ],
+            cxxSettings: [
+                .define("SIGNALSMITH_USE_ACCELERATE", to: "1", .when(platforms: [.macOS, .iOS])),
+            ],
+            linkerSettings: [
+                .linkedFramework("Accelerate"),
+            ]
+        ),
+        .target(
+            name: "VoiceFXKit",
+            dependencies: ["CSignalsmithStretch"],
+            path: "Sources/VoiceFXKit",
+            resources: [.process("Resources")]
+        ),
         .target(
             name: "EngineKit",
             dependencies: [
@@ -164,6 +195,7 @@ let package = Package(
                 // sherpa-onnx C struct layouts for the Pocket TTS backend
                 // (PocketSpeechModel dlopens the actual library at runtime).
                 "CSherpaOnnx",
+                "VoiceFXKit",
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
@@ -176,7 +208,7 @@ let package = Package(
         ),
         .testTarget(
             name: "EngineKitTests",
-            dependencies: ["EngineKit"],
+            dependencies: ["EngineKit", "VoiceFXKit"],
             path: "Tests/EngineKitTests"
         ),
         .executableTarget(
@@ -201,6 +233,7 @@ let package = Package(
             dependencies: [
                 "GVoiceKit",
                 "EngineKit",
+                "VoiceFXKit",
                 // Dia2 needs word timings for a conditioning clip, and the
                 // transcriber that produces them lives in SpeechKit.
                 "SpeechKit",
@@ -252,5 +285,11 @@ let package = Package(
             dependencies: ["SpeechKit"],
             path: "Tests/SpeechKitTests"
         ),
-    ]
+        .testTarget(
+            name: "VoiceFXKitTests",
+            dependencies: ["VoiceFXKit"],
+            path: "Tests/VoiceFXKitTests"
+        ),
+    ],
+    cxxLanguageStandard: .cxx17
 )
