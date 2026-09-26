@@ -683,4 +683,25 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         }
         XCTAssertEqual(provider.model.last?.refText, "excited ref")
     }
+
+    func testATakeThatArrivesBeforeItsVoiceEndsUpInsideIt() async throws {
+        let voices = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("order-\(UUID())"))
+        let src = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("order-src-\(UUID())"))
+        let takePack = try GVoice.export(try src.save(name: "Nova (excited)", refWav: Data([2]), refText: "t").slug, from: src)
+        let voicePack = try GVoice.export(try src.save(name: "Nova", refWav: Data([1]), refText: "t").slug, from: src)
+        let deps = APIDependencies(engine: GloamEngine(provider: CapturingProvider()),
+                                   voices: voices, defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            for pack in [takePack, voicePack] {   // sync order: take first
+                let body = try JSONSerialization.data(withJSONObject: ["data": pack.base64EncodedString()])
+                try await client.execute(uri: "/voices/import", method: .post,
+                                         body: ByteBuffer(data: body)) { XCTAssertEqual($0.status, .ok) }
+            }
+        }
+        XCTAssertEqual(voices.list().map(\.slug), ["nova"])
+        XCTAssertEqual(voices.locate("nova-excited"), .variant(base: "nova", key: "excited"))
+    }
 }

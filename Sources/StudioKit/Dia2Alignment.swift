@@ -38,8 +38,8 @@ public enum Dia2Alignment {
     public static let engineID = "dia2"
 
     static func url(_ slug: String, in library: VoiceLibrary) -> URL {
-        library.directory
-            .appendingPathComponent(slug)
+        // Through the layout: a take's pack is inside its voice's folder.
+        ((try? library.folder(slug)) ?? library.directory.appendingPathComponent(slug))
             .appendingPathComponent("engines/\(engineID)")
             .appendingPathComponent(fileName)
     }

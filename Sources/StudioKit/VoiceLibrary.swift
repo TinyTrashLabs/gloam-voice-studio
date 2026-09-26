@@ -103,7 +103,9 @@ public struct VoiceLibrary: Sendable {
                      notes: String? = nil) throws -> VoiceMeta {
         let slug = try Slug.slugify(name)
         let voiceDir = directory.appendingPathComponent(slug)
-        guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
+        // A take at this address counts too: a top-level folder would win the
+        // address and hide it.
+        guard !FileManager.default.fileExists(atPath: voiceDir.path), layout.locate(slug) == nil else {
             throw StudioError.voiceExists(slug: slug)
         }
         guard refWav != nil || !engines.isEmpty else {
@@ -400,7 +402,7 @@ public struct VoiceLibrary: Sendable {
             let newSlug = try Slug.slugify(name)
             if newSlug != slug {
                 let target = directory.appendingPathComponent(newSlug)
-                guard !FileManager.default.fileExists(atPath: target.path) else {
+                guard !FileManager.default.fileExists(atPath: target.path), layout.locate(newSlug) == nil else {
                     throw StudioError.voiceExists(slug: newSlug)
                 }
                 try FileManager.default.moveItem(at: voiceDir, to: target)

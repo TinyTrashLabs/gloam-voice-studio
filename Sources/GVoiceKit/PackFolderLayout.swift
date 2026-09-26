@@ -45,7 +45,9 @@ public struct PackFolderLayout: Sendable {
         while let dash = address[..<cut].lastIndex(of: "-") {
             let base = String(address[..<dash])
             let key = String(address[address.index(after: dash)...])
-            if !base.isEmpty, !key.isEmpty, hasMeta(voiceDir(base)),
+            // "." / ".." as a key would name the voice's own folder (or its
+            // variants/ folder) — `nova-..` must never mean `nova`.
+            if !base.isEmpty, !key.isEmpty, key != ".", key != "..", hasMeta(voiceDir(base)),
                hasMeta(variantDir(base: base, key: key)) {
                 return .variant(base: base, key: key)
             }

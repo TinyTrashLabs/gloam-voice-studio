@@ -45,4 +45,11 @@ final class PackFolderLayoutTests: XCTestCase {
         XCTAssertEqual(layout.voiceSlugs(), ["nova"])
         XCTAssertEqual(layout.variantKeys(of: "nova"), ["warm"])
     }
+
+    func testDotDotIsNeverATakeKey() throws {
+        try touchMeta(dir.appendingPathComponent("nova"))
+        try touchMeta(layout.variantDir(base: "nova", key: "warm"))
+        XCTAssertNil(layout.locate("nova-.."), "nova-.. must not resolve to nova itself")
+        XCTAssertNil(layout.locate("nova-."))
+    }
 }

@@ -259,4 +259,14 @@ extension VoiceLibraryTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: backup.appendingPathComponent("nova-excited").path))
         XCTAssertEqual(try lib.foldLegacyVariants(log: { _ in }), 0)
     }
+
+    func testANewVoiceCannotHideATakeAtTheSameAddress() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "", variantOf: "nova")
+        XCTAssertThrowsError(try lib.save(name: "Nova Excited", refWav: Data([3]), refText: "")) {
+            XCTAssertEqual($0 as? StudioError, .voiceExists(slug: "nova-excited"))
+        }
+        _ = try lib.save(name: "Other", refWav: Data([4]), refText: "")
+        XCTAssertThrowsError(try lib.update("other", name: "Nova Excited"))
+    }
 }

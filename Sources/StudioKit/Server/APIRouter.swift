@@ -125,7 +125,13 @@ public enum APIRouter {
             guard let raw = Data(base64Encoded: req.data) else {
                 throw APIError(status: .badRequest, detail: "data is not valid base64")
             }
-            return try mapStoreErrors { try GVoice.import(raw, into: deps.voices) }
+            return try mapStoreErrors { () -> VoiceMeta in
+                let meta = try GVoice.import(raw, into: deps.voices)
+                // Sync can deliver a take's old standalone pack before its
+                // voice; once the voice is here, fold the take into it.
+                try? deps.voices.foldLegacyVariants(log: { _ in })
+                return meta
+            }
         }
 
         router.get("voices/:slug/ref.wav") { _, context in

@@ -75,15 +75,44 @@ final class LegacyVariantFoldTests: XCTestCase {
         XCTAssertEqual(p.first?.key, "whisper")
     }
 
-    func testExistingVariantIsNeverOverwritten() throws {
+    func testDuplicateTakeFoldsUnderAFreshKeyAndOverwritesNothing() throws {
         try voice("nova", "Nova")
         try voice("nova-excited", "Nova (excited)", variantOf: "nova", at: layout.variantDir(base: "nova", key: "excited"))
         try Data([9]).write(to: layout.variantDir(base: "nova", key: "excited").appendingPathComponent("ref.wav"))
         try voice("nova-excited", "Nova (excited)")
         let moved = try LegacyVariantFold.run(in: layout, backup: backup, log: { _ in })
-        XCTAssertTrue(moved.isEmpty)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("nova-excited").path))
+        XCTAssertEqual(moved.map(\.key), ["excited-2"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("nova-excited").path),
+                       "a top-level copy would hide the take at the same address")
         XCTAssertEqual(try Data(contentsOf: layout.variantDir(base: "nova", key: "excited").appendingPathComponent("ref.wav")), Data([9]))
+        XCTAssertEqual(layout.variantKeys(of: "nova"), ["excited", "excited-2"])
+    }
+
+    func testChainedTakeIsNeverStranded() throws {
+        try voice("dj", "DJ")
+        try voice("dj-hype", "DJ (hype)")
+        try voice("dj-hype-chill", "DJ (hype) chill")
+        _ = try LegacyVariantFold.run(in: layout, backup: backup, log: { _ in })
+        XCTAssertNotNil(layout.locate("dj-hype"))
+        XCTAssertNotNil(layout.locate("dj-hype-chill"), "a take moved under a folder that is itself moving vanishes")
+    }
+
+    func testAHeldLockMeansAnotherProcessIsFolding() throws {
+        try voice("nova", "Nova")
+        try voice("nova-sad", "Nova (sad)")
+        try Data().write(to: dir.appendingPathComponent(LegacyVariantFold.lockName))
+        XCTAssertTrue(try LegacyVariantFold.run(in: layout, backup: backup, log: { _ in }).isEmpty)
+        XCTAssertNotNil(layout.locate("nova-sad"))
+        XCTAssertEqual(layout.voiceSlugs(), ["nova", "nova-sad"], "nothing moved while locked")
+    }
+
+    func testBackupLeavesNoPartialCopyBehind() throws {
+        try voice("nova", "Nova")
+        try voice("nova-sad", "Nova (sad)")
+        _ = try LegacyVariantFold.run(in: layout, backup: backup, log: { _ in })
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: dir.deletingLastPathComponent().path)
+        XCTAssertFalse(siblings.contains { $0.hasPrefix(backup.lastPathComponent) && $0 != backup.lastPathComponent })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(LegacyVariantFold.lockName).path))
     }
 
     func testSecondRunIsANoOpAndBackupOnlyWhenSomethingMoves() throws {

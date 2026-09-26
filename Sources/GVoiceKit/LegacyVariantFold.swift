@@ -24,6 +24,10 @@ public enum LegacyVariantFold {
         "chill", "hyped",
     ]
 
+    /// Held in the library folder while a fold runs. Studio and the radio app
+    /// share the folder and both fold at launch.
+    public static let lockName = ".pack-fold.lock"
+
     public struct Move: Equatable, Sendable {
         public let folder: String
         public let base: String
@@ -81,7 +85,11 @@ public enum LegacyVariantFold {
                 cut = dash
             }
         }
-        return moves
+        // A folder that is itself folding cannot also receive a take this
+        // pass: the take would land in a variants/ folder with no voice above
+        // it and vanish from view. It stays put and is judged again next time.
+        let moving = Set(moves.map(\.folder))
+        return moves.filter { !moving.contains($0.base) }
     }
 
     /// Fold the library. Copies it to `backup` first (once — an existing backup
@@ -89,30 +97,74 @@ public enum LegacyVariantFold {
     @discardableResult
     public static func run(in layout: PackFolderLayout, backup: URL?,
                            log: (String) -> Void) throws -> [Move] {
-        let moves = plan(in: layout)
-        guard !moves.isEmpty else { return [] }
+        guard !plan(in: layout).isEmpty else { return [] }
         let fm = FileManager.default
+        // Studio and the radio app share this folder and both fold at launch.
+        guard let lock = Lock(in: layout.directory) else {
+            log("another app is folding this voice library; skipped")
+            return []
+        }
+        defer { lock.release() }
+        let moves = plan(in: layout)   // again, under the lock
+        guard !moves.isEmpty else { return [] }
         if let backup, !fm.fileExists(atPath: backup.path) {
-            try fm.copyItem(at: layout.directory, to: backup)
+            // Copy beside it, then rename into place: the backup exists whole
+            // or not at all, never half-written and then trusted forever.
+            let partial = backup.deletingLastPathComponent()
+                .appendingPathComponent("\(backup.lastPathComponent).partial-\(ProcessInfo.processInfo.processIdentifier)")
+            try? fm.removeItem(at: partial)
+            try fm.copyItem(at: layout.directory, to: partial)
+            try? fm.removeItem(at: partial.appendingPathComponent(lockName))
+            try fm.moveItem(at: partial, to: backup)
             log("voice library backed up to \(backup.path)")
         }
         var done: [Move] = []
         for move in moves {
-            let dest = layout.variantDir(base: move.base, key: move.key)
-            guard !fm.fileExists(atPath: dest.path) else {
-                log("kept \(move.folder): \(move.base) already has take \(move.key)")
-                continue
+            let source = layout.voiceDir(move.folder)
+            guard fm.fileExists(atPath: source.path) else { continue }   // already moved
+            // The voice already has this take: keep both, the newcomer under the
+            // next free key. Leaving it top-level would hide the take, since an
+            // exact top-level folder wins the address.
+            var key = move.key
+            var n = 2
+            while fm.fileExists(atPath: layout.variantDir(base: move.base, key: key).path) {
+                key = "\(move.key)-\(n)"; n += 1
             }
+            let dest = layout.variantDir(base: move.base, key: key)
             try fm.createDirectory(at: layout.variantsDir(move.base), withIntermediateDirectories: true)
-            try fm.moveItem(at: layout.voiceDir(move.folder), to: dest)
+            try fm.moveItem(at: source, to: dest)
             if var meta = readMeta(dest) {
                 meta.variantOf = move.base
-                meta.slug = "\(move.base)-\(move.key)"
+                meta.slug = "\(move.base)-\(key)"
                 try JSONEncoder().encode(meta).write(to: dest.appendingPathComponent("meta.json"))
             }
-            log("folded \(move.folder) into \(move.base) as take \(move.key)")
-            done.append(move)
+            log("folded \(move.folder) into \(move.base) as take \(key)")
+            done.append(Move(folder: move.folder, base: move.base, key: key))
         }
         return done
+    }
+
+    /// An exclusive lock file (O_EXCL). One left behind by a crash is broken
+    /// after ten minutes — a fold takes seconds.
+    struct Lock {
+        let url: URL
+        init?(in directory: URL) {
+            url = directory.appendingPathComponent(LegacyVariantFold.lockName)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if Self.take(url) { return }
+            if let made = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+               Date().timeIntervalSince(made) > 600 {
+                try? FileManager.default.removeItem(at: url)
+                if Self.take(url) { return }
+            }
+            return nil
+        }
+        private static func take(_ url: URL) -> Bool {
+            let fd = open(url.path, O_CREAT | O_EXCL | O_WRONLY, 0o644)
+            guard fd >= 0 else { return false }
+            close(fd)
+            return true
+        }
+        func release() { try? FileManager.default.removeItem(at: url) }
     }
 }
