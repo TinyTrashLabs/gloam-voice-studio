@@ -73,6 +73,18 @@ public struct VoiceLibrary: Sendable {
         self.directory = directory
     }
 
+    /// One folder per voice, its takes in `<voice>/variants/<key>/`. Every
+    /// read and write below resolves a slug through this, so a take address
+    /// (`nova-excited`) and a voice address (`nova`) both land in the right
+    /// folder — see `PackFolderLayout`.
+    public var layout: PackFolderLayout { PackFolderLayout(directory: directory) }
+
+    /// The folder `slug` lives in — a voice's own, or a take's inside its voice.
+    func folder(_ slug: String) throws -> URL {
+        guard let url = layout.folder(for: slug) else { throw StudioError.voiceNotFound(slug: slug) }
+        return url
+    }
+
     /// Save a new voice from reference audio, engine assets, or both.
     ///
     /// `refWav` is optional because a voice is not always a recording: a
@@ -127,7 +139,15 @@ public struct VoiceLibrary: Sendable {
                        engines: [String: [String: Data]] = [:],
                        notes: String? = nil) throws -> VoiceMeta {
         let safeSlug = try GVoice.safeComponent(slug)
-        let voiceDir = directory.appendingPathComponent(safeSlug)
+        let voiceDir: URL
+        if let base = variantOf, safeSlug.hasPrefix("\(base)-"), safeSlug.count > base.count + 1 {
+            // A take is written inside the voice that owns it, never beside it.
+            guard layout.locate(base) == .voice(base) else { throw StudioError.voiceNotFound(slug: base) }
+            let key = try GVoice.safeComponent(String(safeSlug.dropFirst(base.count + 1)))
+            voiceDir = layout.variantDir(base: base, key: key)
+        } else {
+            voiceDir = directory.appendingPathComponent(safeSlug)
+        }
         try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
         if let refWav { try ReferenceStandard.applied(to: refWav).write(to: voiceDir.appendingPathComponent("ref.wav")) }
         try writeEngines(engines, to: voiceDir)
@@ -146,7 +166,7 @@ public struct VoiceLibrary: Sendable {
     public func entry(_ slug: String) throws
         -> (meta: VoiceMeta, refURL: URL?, engines: [String: [String: URL]])
     {
-        let voiceDir = directory.appendingPathComponent(slug)
+        let voiceDir = try folder(slug)
         let metaURL = voiceDir.appendingPathComponent("meta.json")
         guard FileManager.default.fileExists(atPath: metaURL.path),
               let data = try? Data(contentsOf: metaURL),
@@ -223,28 +243,14 @@ public struct VoiceLibrary: Sendable {
         return nil
     }
 
-    /// Variant key -> library slug for `slug` and its "<slug>-<x>" siblings.
+    /// Variant key -> address for `slug` and the takes inside its folder.
     ///
-    /// Emotion variants live as sibling voices but belong to ONE identity, so a
-    /// pack must carry them together — export the base alone and the receiving
-    /// end silently loses the voice's emotional range.
-    ///
-    /// Membership is `meta.variantOf == slug`, not a slug-prefix guess: an
-    /// independently-named voice like "dj-nova" must never be swept into an
-    /// export of "dj" just because its slug happens to start with "dj-".
+    /// A voice's takes belong to ONE identity, so a pack carries them together.
+    /// Membership is the folder (`<slug>/variants/<key>/`), so an independently
+    /// named voice like "dj-nova" can never be swept into an export of "dj".
     public func variantSlugs(of slug: String) -> [String: String] {
         var found = ["base": slug]
-        let children = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil)) ?? []
-        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            let name = child.lastPathComponent
-            guard name.hasPrefix("\(slug)-"),
-                  let data = try? Data(contentsOf: child.appendingPathComponent("meta.json")),
-                  let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data),
-                  meta.variantOf == slug
-            else { continue }
-            found[String(name.dropFirst(slug.count + 1))] = name
-        }
+        for key in layout.variantKeys(of: slug) { found[key] = "\(slug)-\(key)" }
         return found
     }
 
@@ -263,10 +269,7 @@ public struct VoiceLibrary: Sendable {
     @discardableResult
     public func writeEngineAsset(_ slug: String, engine: String, file: String,
                                  data: Data) throws -> URL {
-        let voiceDir = directory.appendingPathComponent(try GVoice.safeComponent(slug))
-        guard FileManager.default.fileExists(
-            atPath: voiceDir.appendingPathComponent("meta.json").path)
-        else { throw StudioError.voiceNotFound(slug: slug) }
+        let voiceDir = try folder(try GVoice.safeComponent(slug))
         try writeEngines([engine: [file: data]], to: voiceDir)
         return voiceDir.appendingPathComponent("engines")
             .appendingPathComponent(engine).appendingPathComponent(file)
@@ -276,7 +279,8 @@ public struct VoiceLibrary: Sendable {
     /// derived rendition goes stale — a preset rebound to a different speaker
     /// invalidates the Dia2 clip baked from the old one.
     public func removeEngineAssets(_ slug: String, engine: String) throws {
-        let engineDir = directory.appendingPathComponent(try GVoice.safeComponent(slug))
+        guard let voiceDir = layout.folder(for: try GVoice.safeComponent(slug)) else { return }
+        let engineDir = voiceDir
             .appendingPathComponent("engines")
             .appendingPathComponent(try GVoice.safeComponent(engine))
         guard FileManager.default.fileExists(atPath: engineDir.path) else { return }
@@ -320,7 +324,7 @@ public struct VoiceLibrary: Sendable {
     }
 
     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
-        let voiceDir = directory.appendingPathComponent(slug)
+        let voiceDir = try folder(slug)
         let metaURL = voiceDir.appendingPathComponent("meta.json")
         let refURL = voiceDir.appendingPathComponent("ref.wav")
         guard FileManager.default.fileExists(atPath: metaURL.path),
@@ -331,26 +335,17 @@ public struct VoiceLibrary: Sendable {
         return (meta, refURL)
     }
 
+    /// Voices only — a take is never a row; ask `variantSlugs(of:)` for those.
     public func list() -> [VoiceMeta] {
-        guard let children = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil) else { return [] }
-        var metas: [VoiceMeta] = []
-        for child in children {
-            let metaURL = child.appendingPathComponent("meta.json")
-            guard let data = try? Data(contentsOf: metaURL),
-                  let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data)
-            else { continue }
-            metas.append(meta)
-        }
-        return metas.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        layout.voiceSlugs()
+            .compactMap { try? meta($0) }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
+    /// A voice goes with every take inside it; a take address removes just
+    /// that take.
     public func delete(_ slug: String) throws {
-        let voiceDir = directory.appendingPathComponent(slug)
-        guard FileManager.default.fileExists(atPath: voiceDir.path) else {
-            throw StudioError.voiceNotFound(slug: slug)
-        }
-        try FileManager.default.removeItem(at: voiceDir)
+        try FileManager.default.removeItem(at: try folder(slug))
     }
 
     /// Emotion suffixes tried in order when resolving a "<slug>-<emotion>"
@@ -376,18 +371,21 @@ public struct VoiceLibrary: Sendable {
         return try get(slug)
     }
 
-    /// Edit a stored voice in place. Renaming re-slugs (the directory moves);
-    /// acted `<slug>-<suffix>` variants move with it for the suffixes the
-    /// caller names (the library can't guess which hyphenated siblings are
-    /// variants vs. independent voices — "dj-nova" must survive a rename of
-    /// "dj"). Callers that re-slug must also migrate their own references
-    /// (chat conversations, selection) to the returned meta's slug.
+    /// Edit a stored voice in place. Renaming a voice re-slugs it (the folder
+    /// moves, its takes inside it) and re-points each take. `variantSuffixes`
+    /// is accepted for source compatibility and ignored: membership is the
+    /// folder now. Renaming a take changes only its display name. Callers that
+    /// re-slug must migrate their own references (chat, selection).
     public func update(_ slug: String, name: String? = nil,
                        refText: String? = nil, refWav: Data? = nil,
                        variantSuffixes: Set<String> = []) throws -> VoiceMeta {
         var meta = try self.meta(slug)
-        var voiceDir = directory.appendingPathComponent(slug)
-        if let name, name != meta.name {
+        var voiceDir = try folder(slug)
+        let isVoice = layout.locate(slug) == .voice(slug)
+        if let name, name != meta.name, !isVoice {
+            // A take keeps its address; only its display name changes.
+            meta.name = name
+        } else if let name, name != meta.name {
             let newSlug = try Slug.slugify(name)
             if newSlug != slug {
                 let target = directory.appendingPathComponent(newSlug)
@@ -396,17 +394,13 @@ public struct VoiceLibrary: Sendable {
                 }
                 try FileManager.default.moveItem(at: voiceDir, to: target)
                 voiceDir = target
-                for suffix in variantSuffixes {
-                    let oldDir = directory.appendingPathComponent("\(slug)-\(suffix)")
-                    let newDir = directory.appendingPathComponent("\(newSlug)-\(suffix)")
-                    guard FileManager.default.fileExists(atPath: oldDir.path),
-                          !FileManager.default.fileExists(atPath: newDir.path),
-                          var variantMeta = try? self.meta("\(slug)-\(suffix)")
-                    else { continue }
-                    try FileManager.default.moveItem(at: oldDir, to: newDir)
-                    variantMeta.slug = "\(newSlug)-\(suffix)"
-                    variantMeta.variantOf = newSlug
-                    try write(variantMeta, to: newDir)
+                // Takes live inside the folder and moved with it; re-point them.
+                for key in layout.variantKeys(of: newSlug) {
+                    let takeDir = layout.variantDir(base: newSlug, key: key)
+                    guard var takeMeta = try? self.meta("\(newSlug)-\(key)") else { continue }
+                    takeMeta.slug = "\(newSlug)-\(key)"
+                    takeMeta.variantOf = newSlug
+                    try write(takeMeta, to: takeDir)
                 }
             }
             meta.name = name
@@ -454,7 +448,7 @@ public struct VoiceLibrary: Sendable {
     public func setGain(_ slug: String, gainDb: Double?) throws -> VoiceMeta {
         var meta = try self.meta(slug)
         meta.gain = gainDb.map { max(-GVoice.maxGainDb, min(GVoice.maxGainDb, $0)) }
-        try write(meta, to: directory.appendingPathComponent(slug))
+        try write(meta, to: try folder(slug))
         return meta
     }
 
@@ -463,25 +457,21 @@ public struct VoiceLibrary: Sendable {
     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
         var meta = try self.meta(slug)
         meta.persona = persona
-        try write(meta, to: directory.appendingPathComponent(slug))
+        try write(meta, to: try folder(slug))
         return meta
     }
 
     public func avatarURL(_ slug: String) -> URL? {
-        let url = directory.appendingPathComponent(slug).appendingPathComponent("avatar.png")
+        guard let url = layout.folder(for: slug)?.appendingPathComponent("avatar.png") else { return nil }
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     public func saveAvatar(_ slug: String, pngData: Data) throws {
-        let voiceDir = directory.appendingPathComponent(slug)
-        guard FileManager.default.fileExists(atPath: voiceDir.path) else {
-            throw StudioError.voiceNotFound(slug: slug)
-        }
-        try pngData.write(to: voiceDir.appendingPathComponent("avatar.png"))
+        try pngData.write(to: try folder(slug).appendingPathComponent("avatar.png"))
     }
 
     public func removeAvatar(_ slug: String) throws {
-        let url = directory.appendingPathComponent(slug).appendingPathComponent("avatar.png")
+        guard let url = layout.folder(for: slug)?.appendingPathComponent("avatar.png") else { return }
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
@@ -505,3 +495,16 @@ public struct VoiceLibrary: Sendable {
 /// these exact signatures before the protocol existed. Extracting the format
 /// changed no macOS behaviour, which is the point.
 extension VoiceLibrary: GVoicePackStore {}
+
+extension VoiceLibrary {
+    /// Fold a library written in the old sibling layout into pack folders
+    /// (`LegacyVariantFold`). Backs the whole library up to
+    /// `<Voices>.pre-pack-folders` beside it before the first move. Returns how
+    /// many takes moved; 0 on an already-folded library.
+    @discardableResult
+    public func foldLegacyVariants(log: (String) -> Void) throws -> Int {
+        let backup = directory.deletingLastPathComponent()
+            .appendingPathComponent("\(directory.lastPathComponent).pre-pack-folders")
+        return try LegacyVariantFold.run(in: layout, backup: backup, log: log).count
+    }
+}

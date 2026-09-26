@@ -8,7 +8,7 @@ import Foundation
 /// that forgot to set it — carry nothing at all. So membership is decided by
 /// what the takes DO carry: `variantOf`, or a name built from the voice's name.
 /// Deliberately narrow: "Jo Smith" beside "Jo" must stay a voice, so the bare
-/// "<name> <word>" form only counts for a known take word.
+/// "<name> <word>" / "<name>-<word>" forms only count for a known take word.
 ///
 /// Never deletes. A take whose destination already exists is left where it
 /// is and logged. Idempotent: a folded library plans nothing.
@@ -44,6 +44,8 @@ public enum LegacyVariantFold {
         let rest = name.dropFirst(baseName.count).trimmingCharacters(in: .whitespaces)
         if rest.hasPrefix("("), rest.hasSuffix(")"), rest.count > 2 { return key }
         if takeWords.contains(rest) { return key }
+        // "<Base>-<word>": how RecordEmotionVariantSheet used to name a take.
+        if rest.hasPrefix("-"), takeWords.contains(String(rest.dropFirst())) { return key }
         return nil
     }
 

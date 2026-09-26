@@ -43,6 +43,13 @@ final class LegacyVariantFoldTests: XCTestCase {
         XCTAssertEqual(LegacyVariantFold.plan(in: layout).map(\.key), ["chill"])
     }
 
+    func testHyphenatedTakeNameFolds() throws {
+        // RecordEmotionVariantSheet named takes "<Base>-<emotion>".
+        try voice("dj-nova", "DJ Nova")
+        try voice("dj-nova-hype", "DJ Nova-hype")
+        XCTAssertEqual(LegacyVariantFold.plan(in: layout).map(\.key), ["hype"])
+    }
+
     func testVariantOfAloneFolds() throws {
         try voice("nova", "Nova")
         try voice("nova-odd", "Something else", variantOf: "nova")

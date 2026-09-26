@@ -81,8 +81,8 @@ final class VoiceCapabilitiesTests: XCTestCase {
         try lib.saveAt(slug: "billie-warm", name: "Billie warm", refWav: nil,
                        refText: "", variantOf: "billie",
                        engines: ["supertonic": ["style.json": Data([2])]])
-        XCTAssertTrue(lib.renditionStyleURL("billie-warm", engine: "supertonic")!.path
-            .contains("billie-warm/"))
+        let url = try XCTUnwrap(lib.renditionStyleURL("billie-warm", engine: "supertonic"))
+        XCTAssertEqual(try Data(contentsOf: url), Data([2]), "the take's own style, not its voice's")
     }
 
     // MARK: supports

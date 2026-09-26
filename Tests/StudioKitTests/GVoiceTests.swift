@@ -173,7 +173,7 @@ final class GVoiceTests: XCTestCase {
                        variantOf: "cruz")
         let pack = try GVoice.export("cruz", from: lib)
         try lib.delete("cruz")
-        try lib.delete("cruz-hype")
+        XCTAssertThrowsError(try lib.get("cruz-hype"), "a take goes with its voice")
         _ = try GVoice.import(pack, into: lib)
         XCTAssertEqual(try lib.resolve("cruz", emotion: .hype).meta.slug, "cruz-hype")
         XCTAssertEqual(try Data(contentsOf: try lib.get("cruz-hype").refURL), Data([2]))
