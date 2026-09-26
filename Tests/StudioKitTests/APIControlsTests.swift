@@ -642,4 +642,66 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             XCTAssertTrue(codes.contains(503), "expected at least one 503, got \(codes)")
         }
     }
+
+    // MARK: - Pack folders: /voices lists voices, speech finds takes
+
+    private func novaWithExcitedTake(_ tag: String) throws -> VoiceLibrary {
+        let voices = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(tag)-\(UUID())"))
+        _ = try voices.save(name: "Nova", refWav: Data([0, 1, 2]), refText: "nova ref")
+        try voices.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([3, 4, 5]),
+                          refText: "excited ref", variantOf: "nova")
+        return voices
+    }
+
+    func testVoicesListsEachVoiceOnceWithItsTakes() async throws {
+        let deps = APIDependencies(engine: GloamEngine(provider: CapturingProvider()),
+                                   voices: try novaWithExcitedTake("list"), defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/voices", method: .get) { resp in
+                XCTAssertEqual(resp.status, .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: resp.body)) as? [String: Any]
+                let rows = json?["voices"] as? [[String: Any]] ?? []
+                XCTAssertEqual(rows.compactMap { $0["slug"] as? String }, ["nova"])
+                XCTAssertEqual(rows.first?["variants"] as? [String], ["excited"])
+            }
+        }
+    }
+
+    func testSpeechEmotionAliasPicksTheTake() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try novaWithExcitedTake("alias"), defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"nova","emotion":"hype"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "excited ref")
+    }
+
+    func testATakeThatArrivesBeforeItsVoiceEndsUpInsideIt() async throws {
+        let voices = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("order-\(UUID())"))
+        let src = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("order-src-\(UUID())"))
+        let takePack = try GVoice.export(try src.save(name: "Nova (excited)", refWav: Data([2]), refText: "t").slug, from: src)
+        let voicePack = try GVoice.export(try src.save(name: "Nova", refWav: Data([1]), refText: "t").slug, from: src)
+        let deps = APIDependencies(engine: GloamEngine(provider: CapturingProvider()),
+                                   voices: voices, defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            for pack in [takePack, voicePack] {   // sync order: take first
+                let body = try JSONSerialization.data(withJSONObject: ["data": pack.base64EncodedString()])
+                try await client.execute(uri: "/voices/import", method: .post,
+                                         body: ByteBuffer(data: body)) { XCTAssertEqual($0.status, .ok) }
+            }
+        }
+        XCTAssertEqual(voices.list().map(\.slug), ["nova"])
+        XCTAssertEqual(voices.locate("nova-excited"), .variant(base: "nova", key: "excited"))
+    }
 }

@@ -145,15 +145,12 @@ struct RecordEmotionVariantSheet: View {
 
     private func saveTake(_ data: Data) {
         do {
-            let name = "\(baseName)-\(emotion.rawValue)"
-            // Re-record: overwrite the existing variant at its known slug.
-            if let slug = try? Slug.slugify(name), (try? model.voices.get(slug)) != nil {
-                _ = try model.voices.saveAt(slug: slug, name: name,
-                                            refWav: data, refText: RecordingScript.passage)
-            } else {
-                _ = try model.voices.save(name: name, refWav: data,
-                                          refText: RecordingScript.passage)
-            }
+            // The take goes inside its voice, at the same address whether it's
+            // new or a re-record (saveAt overwrites).
+            _ = try model.voices.saveAt(slug: "\(baseSlug)-\(emotion.rawValue)",
+                                        name: "\(baseName) (\(emotion.rawValue))",
+                                        refWav: data, refText: RecordingScript.passage,
+                                        variantOf: baseSlug)
             model.voicesVersion += 1
             onSaved()
             dismiss()

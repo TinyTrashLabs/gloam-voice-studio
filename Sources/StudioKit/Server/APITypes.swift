@@ -65,25 +65,31 @@ struct APIVoice: Codable, ResponseEncodable {
     let meta: VoiceMeta
     let hasSource: Bool
     let engines: [String]
+    /// The takes inside this voice's folder (`nova` → `["excited"]`), each
+    /// addressable as `"<slug>-<key>"`. Additive: older clients ignore it.
+    let variants: [String]
 
-    init(meta: VoiceMeta, capabilities: VoiceCapabilities) {
+    init(meta: VoiceMeta, capabilities: VoiceCapabilities, variants: [String] = []) {
         self.meta = meta
         self.hasSource = capabilities.hasSource
         self.engines = capabilities.engines.sorted()
+        self.variants = variants
     }
 
-    enum ExtraKeys: String, CodingKey { case hasSource, engines }
+    enum ExtraKeys: String, CodingKey { case hasSource, engines, variants }
     func encode(to encoder: Encoder) throws {
         try meta.encode(to: encoder)
         var c = encoder.container(keyedBy: ExtraKeys.self)
         try c.encode(hasSource, forKey: .hasSource)
         try c.encode(engines, forKey: .engines)
+        try c.encode(variants, forKey: .variants)
     }
     init(from decoder: Decoder) throws {
         meta = try VoiceMeta(from: decoder)
         let c = try decoder.container(keyedBy: ExtraKeys.self)
         hasSource = try c.decodeIfPresent(Bool.self, forKey: .hasSource) ?? false
         engines = try c.decodeIfPresent([String].self, forKey: .engines) ?? []
+        variants = try c.decodeIfPresent([String].self, forKey: .variants) ?? []
     }
 }
 

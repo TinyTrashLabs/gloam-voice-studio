@@ -108,4 +108,14 @@ final class Dia2AlignmentTests: XCTestCase {
             XCTAssertEqual(aligner.calls.value, 0)
         }
     }
+
+    func testATakesAlignmentLivesInsideItsVoice() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "hi")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "hey", variantOf: "nova")
+        let words = [AlignedWord(w: "hey", start: 0, end: 0.4)]
+        try Dia2Alignment.store(words, for: "nova-excited", in: lib)
+        XCTAssertEqual(Dia2Alignment.cached("nova-excited", in: lib), words)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lib.directory.appendingPathComponent("nova-excited").path),
+                       "no stray top-level folder")
+    }
 }

@@ -185,7 +185,8 @@ extension VoiceLibraryTests {
         let lib = VoiceLibrary(directory: FileManager.default.temporaryDirectory
             .appendingPathComponent("voicelib-rename-\(UUID().uuidString)"))
         _ = try lib.save(name: "DJ Nova", refWav: Data([1, 2]), refText: "hi")
-        _ = try lib.save(name: "dj-nova-hype", refWav: Data([3, 4]), refText: "hype hi")
+        try lib.saveAt(slug: "dj-nova-hype", name: "DJ Nova (hype)", refWav: Data([3, 4]),
+                       refText: "hype hi", variantOf: "dj-nova")
         // A hyphenated sibling that is NOT a variant must not be touched.
         _ = try lib.save(name: "dj-nova-two", refWav: Data([5, 6]), refText: "other")
 
@@ -196,5 +197,76 @@ extension VoiceLibraryTests {
         XCTAssertEqual((try? lib.get("roomba-hype"))?.meta.slug, "roomba-hype")
         XCTAssertNil(try? lib.get("dj-nova-hype"))
         XCTAssertNotNil(try? lib.get("dj-nova-two"), "non-variant sibling must be untouched")
+    }
+
+    // MARK: pack folders — a voice's takes live inside it
+
+    func testTakeLivesInsideItsVoiceAndIsNotListed() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]),
+                       refText: "", variantOf: "nova")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("nova/variants/excited/meta.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("nova-excited").path))
+        XCTAssertEqual(lib.list().map(\.slug), ["nova"])
+        XCTAssertEqual(try lib.get("nova-excited").meta.variantOf, "nova")
+        XCTAssertEqual(lib.variantSlugs(of: "nova"), ["base": "nova", "excited": "nova-excited"])
+    }
+
+    func testDeletingAVoiceDeletesItsTakes() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-warm", name: "Nova (warm)", refWav: Data([2]), refText: "", variantOf: "nova")
+        try lib.delete("nova")
+        XCTAssertThrowsError(try lib.get("nova-warm"))
+    }
+
+    func testDeletingATakeKeepsTheVoice() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-warm", name: "Nova (warm)", refWav: Data([2]), refText: "", variantOf: "nova")
+        try lib.delete("nova-warm")
+        XCTAssertNoThrow(try lib.get("nova"))
+        XCTAssertEqual(lib.variantSlugs(of: "nova"), ["base": "nova"])
+    }
+
+    func testRenameCarriesEveryTake() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-sigh", name: "Nova (sigh)", refWav: Data([2]), refText: "", variantOf: "nova")
+        _ = try lib.update("nova", name: "Vega")
+        let take = try lib.get("vega-sigh").meta
+        XCTAssertEqual(take.variantOf, "vega")
+        XCTAssertEqual(take.slug, "vega-sigh")
+    }
+
+    func testResolveEmotionAliasFindsTake() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "", variantOf: "nova")
+        XCTAssertEqual(try lib.resolve("nova", emotion: .hype).meta.slug, "nova-excited")
+    }
+
+    func testTakeGainFallsBackToItsVoice() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "", gain: 3)
+        try lib.saveAt(slug: "nova-warm", name: "Nova (warm)", refWav: Data([2]), refText: "", variantOf: "nova")
+        XCTAssertEqual(lib.gainDb(for: "nova-warm"), 3)
+    }
+
+    func testFoldLegacyVariantsMovesSiblingTakesAndBacksUp() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "")  // legacy: no variantOf
+        XCTAssertEqual(try lib.foldLegacyVariants(log: { _ in }), 1)
+        XCTAssertEqual(lib.list().map(\.slug), ["nova"])
+        let backup = dir.deletingLastPathComponent().appendingPathComponent("\(dir.lastPathComponent).pre-pack-folders")
+        defer { try? FileManager.default.removeItem(at: backup) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.appendingPathComponent("nova-excited").path))
+        XCTAssertEqual(try lib.foldLegacyVariants(log: { _ in }), 0)
+    }
+
+    func testANewVoiceCannotHideATakeAtTheSameAddress() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "", variantOf: "nova")
+        XCTAssertThrowsError(try lib.save(name: "Nova Excited", refWav: Data([3]), refText: "")) {
+            XCTAssertEqual($0 as? StudioError, .voiceExists(slug: "nova-excited"))
+        }
+        _ = try lib.save(name: "Other", refWav: Data([4]), refText: "")
+        XCTAssertThrowsError(try lib.update("other", name: "Nova Excited"))
     }
 }

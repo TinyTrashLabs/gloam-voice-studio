@@ -376,6 +376,7 @@ func usage() -> Never {
         "(ids: \(llmIDs))\n",
         "   or: spike bakeoff [outPath] [--dry]   ",
         "(default out ./bakeoff-results.md; --dry prints the plan, loads nothing)\n",
+        "   or: spike fold-voices --dir <Voices> [--dry]\n",
         "   or: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice> ",
         "[--ref-wav <path>] [--ref-text <text>|--ref-text-file <path>] [--strip-comment-lines] ",
         "[--engine <id>:<file>=<value>]... [--no-source]\n",
@@ -1030,6 +1031,27 @@ if CommandLine.arguments.dropFirst().first == "bakeoff" {
 // Follows docs/gvoice-format.md via the same library->export path proven in
 // GVoiceTests: build a throwaway VoiceLibrary in a temp dir, `saveAt` the
 // voice into it, GVoice.export it, write the Data, remove the temp dir.
+// `spike fold-voices --dir <Voices> [--dry]`: fold an old sibling-layout
+// voice library into pack folders (a voice's takes inside it). --dry prints
+// the plan and touches nothing. The app does this itself at launch; this is
+// for checking a library (or a copy of one) first.
+if CommandLine.arguments.dropFirst().first == "fold-voices" {
+    let sub = Array(CommandLine.arguments.dropFirst(2))
+    guard let i = sub.firstIndex(of: "--dir"), i + 1 < sub.count else {
+        die("usage: spike fold-voices --dir <Voices folder> [--dry]")
+    }
+    let lib = VoiceLibrary(directory: URL(fileURLWithPath: sub[i + 1]))
+    if sub.contains("--dry") {
+        let plan = LegacyVariantFold.plan(in: lib.layout)
+        for m in plan { print("\(m.folder) -> \(m.base)/variants/\(m.key)") }
+        print("\(plan.count) to fold")
+    } else {
+        let moved = try lib.foldLegacyVariants(log: { print($0) })
+        print("\(moved) folded")
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.dropFirst().first == "gvoice-build" {
     let sub = Array(CommandLine.arguments.dropFirst(2))
 

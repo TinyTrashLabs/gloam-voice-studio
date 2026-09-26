@@ -15,6 +15,11 @@ import Foundation
 /// conformance is empty -- which is the evidence the seam is in the right
 /// place. If a conformance here needs a body, the line has moved wrong.
 public protocol GVoicePackStore {
+    /// Where an address lives, for stores that keep one folder per voice
+    /// (`PackFolderLayout`). Import uses it to fold a standalone take pack into
+    /// the voice it belongs to. Stores without that notion get the default nil.
+    func locate(_ address: String) -> PackFolderLayout.Location?
+
     /// Everything on disk for one slug: its metadata, its source audio if any,
     /// and its per-engine assets as `engine id -> [filename: URL]`.
     func entry(_ slug: String) throws
@@ -48,4 +53,8 @@ public protocol GVoicePackStore {
     /// calls this after the base voice is saved; the bytes are already
     /// checked to be a PNG under `AvatarImage.maxBytes`.
     func saveAvatar(_ slug: String, pngData: Data) throws
+}
+
+public extension GVoicePackStore {
+    func locate(_ address: String) -> PackFolderLayout.Location? { nil }
 }

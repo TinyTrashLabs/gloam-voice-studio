@@ -207,9 +207,11 @@ public enum GVoice {
                 manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText)
             }
             let packHasSource = includeSource && entry.refURL != nil
-            for (engine, files) in entry.engines
+            // Sorted: dictionary order varies between runs, and it decides both
+            // the zip's entry order and each member list — byte-stable export.
+            for (engine, files) in entry.engines.sorted(by: { $0.key < $1.key })
             where Self.shareable(engine: engine, packHasSource: packHasSource) {
-                for (filename, url) in files {
+                for (filename, url) in files.sorted(by: { $0.key < $1.key }) {
                     let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
                     entries.append((member, try Data(contentsOf: url)))
                     manifest.engines?[engine, default: [:]][key, default: []].append(member)
@@ -229,7 +231,11 @@ public enum GVoice {
             entries.append((avatarMember, png))
             manifest.avatar = avatarMember
         }
-        return try makeArchive(entries: [("manifest.json", try JSONEncoder().encode(manifest))] + entries)
+        // Sorted keys: JSONEncoder's key order otherwise varies between runs,
+        // and the export must be byte-stable (see `entryDate`).
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try makeArchive(entries: [("manifest.json", try encoder.encode(manifest))] + entries)
     }
 
     /// "base" first, then the rest alphabetically. Written out rather than
@@ -348,6 +354,21 @@ public enum GVoice {
         guard baseRef != nil || !baseAssets.isEmpty else {
             throw StudioError.invalidArchive("archive has no base variant to install")
         }
+        // A standalone take pack — older builds exported and synced a take as
+        // its own voice, slug "<voice>-<key>". When that voice is here and the
+        // pack's name marks it as its take, it goes inside the voice. Already
+        // there: leave the bytes alone, so a sync client re-offering the same
+        // pack changes nothing (and re-uploads nothing).
+        if let slug = manifest.slug, keys.allSatisfy({ $0 == "base" }),
+           let (voice, key) = takeOwner(slug: slug, name: manifest.name, in: library) {
+            let address = "\(voice)-\(key)"
+            if case .variant? = library.locate(address) { return try library.entry(address).meta }
+            return try library.saveAt(slug: address, name: manifest.name, refWav: baseRef,
+                                      refText: sources["base"]?.text ?? "",
+                                      provenance: manifest.provenance, variantOf: voice,
+                                      engines: baseAssets, notes: nil)
+        }
+
         // Spelled out in full: a protocol requirement cannot carry default
         // arguments, so import states every field it means rather than
         // inheriting one store's idea of a default.
@@ -378,6 +399,24 @@ public enum GVoice {
         return baseMeta
     }
 
+    /// The voice (and take key) a standalone pack slugged `slug` and named
+    /// `name` is a take of, by the same rule `LegacyVariantFold` uses on disk.
+    private static func takeOwner(slug: String, name: String,
+                                  in library: some GVoicePackStore) -> (String, String)? {
+        let asMeta = VoiceMeta(name: name, slug: slug, refText: "", createdAt: "")
+        var cut = slug.endIndex
+        while let dash = slug[..<cut].lastIndex(of: "-") {
+            let voice = String(slug[..<dash])
+            if library.locate(voice) == .voice(voice),
+               let key = LegacyVariantFold.key(forFolder: slug, meta: asMeta,
+                                               baseMeta: try? library.entry(voice).meta, base: voice) {
+                return (voice, key)
+            }
+            cut = dash
+        }
+        return nil
+    }
+
     /// Strips a leading "./" (some writers emit pack-relative paths this way);
     /// zip member lookup is otherwise exact-match.
     private static func normalizeMember(_ path: String) -> String {
@@ -402,6 +441,9 @@ public enum GVoice {
         return name
     }
 
+    /// 1980-01-01, the DOS epoch — the earliest date a zip entry can hold.
+    static let entryDate = Date(timeIntervalSince1970: 315_532_800)
+
     static func makeArchive(entries: [(name: String, data: Data)]) throws -> Data {
         let archive = try Archive(data: Data(), accessMode: .create)
         for (name, data) in entries {
@@ -410,6 +452,10 @@ public enum GVoice {
                 with: name,
                 type: .file,
                 uncompressedSize: Int64(bytes.count),
+                // Fixed, not "now": sync clients hash the export to tell
+                // whether a voice changed, and a timestamp that moves every
+                // two seconds made every pack look changed on every cycle.
+                modificationDate: Self.entryDate,
                 compressionMethod: .deflate
             ) { position, size -> Data in
                 let start = Int(position)
