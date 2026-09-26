@@ -52,7 +52,40 @@ final class OverlapDetectingModel: SpeechModel, @unchecked Sendable {
     }
 }
 
+final class ChunkedFakeModel: SpeechModel, @unchecked Sendable {
+    let sampleRate = 24_000
+
+    func synthesize(_ request: ProviderRequest) async throws -> [Float] {
+        [0.1, 0.2, 0.3, 0.4]
+    }
+
+    func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield([0.1, 0.2])
+            continuation.yield([0.3, 0.4])
+            continuation.finish()
+        }
+    }
+}
+
 final class GloamEngineTests: XCTestCase {
+    func testSynthesisStreamPreservesProviderChunksAndSampleRate() async throws {
+        let provider = FakeProvider()
+        provider.models[.qwen06BMobile] = ChunkedFakeModel()
+        let engine = GloamEngine(provider: provider)
+
+        var chunks: [SynthesisChunk] = []
+        for try await chunk in await engine.synthesizeStream(
+            backend: .qwen06BMobile,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav"))
+        {
+            chunks.append(chunk)
+        }
+
+        XCTAssertEqual(chunks.map(\.samples), [[0.1, 0.2], [0.3, 0.4]])
+        XCTAssertEqual(chunks.map(\.sampleRate), [24_000, 24_000])
+    }
+
     func testFishWithoutAckThrows() async {
         let engine = GloamEngine(provider: FakeProvider())
         do {

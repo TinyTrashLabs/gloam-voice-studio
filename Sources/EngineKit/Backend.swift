@@ -7,6 +7,11 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     // Python engine's backend strings and are what persists, so reordering here
     // is safe for stored settings and .gvoice metadata.
     case qwen06B = "qwen3-0.6b"
+    /// The phone bake of 0.6B Base: a 4-bit/g64 talker text embedding and an F16
+    /// codec, shrunk by `scratch-mlx/shrink_qwen_mlx.py` in the iOS app. Ships at
+    /// one fixed precision, so it has no Precision picker (`availableQuants` is
+    /// empty) and its weights live in a bare folder.
+    case qwen06BMobile = "qwen3-0.6b-mobile"
     case qwen17B = "qwen3-1.7b"
     case qwenDesign = "qwen3-design"
     case qwenCustom = "qwen3-custom"
@@ -31,7 +36,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     /// store weights in quant-suffixed directories.
     public var isQwen: Bool {
         switch self {
-        case .qwen06B, .qwen17B, .qwenDesign, .qwenCustom: true
+        case .qwen06B, .qwen06BMobile, .qwen17B, .qwenDesign, .qwenCustom: true
         default: false
         }
     }
@@ -65,6 +70,7 @@ extension BackendID {
     public var qwenRepoBase: String? {
         switch self {
         case .qwen06B: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-"
+        case .qwen06BMobile: nil   // ours, fixed precision — see `spec.modelRepo`
         case .qwen17B: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-"
         case .qwenDesign: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-"
         case .qwenCustom: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-"
@@ -79,6 +85,16 @@ extension BackendID {
         return spec.modelRepo
     }
 
+    /// Precisions this backend can be downloaded at. Empty = it ships at one
+    /// fixed precision, so callers must hide the Precision picker entirely
+    /// (see `SettingsView.backendRow`) and `diskFolder` drops the `@quant`.
+    public var availableQuants: [QwenQuant] {
+        switch self {
+        case .qwen06BMobile: []            // one published bake, no choice to offer
+        default: isQwen ? QwenQuant.allCases : []
+        }
+    }
+
     /// On-disk folder name. Qwen embeds the quant so precisions coexist; Dia2
     /// embeds both size and quant (e.g. "dia2@2b-8bit") since it ships two sizes.
     /// dia2's folder encodes size as well as precision (`dia2@2b-8bit`), so a
@@ -87,7 +103,10 @@ extension BackendID {
     public func diskFolder(quantRaw: String?) -> String {
         switch self {
         case .dia2: "dia2@\(quantRaw ?? "2b-8bit")"
-        default: isQwen ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)" : rawValue
+        default:
+            isQwen && !availableQuants.isEmpty
+                ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)"
+                : rawValue
         }
     }
 }
@@ -265,7 +284,7 @@ extension BackendID {
 
     public var controls: ControlSurface {
         switch self {
-        case .qwen06B, .qwen17B:
+        case .qwen06B, .qwen06BMobile, .qwen17B:
             // Base is a voice-cloning model (text + reference audio). It does NOT
             // take a natural-language instruct — that's VoiceDesign/CustomVoice only.
             ControlSurface(voiceClone: .optional, instruct: .none,
@@ -334,7 +353,7 @@ extension BackendID {
     /// so their voices must keep working without one.
     public var needsRefText: Bool {
         switch self {
-        case .qwen06B, .qwen17B, .luxTTS: true
+        case .qwen06B, .qwen06BMobile, .qwen17B, .luxTTS: true
         case .dia2: false   // optional reference clip is prefix conditioning, not a transcript pair
         default: false
         }
@@ -345,7 +364,7 @@ extension BackendID {
     /// How this backend expresses emotion. See `EmotionMechanism`.
     public var emotionMechanism: EmotionMechanism {
         switch self {
-        case .qwen06B, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
+        case .qwen06B, .qwen06BMobile, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
         case .chatterbox: .liveKnob(.exaggeration)
@@ -377,6 +396,13 @@ extension BackendID {
         switch self {
         case .qwen06B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
+        case .qwen06BMobile:
+            // 885 MB on disk against 0.6B-8bit's 1.9 GB. Same 24 kHz clone model,
+            // so every capability above matches .qwen06B.
+            BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-4bit-mobile",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
@@ -416,15 +442,23 @@ extension BackendID {
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
         case .luxTTS:
-            // NOTE: unlike every other backend here, "YatharthS/LuxTTS" does NOT
-            // ship MLX-native weights — it's the torch/ONNX source of truth.
-            // LuxSpeechModel's loadModel must run the LuxTTS/convert_weights.py
-            // key-remap (weight-norm fold, conv-layout transpose) once and cache
-            // the result locally rather than handing this repo id to
-            // mlx-audio-swift's generic HF downloader like the other cases do.
-            // Total weights ~560MB fp32 (477.5MB decoder + 17.6MB encoder +
-            // ~64MB vocoder) — far lighter than the other backends.
-            BackendSpec(modelRepo: "YatharthS/LuxTTS",
+            // This used to point at "YatharthS/LuxTTS", which ships torch and
+            // ONNX but no MLX-native weights — so `directory(for:)` filled with
+            // model.pt and .onnx files, LuxSpeechModel.load went looking for
+            // lux_model.safetensors, found nothing, and every shipped Mac build
+            // threw "lux-tts weights are not installed — this model is not
+            // downloadable in-app". It only worked on machines where someone
+            // had run LuxTTS/convert_weights.py by hand and left the result in
+            // the group container.
+            //
+            // tinytrashlabs/LuxTTS-mlx is that conversion, published once
+            // (Apache-2.0, inherited from upstream), so the generic HF
+            // downloader can do what it does for every other backend. ~529 MB
+            // fp32: 468 MB model + 61 MB vocoder, plus config.json and
+            // tokens.txt. fp32 on purpose — fp16 is indistinguishable on a long
+            // clean reference and audibly worse on a short phone recording,
+            // which is the case that matters for cloning.
+            BackendSpec(modelRepo: "tinytrashlabs/LuxTTS-mlx",
                         defaultSampleRate: 48000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 2_000_000_000)
@@ -493,7 +527,7 @@ extension BackendID {
     /// order in the enum IS presentation order. Curated lists are gone.
     public var surfaces: BackendSurfaces {
         switch self {
-        case .qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox:
+        case .qwen06B, .qwen06BMobile, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox:
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .qwenDesign:
             // Creation-only: it needs a typed Direction per line, so it can

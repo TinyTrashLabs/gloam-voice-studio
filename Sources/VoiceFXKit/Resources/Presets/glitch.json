@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "glitch",
+  "highpassHz": 180,
+  "lowpassHz": 6500,
+  "pitch": { "transposeSemitones": -2, "formantSemitones": 2, "formantBaseHz": 200 },
+  "ringMod": { "frequencyHz": 140, "mix": 0.55 },
+  "drive": { "preGain": 1.8, "postGain": 0.6, "shape1": 0.0, "shape2": 0.0 },
+  "bitCrush": { "bitDepth": 6, "targetRateHz": 8000 },
+  "dcBlock": true,
+  "reverb": { "feedback": 0.55, "lowpassHz": 4000, "mix": 0.15 },
+  "limiter": { "ceiling": 0.95, "releaseSeconds": 0.03 }
+}

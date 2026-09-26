@@ -39,6 +39,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
 | `response_format` | string | Only `wav` |
+| `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
 Backend gating errors are 400s (e.g. `qwen3-design requires 'instruct'`).
 Fish returns `403` with the license notice until acknowledged in-app.

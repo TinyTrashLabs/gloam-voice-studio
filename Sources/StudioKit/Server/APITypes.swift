@@ -1,6 +1,7 @@
 import EngineKit
 import Foundation
 import Hummingbird
+import VoiceFXKit
 
 /// Mirrors backends.FISH_NOTICE in the Python engine — served on 403s.
 public let fishLicenseNotice =
@@ -113,6 +114,40 @@ struct ListenRequest: Codable {
 
 struct TranscriptResponse: Codable, ResponseEncodable { let text: String }
 
+
+/// `fx` accepts either a built-in preset name ("demon") or a full inline
+/// preset object, so a controller can drive parameters live without
+/// registering a preset first.
+enum FXSelector: Codable {
+    case named(String)
+    case inline(FXPreset)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let name = try? container.decode(String.self) {
+            self = .named(name)
+        } else {
+            self = .inline(try container.decode(FXPreset.self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .named(let name): try container.encode(name)
+        case .inline(let preset): try container.encode(preset)
+        }
+    }
+
+    /// Resolves to a preset, or nil for an unknown built-in name.
+    var preset: FXPreset? {
+        switch self {
+        case .named(let name): return FXPreset.builtIn(named: name)
+        case .inline(let preset): return preset
+        }
+    }
+}
+
 struct SpeechRequest: Codable {
     let input: String
     let model: String?
@@ -137,6 +172,10 @@ struct SpeechRequest: Codable {
     let top_k: Int?
     let repetition_penalty: Float?
     let response_format: String?
+    /// Character-voice effects. Either a built-in name ("demon", "glitch",
+    /// "whisper") or an inline preset object. Absent = unprocessed audio, so
+    /// the endpoint stays OpenAI-compatible for clients that never send it.
+    let fx: FXSelector?
 }
 
 /// Thrown by the default STT closures when the server was built without a

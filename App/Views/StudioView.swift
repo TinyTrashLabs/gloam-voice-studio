@@ -596,7 +596,7 @@ struct StudioView: View {
     /// so the available controls make sense for the selected model.
     private func directExplainer(_ b: BackendID) -> String {
         switch b {
-        case .qwen06B, .qwen17B:
+        case .qwen06B, .qwen06BMobile, .qwen17B:
             "Clones a voice from a reference clip — pick one above. (To steer delivery with words, use qwen3-design or qwen3-custom instead.)"
         case .qwenDesign:
             "Invent a brand-new voice purely from your description — there's no voice to pick or clone."

@@ -16,9 +16,10 @@ struct LabView: View {
     // A computed accessor rather than a stored `let`: keeps the @Observable
     // reads inside `body`, and sidesteps any main-actor stored-init concern.
     private var store: LabStore { LabStore.shared }
-    // Which groups are collapsed. Held here (not in the card) so it survives the
-    // frequent store-driven re-renders as marks/comments come and go.
-    @State private var collapsed: Set<String> = []
+    // Which groups are open. Held here (not in the card) so it survives the
+    // frequent store-driven re-renders as marks/comments come and go. Every
+    // group starts collapsed, including ones that arrive while the Lab is up.
+    @State private var expansion = LabExpansion()
 
     var body: some View {
         ScrollView {
@@ -30,11 +31,8 @@ struct LabView: View {
                     ForEach(store.state.groups) { group in
                         LabGroupCard(
                             group: group,
-                            isCollapsed: collapsed.contains(group.id),
-                            toggleCollapsed: {
-                                if collapsed.contains(group.id) { collapsed.remove(group.id) }
-                                else { collapsed.insert(group.id) }
-                            })
+                            isCollapsed: expansion.isCollapsed(group.id),
+                            toggleCollapsed: { expansion.toggle(group.id) })
                     }
                 }
             }
@@ -58,10 +56,17 @@ struct LabView: View {
                     .foregroundStyle(Brand.fg)
             }
             Spacer()
+            if !store.state.groups.isEmpty {
+                Button("Expand all") { expansion.expandAll(store.state.groups.map(\.id)) }
+                    .accessibilityIdentifier("lab-expand-all")
+                Button("Collapse all") { expansion.collapseAll() }
+                    .accessibilityIdentifier("lab-collapse-all")
+            }
             Button {
                 // An empty comparison to drop clips into. Heading and "listen
-                // for" are edited in place once it exists.
-                store.setGroup(heading: "Untitled comparison")
+                // for" are edited in place once it exists — so it opens.
+                let group = store.setGroup(heading: "Untitled comparison")
+                expansion.expand(group.id)
             } label: {
                 Label("New comparison", systemImage: "plus")
             }

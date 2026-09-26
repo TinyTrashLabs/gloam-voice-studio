@@ -23,6 +23,10 @@ public final class MLXLanguageModelProvider: LanguageModelProviding, @unchecked 
 
     public func loadModel(backend: LLMBackendID) async throws -> any LanguageModel {
         let dir = modelDirectoryResolver(backend)
+        guard isModelDownloaded(folder: dir.lastPathComponent,
+                                in: dir.deletingLastPathComponent()) else {
+            throw LanguageModelProviderError.modelNotDownloaded(backend)
+        }
 
         // Mixture-of-Experts Gemma-4 (e.g. gemma-4-26b-a4b) ships as a
         // `Gemma4ForConditionalGeneration`. Its MoE text stack — `num_experts`,

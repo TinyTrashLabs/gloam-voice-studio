@@ -1,5 +1,18 @@
 import Foundation
 
+public enum LanguageModelProviderError: Error, Equatable, Sendable {
+    case modelNotDownloaded(LLMBackendID)
+}
+
+extension LanguageModelProviderError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .modelNotDownloaded(let backend):
+            "\(backend.rawValue) is not downloaded"
+        }
+    }
+}
+
 public enum ChatRole: String, Sendable, Codable {
     case system, user, assistant, tool
 }
