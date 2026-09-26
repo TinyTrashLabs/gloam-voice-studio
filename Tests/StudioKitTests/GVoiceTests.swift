@@ -498,4 +498,48 @@ final class GVoiceTests: XCTestCase {
         XCTAssertNil(meta.pace)
         XCTAssertNil(meta.enginePace)
     }
+
+    // MARK: standalone take packs (older builds exported takes as voices)
+
+    private func standalonePack(name: String, ref: Data) throws -> Data {
+        let other = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("gvoice-other-\(UUID().uuidString)"))
+        defer { try? FileManager.default.removeItem(at: other.directory) }
+        let meta = try other.save(name: name, refWav: ref, refText: "t")
+        return try GVoice.export(meta.slug, from: other)
+    }
+
+    func testImportOfStandaloneTakePackFoldsIntoExistingVoice() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        let meta = try GVoice.import(try standalonePack(name: "Nova (excited)", ref: Data([2])), into: lib)
+        XCTAssertEqual(meta.slug, "nova-excited")
+        XCTAssertEqual(lib.list().map(\.slug), ["nova"])
+        XCTAssertEqual(try lib.get("nova-excited").meta.variantOf, "nova")
+    }
+
+    func testReimportOfFoldedTakeLeavesTheVoicePackUnchanged() throws {
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        let pack = try standalonePack(name: "Nova (excited)", ref: Data([2]))
+        _ = try GVoice.import(pack, into: lib)
+        let before = try GVoice.export("nova", from: lib)
+        let again = try GVoice.import(pack, into: lib)
+        XCTAssertEqual(again.slug, "nova-excited")
+        XCTAssertEqual(try GVoice.export("nova", from: lib), before)
+    }
+
+    func testImportOfUnrelatedHyphenatedVoiceStaysAVoice() throws {
+        _ = try lib.save(name: "Jo", refWav: Data([1]), refText: "")
+        let meta = try GVoice.import(try standalonePack(name: "Jo Smith", ref: Data([2])), into: lib)
+        XCTAssertEqual(meta.slug, "jo-smith")
+        XCTAssertEqual(Set(lib.list().map(\.slug)), ["jo", "jo-smith"])
+    }
+
+    func testExportIsByteForByteDeterministic() throws {
+        // Sync clients hash the export to decide whether a voice changed; a
+        // pack that differs only by zip timestamps re-uploads every cycle.
+        _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
+        let first = try GVoice.export("nova", from: lib)
+        Thread.sleep(forTimeInterval: 2.1)   // DOS timestamps tick every 2 s
+        XCTAssertEqual(try GVoice.export("nova", from: lib), first)
+    }
 }

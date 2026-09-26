@@ -79,6 +79,8 @@ public struct VoiceLibrary: Sendable {
     /// folder — see `PackFolderLayout`.
     public var layout: PackFolderLayout { PackFolderLayout(directory: directory) }
 
+    public func locate(_ address: String) -> PackFolderLayout.Location? { layout.locate(address) }
+
     /// The folder `slug` lives in — a voice's own, or a take's inside its voice.
     func folder(_ slug: String) throws -> URL {
         guard let url = layout.folder(for: slug) else { throw StudioError.voiceNotFound(slug: slug) }
