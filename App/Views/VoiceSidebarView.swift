@@ -306,7 +306,7 @@ struct VoiceSidebarView: View {
     /// Open a voice in the Create Voice page's Edit mode (full page, not the modal
     /// sheet). A variant has no page of its own — it opens its base, where it's managed.
     private func openEdit(_ slug: String) {
-        model.editingVoiceSlug = voiceBaseSlug(for: slug, in: voiceList) ?? slug
+        model.editingVoiceSlug = voiceBaseSlug(for: slug, in: model.voices) ?? slug
         sectionRaw = StudioSection.createVoice.rawValue
     }
 

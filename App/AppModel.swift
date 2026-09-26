@@ -473,7 +473,7 @@ final class AppModel {
     /// on every redraw of a list that redraws constantly while scrolling.
     var groupedVoiceList: [(base: VoiceMeta, variants: [VoiceMeta])] {
         if let cached = groupedCache, cached.version == voicesVersion { return cached.groups }
-        let groups = groupedVoices(voiceList)
+        let groups = groupedVoices(voiceList, library: voices)
         groupedCache = (voicesVersion, groups)
         return groups
     }
@@ -661,6 +661,13 @@ final class AppModel {
         let historyDir = uiTest ? UITestMode.tempRoot.appendingPathComponent("History")
                                 : StoragePaths.history
         voices = VoiceLibrary(directory: voicesDir)
+        // Older libraries kept a voice's takes as sibling folders; move them
+        // inside their voice once (the library backs itself up first).
+        do {
+            try voices.foldLegacyVariants(log: { NSLog("[voices] %@", $0) })
+        } catch {
+            NSLog("[voices] fold failed: %@", String(describing: error))
+        }
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
@@ -1145,10 +1152,8 @@ final class AppModel {
     @discardableResult
     func updateVoice(_ slug: String, name: String? = nil,
                      refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
-        let suffixes = Set(VoiceExpression.allCases.map(\.rawValue)
-            + Emotion.allCases.map(\.rawValue))
-        let meta = try voices.update(slug, name: name, refText: refText,
-                                     refWav: refWav, variantSuffixes: suffixes)
+        // Takes live inside the voice's folder and move with it.
+        let meta = try voices.update(slug, name: name, refText: refText, refWav: refWav)
         if meta.slug != slug {
             chat.voiceRenamed(from: slug, to: meta.slug)
             if selectedVoiceSlug == slug { selectedVoiceSlug = meta.slug }
@@ -1812,7 +1817,8 @@ final class AppModel {
                 let samples = AudioAssembler.normalizePeak(floats: raw.samples)
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
                 try voices.saveAt(slug: "\(baseSlug)-\(expr.rawValue)",
-                                  name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text)
+                                  name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text,
+                                  variantOf: baseSlug)
                 await refreshEngineStatus()   // model resident now — update the RAM chip
             } catch {
                 foundryError = "Generation failed for \(expr.label): \(describeAny(error))"

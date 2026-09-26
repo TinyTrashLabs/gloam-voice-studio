@@ -1,47 +1,22 @@
 import EngineKit
 import StudioKit
 
-/// Suffixes that mark a `<base>-<emotion>` acted variant — the current Fish
-/// expression set plus the legacy `Emotion` names, so old variants still collapse.
-private let voiceVariantSuffixes = Set(
-    VoiceExpression.allCases.map { $0.rawValue } + Emotion.allCases.map { $0.rawValue })
-
-/// The base voice a slug belongs to, if it's an acted `<base>-<emotion>` variant of
-/// some other voice present in `all`. Shared by the sidebar (edit routing) and the
-/// Direct-pane VOICE popover (grouped rendering).
-func voiceBaseSlug(for slug: String, in all: [VoiceMeta]) -> String? {
-    voiceBaseSlug(for: slug, knownSlugs: Set(all.map { $0.slug }))
-}
-
-/// The same question asked with the slug set already built.
-///
-/// `groupedVoices` asks it once per voice, and building the set inside made
-/// grouping quadratic — with the grouping itself running inside a view body,
-/// that cost showed up on every redraw of the sidebar.
-func voiceBaseSlug(for slug: String, knownSlugs: Set<String>) -> String? {
-    for suffix in voiceVariantSuffixes where slug.hasSuffix("-\(suffix)") {
-        let base = String(slug.dropLast(suffix.count + 1))
-        if !base.isEmpty && knownSlugs.contains(base) { return base }
-    }
+/// The voice a take address belongs to (`nova-excited` → `nova`), or nil for a
+/// voice. Takes live inside their voice's folder, so this is a lookup, not a
+/// guess from the slug. Shared by the sidebar (edit routing) and the
+/// Direct-pane VOICE popover.
+func voiceBaseSlug(for slug: String, in library: VoiceLibrary) -> String? {
+    if case .variant(let base, _)? = library.locate(slug) { return base }
     return nil
 }
 
-/// Base voices, each with its acted `<slug>-<emotion>` variants folded under it. A
-/// voice is only a variant when its slug is `<base>-<emotion>` AND `<base>` exists —
-/// so a hyphenated name like `sam-elliott` stays its own base voice. Shared by the
-/// sidebar and the Direct-pane VOICE popover so both group identically.
-func groupedVoices(_ all: [VoiceMeta]) -> [(base: VoiceMeta, variants: [VoiceMeta])] {
-    var variantsByBase: [String: [VoiceMeta]] = [:]
-    var bases: [VoiceMeta] = []
-    let knownSlugs = Set(all.map { $0.slug })
-    for meta in all {
-        if let base = voiceBaseSlug(for: meta.slug, knownSlugs: knownSlugs) {
-            variantsByBase[base, default: []].append(meta)
-        } else {
-            bases.append(meta)
-        }
-    }
-    return bases.map { base in
-        (base, (variantsByBase[base.slug] ?? []).sorted { $0.slug < $1.slug })
+/// Each voice with the takes inside its folder. `all` is the library's voice
+/// list (voices only); the takes come from the folder, so a voice named
+/// `sam-elliott` beside `sam` can never be mistaken for a take.
+func groupedVoices(_ all: [VoiceMeta], library: VoiceLibrary) -> [(base: VoiceMeta, variants: [VoiceMeta])] {
+    all.map { base in
+        let takes = library.layout.variantKeys(of: base.slug)
+            .compactMap { try? library.meta("\(base.slug)-\($0)") }
+        return (base, takes)
     }
 }
