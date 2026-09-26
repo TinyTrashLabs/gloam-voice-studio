@@ -164,6 +164,17 @@ public struct SynthesisResult: Sendable {
     }
 }
 
+/// One independently playable piece of a streamed synthesis result.
+public struct SynthesisChunk: Sendable {
+    public let samples: [Float]
+    public let sampleRate: Int
+
+    public init(samples: [Float], sampleRate: Int) {
+        self.samples = samples
+        self.sampleRate = sampleRate
+    }
+}
+
 public enum EngineError: Error, Equatable, Sendable {
     case licenseAckRequired(BackendID)
     case refAudioRequired(BackendID)

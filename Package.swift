@@ -67,9 +67,11 @@ let package = Package(
         // and the hybrid fused decoder step (Qwen3TTSModel.fusedLayers) that
         // put Qwen3-TTS 0.6B at real time on the iPhone 15 Pro. All behind
         // statics that default off, so the Mac app is unchanged.
+        // a206f70 (2026-09-26) adds the 8-bit fused step,
+        // frame pipelining and the async-decode silence-stop fix.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "ddb122b0d65aff992b9227944c764a4f7c4e4057"),
+            revision: "a206f703540cb326d97f65669daeee947a6b793f"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

@@ -169,11 +169,11 @@ struct BackendsSettings: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(backend.rawValue)
                 Text(sizeLabel(backend)).font(.caption).foregroundStyle(.secondary)
-                if backend.isQwen {
+                if !backend.availableQuants.isEmpty {
                     Picker("Precision", selection: Binding(
                         get: { model.downloads.quant(for: backend) },
                         set: { model.downloads.setQuant($0, for: backend) })) {
-                        ForEach(QwenQuant.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        ForEach(backend.availableQuants, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()

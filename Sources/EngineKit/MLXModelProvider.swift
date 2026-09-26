@@ -87,6 +87,9 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
             return try PocketSpeechModel.load(from: URL(fileURLWithPath: localPath))
         }
         let source = modelPathResolver?(backend) ?? backend.spec.modelRepo
+        // Statics on the model class, so they must land before the first
+        // generate — and the fork defaults them all off. See QwenRuntimeTuning.
+        if backend.isQwen { QwenRuntimeTuning.apply() }
         let model = try await TTS.loadModel(modelRepo: source)
         // Dia2 goes through the same loader — it is registered in the fork's
         // TTS factory — but needs the dialogue-capable adapter rather than the
@@ -154,6 +157,12 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         return audio
     }
 
+    /// Seconds of audio per streamed codec-decode chunk. iOS defaults to 1.0
+    /// (halves both the transient allocation and the first-audio wait); the
+    /// package default is 2.0. Also the granularity of the trailing-silence
+    /// stop, which only runs on this path.
+    static let qwenStreamingInterval: Double = 1.0
+
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         do {
             var refAudio: MLXArray?
@@ -184,6 +193,39 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                     instruct: request.instruct,
                     language: request.language,
                     generationParameters: params)
+            } else if backend.isQwen, let qwen = model as? Qwen3TTSModel {
+                // Qwen decodes its codec in `streamingInterval`-sized pieces on
+                // this path instead of one pass over every code.
+                //
+                // Throughput is NOT the reason (measured: no gain — the decode
+                // work is identical, only its shape changes). Two things are:
+                //
+                // 1. `trailingSilenceStopSeconds` — the backstop for the ~1 in
+                //    20 renders that miss the end-of-speech token and run to the
+                //    token cap trailing ~5-6 s of hiss — is checked ONLY inside
+                //    the streaming branch of `Qwen3TTS.generate` (`if let
+                //    onAudioChunk`). On the one-shot path it is armed and dead.
+                // 2. First audio arrives after one chunk rather than the whole
+                //    line, which is what a caller that plays incrementally needs.
+                //
+                // `synthesize` still returns one finished buffer, so no caller
+                // changes today; the chunks are the engine's business.
+                var streamed: [Float] = []
+                let stream = qwen.generateStream(
+                    text: request.text,
+                    voice: request.instruct,
+                    refAudio: refAudio,
+                    refText: request.refText,
+                    language: request.language,
+                    generationParameters: params,
+                    streamingInterval: Self.qwenStreamingInterval)
+                for try await event in stream {
+                    // The streaming path ends with a 1-sample placeholder.
+                    guard case .audio(let chunk) = event, chunk.size > 1 else { continue }
+                    streamed.append(contentsOf: chunk.asArray(Float.self))
+                }
+                Memory.clearCache()
+                return streamed
             } else {
                 // Base/VoiceDesign/Fish/Chatterbox. For Qwen, `voice:` carries the
                 // instruct (honored only on the no-ref path — planner already enforced this).

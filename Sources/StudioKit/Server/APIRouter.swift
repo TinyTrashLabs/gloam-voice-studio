@@ -146,12 +146,26 @@ public enum APIRouter {
             guard let backend = req.model.flatMap(LLMBackendID.init(rawValue:)) ?? deps.defaultLLM else {
                 throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
             }
-            let chatReq = req.toChatRequest()
+            let chatReq: ChatRequest
+            let temporaryImages: [URL]
+            do {
+                (chatReq, temporaryImages) = try req.toChatRequest()
+            } catch let bad as ChatCompletionRequest.BadImage {
+                throw APIError(status: .badRequest, detail: bad.description)
+            }
+            defer {
+                // A streamed reply owns its temp images until the stream ends.
+                if req.stream != true { temporaryImages.forEach { try? FileManager.default.removeItem(at: $0) } }
+            }
             guard !chatReq.messages.isEmpty else {
                 throw APIError(status: .badRequest, detail: "messages is empty")
             }
             guard chatReq.messages.contains(where: { $0.role == .user }) else {
                 throw APIError(status: .badRequest, detail: "no user message")
+            }
+            if req.stream == true {
+                return try streamedChatCompletion(backend: backend, request: chatReq,
+                                                  temporaryImages: temporaryImages, start: start, deps: deps)
             }
             do {
                 // Utility-priority hop: model work must not outrank the host
@@ -179,6 +193,10 @@ public enum APIRouter {
                 throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
             } catch EngineError.languageProviderUnavailable {
                 throw APIError(status: .serviceUnavailable, detail: "no on-device LLM configured")
+            } catch LanguageModelProviderError.modelNotDownloaded(let missing) {
+                throw APIError(
+                    status: .serviceUnavailable,
+                    detail: "\(missing.rawValue) is not downloaded — download it in Gloam Voice Studio first")
             } catch {
                 // Catch-ALL. Previously only `EngineError` was caught, so a raw
                 // MLX/model-load error (NOT an EngineError) fell through to
@@ -379,7 +397,10 @@ public enum APIRouter {
                     result = try await Task(priority: GloamEngine.modelWorkPriority) {
                         try await deps.gate.run {
                             await deps.prepareTTS()
-                            return try await deps.engine.synthesize(
+                            // Interleaved: with a chat stream in flight this runs
+                            // between its deltas (speak-while-generating); with
+                            // none it is exactly `synthesize`.
+                            return try await deps.engine.synthesizeInterleaved(
                                 backend: backend,
                                 request: SynthesisRequest(
                                     text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
@@ -761,4 +782,56 @@ private func streamingWAVResponse(session: any DialogueStreaming,
             }
             try await writer.finish(nil)
         })
+}
+
+/// `stream: true` on /v1/chat/completions: server-sent events straight off
+/// `GloamEngine.chatStream`, so the first sentence can be spoken while the
+/// model is still writing (the Furby app's heard→first-audio was dominated by
+/// waiting for the whole reply, 2026-09-18). The stream does NOT hold the
+/// request gate: a speech request arriving mid-stream must run between
+/// deltas (`synthesizeInterleaved` — the speech route uses it), which the
+/// engine's own task chain serialises; holding the gate here would park that
+/// request until the reply was complete and defeat the point.
+private func streamedChatCompletion(backend: LLMBackendID, request: ChatRequest,
+                                    temporaryImages: [URL], start: Date,
+                                    deps: APIDependencies) throws -> Response {
+    let model = backend.rawValue
+    let (frames, continuation) = AsyncThrowingStream<ByteBuffer, Error>.makeStream()
+    let work = Task(priority: GloamEngine.modelWorkPriority) {
+        defer { temporaryImages.forEach { try? FileManager.default.removeItem(at: $0) } }
+        var completionTokens = 0
+        do {
+            var first = true
+            for try await event in await deps.engine.chatStream(backend: backend, request: request) {
+                switch event {
+                case .delta(let text):
+                    guard !text.isEmpty else { continue }
+                    continuation.yield(ByteBuffer(string: try ChatCompletionChunk.delta(model: model, text: text, first: first).sseFrame()))
+                    first = false
+                case .finished(let result):
+                    completionTokens = result.usage.completionTokens
+                    continuation.yield(ByteBuffer(string: try ChatCompletionChunk.stop(
+                        model: model, promptTokens: result.usage.promptTokens,
+                        completionTokens: result.usage.completionTokens).sseFrame()))
+                }
+            }
+            continuation.yield(ByteBuffer(string: "data: [DONE]\n\n"))
+            deps.log.record(.init(
+                method: "POST", path: "/v1/chat/completions", status: 200,
+                model: model, voice: nil, instruct: "stream",
+                durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+            continuation.finish()
+        } catch {
+            // Headers are already out, so the failure travels in-band.
+            let detail = "chat failed for \(model): \(error)"
+            APIRouter.logError("\(detail) (stream, \(completionTokens) tokens out)")
+            let payload = (try? JSONSerialization.data(withJSONObject: ["error": ["message": detail]])) ?? Data()
+            continuation.yield(ByteBuffer(string: "data: " + String(decoding: payload, as: UTF8.self) + "\n\n"))
+            continuation.finish()
+        }
+    }
+    continuation.onTermination = { _ in work.cancel() }
+    return Response(status: .ok,
+                    headers: [.contentType: "text/event-stream", .cacheControl: "no-cache"],
+                    body: .init(asyncSequence: frames))
 }

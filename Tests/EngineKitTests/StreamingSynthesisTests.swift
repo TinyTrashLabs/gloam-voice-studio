@@ -39,4 +39,16 @@ final class StreamingSynthesisTests: XCTestCase {
         }
         XCTAssertEqual(chunks, [[1, 2], [3, 4]])
     }
+
+    /// Gloam stores loaded models behind `any SpeechModel`. If streaming is
+    /// only an extension method, Swift statically selects the one-shot default
+    /// and silently discards a concrete model's incremental implementation.
+    func testStreamingOverrideDispatchesThroughSpeechModelExistential() async throws {
+        let model: any SpeechModel = ChunkedModel()
+        var chunks: [[Float]] = []
+        for try await chunk in model.synthesizeStream(ProviderRequest(text: "hi")) {
+            chunks.append(chunk)
+        }
+        XCTAssertEqual(chunks, [[1, 2], [3, 4]])
+    }
 }

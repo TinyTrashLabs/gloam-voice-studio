@@ -76,4 +76,63 @@ final class ChatRouteTests: XCTestCase, @unchecked Sendable {
         }
         try? FileManager.default.removeItem(at: dir)
     }
+
+    func testChatCompletionForModelWithoutWeightsIsServiceUnavailable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat-missing-weights-\(UUID().uuidString)")
+        let modelDir = root.appendingPathComponent(LLMBackendID.gemma4_26b.diskFolder)
+        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: modelDir.appendingPathComponent("config.json"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let languageProvider = MLXLanguageModelProvider { backend in
+            root.appendingPathComponent(backend.diskFolder)
+        }
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: FakeProvider(), languageProvider: languageProvider),
+            voices: VoiceLibrary(directory: root.appendingPathComponent("voices")),
+            defaultBackend: .chatterboxTurbo,
+            defaultLLM: .qwen3_1_7b)
+        let app = Application(router: APIRouter.build(deps))
+        let body = ByteBuffer(string: #"{"model":"gemma4-26b","messages":[{"role":"user","content":"hi"}]}"#)
+
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/v1/chat/completions", method: .post,
+                                     headers: [.contentType: "application/json"], body: body) { response in
+                XCTAssertEqual(response.status, .serviceUnavailable)
+            }
+        }
+    }
+
+    /// `stream: true` answers as server-sent events: a role-bearing first
+    /// chunk, content deltas, a stop chunk with usage, then `[DONE]`.
+    func testChatCompletionStreamsServerSentEvents() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chat-\(UUID().uuidString)")
+        let deps = APIDependencies(
+            engine: GloamEngine(provider: FakeProvider(), languageProvider: StubLangProvider()),
+            voices: VoiceLibrary(directory: dir),
+            defaultBackend: .chatterboxTurbo,
+            defaultLLM: .qwen3_1_7b)
+        let app = Application(router: APIRouter.build(deps))
+        let body = ByteBuffer(string: #"{"stream":true,"messages":[{"role":"user","content":"hype the crowd"}]}"#)
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/v1/chat/completions", method: .post,
+                                     headers: [.contentType: "application/json"], body: body) { response in
+                XCTAssertEqual(response.status, .ok)
+                XCTAssertEqual(response.headers[.contentType], "text/event-stream")
+                let text = String(buffer: response.body)
+                let frames = text.components(separatedBy: "\n\n").filter { $0.hasPrefix("data: ") }.map { $0.dropFirst(6) }
+                XCTAssertEqual(frames.last, "[DONE]")
+                let chunks = try frames.dropLast().map {
+                    try JSONDecoder().decode(ChatCompletionChunk.self, from: Data(String($0).utf8))
+                }
+                XCTAssertEqual(chunks.first?.choices[0].delta.role, "assistant")
+                XCTAssertEqual(chunks.compactMap { $0.choices[0].delta.content }.joined(), "spin it up")
+                XCTAssertEqual(chunks.last?.choices[0].finish_reason, "stop")
+                XCTAssertEqual(chunks.last?.usage?.completion_tokens, 2)
+                XCTAssertTrue(chunks.allSatisfy { $0.object == "chat.completion.chunk" })
+            }
+        }
+        try? FileManager.default.removeItem(at: dir)
+    }
 }

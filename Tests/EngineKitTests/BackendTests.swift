@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 12)
+        XCTAssertEqual(BackendID.allCases.count, 13)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 12)
+        XCTAssertEqual(BackendID.allCases.count, 13)
     }
 
     func testQwenFamilyFlag() {
@@ -109,6 +109,44 @@ final class BackendTests: XCTestCase {
                        "mlx-community/fish-audio-s2-pro-bf16")
     }
 
+    /// The mobile bake is its own model in the picker, not a precision of
+    /// 0.6B: it is published by us and ships at one fixed precision.
+    func testMobileBackendIsItsOwnModel() {
+        XCTAssertEqual(BackendID.qwen06BMobile.rawValue, "qwen3-0.6b-mobile")
+        XCTAssertTrue(BackendID.qwen06BMobile.isQwen)
+        XCTAssertEqual(BackendID.qwen06BMobile.spec.modelRepo,
+                       "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-4bit-mobile")
+        XCTAssertEqual(BackendID.qwen06BMobile.modelRepo(quant: .q8),
+                       "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-4bit-mobile",
+                       "a quant suffix must never be appended to the fixed bake")
+    }
+
+    /// Empty `availableQuants` is the signal the Precision picker is hidden.
+    func testMobileBackendOffersNoPrecisionChoice() {
+        XCTAssertTrue(BackendID.qwen06BMobile.availableQuants.isEmpty)
+        XCTAssertFalse(BackendID.qwen06B.availableQuants.isEmpty)
+        XCTAssertEqual(BackendID.qwen06B.availableQuants.count, QwenQuant.allCases.count)
+        XCTAssertTrue(BackendID.chatterbox.availableQuants.isEmpty)
+    }
+
+    /// Fixed-precision Qwens drop the `@quant` so weights land in a bare folder.
+    func testMobileBackendUsesABareDiskFolder() {
+        XCTAssertEqual(BackendID.qwen06BMobile.diskFolder(quantRaw: nil), "qwen3-0.6b-mobile")
+        XCTAssertEqual(BackendID.qwen06BMobile.diskFolder(quantRaw: "8bit"), "qwen3-0.6b-mobile")
+        XCTAssertEqual(BackendID.qwen06B.diskFolder(quantRaw: "8bit"), "qwen3-0.6b@8bit")
+    }
+
+    /// It is the same 0.6B Base clone model, so capabilities must not diverge.
+    func testMobileBackendMatchesTheModelItWasBakedFrom() {
+        XCTAssertEqual(BackendID.qwen06BMobile.needsRefText, BackendID.qwen06B.needsRefText)
+        XCTAssertEqual(BackendID.qwen06BMobile.emotionMechanism, BackendID.qwen06B.emotionMechanism)
+        XCTAssertEqual(BackendID.qwen06BMobile.controls.voiceClone, BackendID.qwen06B.controls.voiceClone)
+        XCTAssertEqual(BackendID.qwen06BMobile.spec.defaultSampleRate,
+                       BackendID.qwen06B.spec.defaultSampleRate)
+        XCTAssertTrue(BackendID.qwen06BMobile.surfaces.contains(.studio))
+        XCTAssertTrue(BackendID.qwen06BMobile.surfaces.contains(.apiServer))
+    }
+
     func testDiskFolderName() {
         XCTAssertEqual(BackendID.qwen06B.diskFolder(quantRaw: "8bit"), "qwen3-0.6b@8bit")
         XCTAssertEqual(BackendID.qwen17B.diskFolder(quantRaw: nil), "qwen3-1.7b@8bit") // defaults q8
@@ -150,7 +188,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 12)
+        XCTAssertEqual(BackendID.allCases.count, 13)
     }
 
     func testKokoroSpec() {

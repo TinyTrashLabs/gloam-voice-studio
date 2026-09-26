@@ -189,6 +189,9 @@ public actor GloamEngine {
     private var pendingInterleaved:
         [(backend: BackendID, request: SynthesisRequest,
           continuation: CheckedContinuation<SynthesisResult, Error>)] = []
+    private var pendingInterleavedStreams:
+        [(backend: BackendID, request: SynthesisRequest,
+          continuation: AsyncThrowingStream<SynthesisChunk, Error>.Continuation)] = []
 
     /// Synthesize a line so it can interleave with an active chat stream: the
     /// request is queued and runs between token pulls (GPU idle slots) inside
@@ -206,8 +209,24 @@ public actor GloamEngine {
         }
     }
 
+    /// Streaming counterpart to `synthesizeInterleaved`. During a chat stream,
+    /// its chunks are produced in the next between-token GPU gap. With no chat
+    /// active it uses the ordinary serialized streaming path.
+    public func synthesizeStreamInterleaved(backend: BackendID, request: SynthesisRequest)
+        -> AsyncThrowingStream<SynthesisChunk, Error>
+    {
+        guard chatStreamActive else {
+            return synthesizeStream(backend: backend, request: request)
+        }
+        let (stream, continuation) = AsyncThrowingStream<SynthesisChunk, Error>.makeStream()
+        pendingInterleavedStreams.append((backend, request, continuation))
+        return stream
+    }
+
     /// Test hook: how many interleaved requests are queued right now.
-    func _pendingInterleavedCount() -> Int { pendingInterleaved.count }
+    func _pendingInterleavedCount() -> Int {
+        pendingInterleaved.count + pendingInterleavedStreams.count
+    }
 
     /// Runs every queued interleaved synthesis. Called from the chat stream's
     /// tail task between deltas (and once after the stream ends), so it is
@@ -216,7 +235,7 @@ public actor GloamEngine {
     /// speculatively) before TTS work touches the GPU — but only when there
     /// is actually work queued, preserving the pipelining win otherwise.
     private func drainInterleaved(settling model: (any LanguageModel)? = nil) async {
-        guard !pendingInterleaved.isEmpty else { return }
+        guard !pendingInterleaved.isEmpty || !pendingInterleavedStreams.isEmpty else { return }
         await model?.awaitPendingComputation()
         while !pendingInterleaved.isEmpty {
             let item = pendingInterleaved.removeFirst()
@@ -226,6 +245,18 @@ public actor GloamEngine {
                 item.continuation.resume(returning: result)
             } catch {
                 item.continuation.resume(throwing: error)
+            }
+        }
+        while !pendingInterleavedStreams.isEmpty {
+            let item = pendingInterleavedStreams.removeFirst()
+            do {
+                try await performSynthesisStream(
+                    backend: item.backend,
+                    request: item.request,
+                    continuation: item.continuation)
+                item.continuation.finish()
+            } catch {
+                item.continuation.finish(throwing: error)
             }
         }
     }
@@ -352,6 +383,65 @@ public actor GloamEngine {
         }
         tail = Task { _ = try? await work.value }
         return try await work.value
+    }
+
+    /// Streams independently playable chunks while preserving the engine's
+    /// single-model-work invariant. Backends without native streaming inherit
+    /// `SpeechModel`'s one-chunk fallback.
+    public func synthesizeStream(backend: BackendID, request: SynthesisRequest)
+        -> AsyncThrowingStream<SynthesisChunk, Error>
+    {
+        let (stream, continuation) = AsyncThrowingStream<SynthesisChunk, Error>.makeStream()
+        if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
+            continuation.finish(throwing: EngineError.licenseAckRequired(backend))
+            return stream
+        }
+
+        let previous = tail
+        let work = Task(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            do {
+                try await self.performSynthesisStream(
+                    backend: backend, request: request, continuation: continuation)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        tail = Task { _ = await work.value }
+        continuation.onTermination = { _ in work.cancel() }
+        return stream
+    }
+
+    private func performSynthesisStream(
+        backend: BackendID,
+        request: SynthesisRequest,
+        continuation: AsyncThrowingStream<SynthesisChunk, Error>.Continuation
+    ) async throws {
+        // Whole-take post processing is not chunk-safe. Preserve its exact
+        // behavior and expose one final chunk until those processors gain
+        // stateful streaming implementations.
+        if request.speed != 1 || request.fx != nil {
+            let result = try await performSynthesis(backend: backend, request: request)
+            continuation.yield(SynthesisChunk(
+                samples: result.samples, sampleRate: result.sampleRate))
+            return
+        }
+
+        ttsBusy = true
+        defer { ttsWorkEnded() }
+        let plan = try RequestPlanner.plan(backend: backend, request: request)
+        let model = try await residentModel(for: backend)
+        let start = Date()
+        var sampleCount = 0
+        for try await samples in model.synthesizeStream(plan) {
+            try Task.checkCancellation()
+            guard !samples.isEmpty else { continue }
+            sampleCount += samples.count
+            continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
+        }
+        let wall = Date().timeIntervalSince(start)
+        engineLog.log("synth stream \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(sampleCount) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
     }
 
     /// The synthesis body itself — no tail chaining. Callers must already be
