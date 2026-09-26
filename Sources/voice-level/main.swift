@@ -1,8 +1,10 @@
 import Foundation
+import EngineKit
 import StudioKit
 import ZIPFoundation
 
-/// Bring existing references up to the loudness standard.
+/// Bring existing references up to the reference standard (ReferenceStandard):
+/// no cut-off ending (ReferenceTail), then the loudness standard.
 ///
 /// `VoiceLibrary` applies the standard at its write sites, so every voice saved
 /// from now on meets it. That does nothing for the voices already on disk, and
@@ -11,22 +13,26 @@ import ZIPFoundation
 ///
 ///     swift run voice-level --dry-run ~/Library/…/Voices packs/*.gvoice
 ///     swift run voice-level --transcode ~/Library/…/Voices
+///     swift run voice-level --check Packs/*.gvoice
 ///
 /// `--dry-run` measures and reports without writing. `--transcode` additionally
 /// repairs references that are not WAV at all (MP3/M4A saved under a `.wav`
 /// name) by decoding them to real PCM — without it those are reported and
 /// skipped, because rewriting a reference's container is a bigger edit than
-/// levelling and should be asked for explicitly.
+/// levelling and should be asked for explicitly. `--check` is a dry run that
+/// exits 1 when anything is not at the standard -- a gate for pack builds.
 
 // MARK: - Arguments
 
 var paths: [String] = []
 var dryRun = false
 var transcode = false
+var check = false
 for arg in CommandLine.arguments.dropFirst() {
     switch arg {
     case "--dry-run": dryRun = true
     case "--transcode": transcode = true
+    case "--check": check = true; dryRun = true
     case let other where other.hasPrefix("--"):
         FileHandle.standardError.write(Data("unknown flag: \(other)\n".utf8))
         exit(2)
@@ -34,7 +40,7 @@ for arg in CommandLine.arguments.dropFirst() {
     }
 }
 guard !paths.isEmpty else {
-    print("usage: voice-level [--dry-run] [--transcode] <voices-dir | voice-dir | pack.gvoice>...")
+    print("usage: voice-level [--dry-run | --check] [--transcode] <voices-dir | voice-dir | pack.gvoice>...")
     exit(2)
 }
 
@@ -68,7 +74,7 @@ func measure(_ wav: Data) -> Float? {
     return value.isFinite ? value : nil
 }
 
-var levelled = 0, alreadyFine = 0, transcoded = 0, unreadable = 0
+var levelled = 0, alreadyFine = 0, transcoded = 0, unreadable = 0, endingsCut = 0
 
 /// Level one reference's bytes. Returns the new bytes, or nil to leave alone.
 @MainActor
@@ -83,21 +89,31 @@ func process(_ wav: Data, label: String) -> Data? {
         }
         let rebuilt = WAVEncoder.encode(pcm16: PCM16.data(from: samples),
                                         sampleRate: Int(RefAudioCombiner.targetSampleRate))
-        let out = RefLoudness.normalized(wav: rebuilt)
+        let out = ReferenceStandard.applied(to: rebuilt)
         let after = measure(out).map { String(format: "%.1f", $0) } ?? "?"
         print("  \(label): transcoded to WAV → \(after) LUFS")
         transcoded += 1
         return out
     }
-    let out = RefLoudness.normalized(wav: wav)
+    // ReferenceStandard.applied(to:), a step at a time so each is reported.
+    let cut = ReferenceTail.trimmed(wav: wav)
+    let out = RefLoudness.normalized(wav: cut)
     guard let after = measure(out) else { return nil }
     if out == wav {
         print(String(format: "  %@: %.1f LUFS — already at standard", label, before))
         alreadyFine += 1
         return nil
     }
-    print(String(format: "  %@: %.1f → %.1f LUFS (%+.1f)", label, before, after, after - before))
-    levelled += 1
+    if cut != wav, let a = RefLoudness.dataChunk(in: wav), let b = RefLoudness.dataChunk(in: cut) {
+        let frameBytes = (a.format == .pcm16 ? 2 : 4) * a.channels
+        let ms = Double((a.length - b.length) / frameBytes) * 1000 / Double(a.sampleRate)
+        print(String(format: "  %@: cut-off ending removed (%.0f ms)", label, ms))
+        endingsCut += 1
+    }
+    if out != cut {
+        print(String(format: "  %@: %.1f → %.1f LUFS (%+.1f)", label, before, after, after - before))
+        levelled += 1
+    }
     return out
 }
 
@@ -205,7 +221,9 @@ print("""
 
 \(dryRun ? "DRY RUN — nothing written" : "written")
   levelled:    \(levelled)
+  endings cut: \(endingsCut)
   already ok:  \(alreadyFine)
   transcoded:  \(transcoded)
   unreadable:  \(unreadable)
 """)
+if check, levelled + endingsCut + transcoded > 0 { exit(1) }
