@@ -63,7 +63,8 @@ public enum APIRouter {
 
         router.get("voices") { _, _ in
             VoicesResponse(voices: deps.voices.list().map {
-                APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug))
+                APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug),
+                         variants: deps.voices.layout.variantKeys(of: $0.slug))
             })
         }
 
@@ -290,9 +291,8 @@ public enum APIRouter {
             // voice instead of a house preset. Variant rendition first, then
             // the voice's own (renditionStyleURL also walks variantOf → base).
             let rendition: VoiceRendition? = effectiveVoice.flatMap { voice in
-                let emo = req.emotion?.lowercased()
-                let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
-                return variant.flatMap { deps.voices.rendition($0, engine: backend.rawValue) }
+                let takes = VoiceLibrary.emotionSuffixes(req.emotion).map { "\(voice)-\($0)" }
+                return takes.lazy.compactMap { deps.voices.rendition($0, engine: backend.rawValue) }.first
                     ?? deps.voices.rendition(voice, engine: backend.rawValue)
             }
             let styleURL: URL? = { if case .style(let u)? = rendition { return u }; return nil }()
@@ -311,13 +311,17 @@ public enum APIRouter {
             // falling through to the preset default exactly as before.
             let clones = controls.voiceClone != .none
             if let voice = effectiveVoice {
-                let emo = req.emotion?.lowercased()
-                let variant = (emo != nil && emo != "neutral") ? "\(voice)-\(emo!)" : nil
                 var resolved: (slug: String, meta: VoiceMeta, refURL: URL)? = nil
-                if let variant, let found = try? deps.voices.get(variant) {
-                    resolved = (variant, found.meta, found.refURL)
-                    usedVariant = true
-                } else if let found = try? deps.voices.get(voice) {
+                // The take for this emotion (hype and excited stand in for each
+                // other), found inside the voice's folder.
+                for take in VoiceLibrary.emotionSuffixes(req.emotion).map({ "\(voice)-\($0)" }) {
+                    if let found = try? deps.voices.get(take) {
+                        resolved = (take, found.meta, found.refURL)
+                        usedVariant = true
+                        break
+                    }
+                }
+                if resolved == nil, let found = try? deps.voices.get(voice) {
                     // An emotion-variant miss still falls back to the base voice —
                     // only a base miss is fatal.
                     resolved = (voice, found.meta, found.refURL)

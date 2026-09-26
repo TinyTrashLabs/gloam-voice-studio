@@ -642,4 +642,45 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             XCTAssertTrue(codes.contains(503), "expected at least one 503, got \(codes)")
         }
     }
+
+    // MARK: - Pack folders: /voices lists voices, speech finds takes
+
+    private func novaWithExcitedTake(_ tag: String) throws -> VoiceLibrary {
+        let voices = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(tag)-\(UUID())"))
+        _ = try voices.save(name: "Nova", refWav: Data([0, 1, 2]), refText: "nova ref")
+        try voices.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([3, 4, 5]),
+                          refText: "excited ref", variantOf: "nova")
+        return voices
+    }
+
+    func testVoicesListsEachVoiceOnceWithItsTakes() async throws {
+        let deps = APIDependencies(engine: GloamEngine(provider: CapturingProvider()),
+                                   voices: try novaWithExcitedTake("list"), defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/voices", method: .get) { resp in
+                XCTAssertEqual(resp.status, .ok)
+                let json = try JSONSerialization.jsonObject(with: Data(buffer: resp.body)) as? [String: Any]
+                let rows = json?["voices"] as? [[String: Any]] ?? []
+                XCTAssertEqual(rows.compactMap { $0["slug"] as? String }, ["nova"])
+                XCTAssertEqual(rows.first?["variants"] as? [String], ["excited"])
+            }
+        }
+    }
+
+    func testSpeechEmotionAliasPicksTheTake() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try novaWithExcitedTake("alias"), defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","voice":"nova","emotion":"hype"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "excited ref")
+    }
 }

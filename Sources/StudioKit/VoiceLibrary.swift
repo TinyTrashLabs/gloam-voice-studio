@@ -359,6 +359,15 @@ public struct VoiceLibrary: Sendable {
         .excited: ["excited", "hype"],
     ]
 
+    /// Take keys to try for an emotion word, most specific first: hype and
+    /// excited stand in for each other; any other word is tried as itself.
+    /// Empty for nil or neutral — those always mean the voice itself.
+    public static func emotionSuffixes(_ emotion: String?) -> [String] {
+        guard let word = emotion?.lowercased(), !word.isEmpty, word != "neutral" else { return [] }
+        if let known = Emotion(rawValue: word) { return emotionAliases[known] ?? [word] }
+        return [word]
+    }
+
     /// get(), preferring a "<slug>-<emotion>" variant when one exists.
     /// neutral (and nil) always resolve to the base voice; a missing variant
     /// falls back to base. Throws only if the BASE slug is unknown.
