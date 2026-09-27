@@ -1,4 +1,5 @@
 import Foundation
+import GVoiceKit
 
 /// One qwen3-design candidate's generation prompt + audio stats — metadata
 /// only, the audio itself is a sibling .wav file. Mirrors `HistoryEntry` in

@@ -11,6 +11,7 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "VoiceCreation", targets: ["VoiceCreation"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
@@ -230,10 +231,25 @@ let package = Package(
             ],
             path: "Sources/GVoiceKit"
         ),
+        // Voice creation shared by Voice Studio and Promo Studio: Qwen VoiceDesign
+        // auditions, the candidate store, reference import/validation and the
+        // recording checks (moved from the Mac and iOS apps). EngineKit +
+        // GVoiceKit only — no Hummingbird, so a sandboxed client can link it.
+        .target(
+            name: "VoiceCreation",
+            dependencies: ["EngineKit", "GVoiceKit"],
+            path: "Sources/VoiceCreation"
+        ),
+        .testTarget(
+            name: "VoiceCreationTests",
+            dependencies: ["VoiceCreation", "EngineKit"],
+            path: "Tests/VoiceCreationTests"
+        ),
         .target(
             name: "StudioKit",
             dependencies: [
                 "GVoiceKit",
+                "VoiceCreation",
                 "EngineKit",
                 "VoiceFXKit",
                 // Dia2 needs word timings for a conditioning clip, and the
