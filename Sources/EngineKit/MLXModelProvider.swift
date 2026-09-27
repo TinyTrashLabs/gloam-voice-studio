@@ -145,6 +145,8 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
     }
 
     var sampleRate: Int { model.sampleRate }
+    var modelForEmbedding: any SpeechGenerationModel { model }
+    var backendForEmbedding: BackendID { backend }
 
     private func referenceAudio(for path: String) throws -> MLXArray {
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
@@ -428,5 +430,20 @@ struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+extension MLXSpeechModel: SpeakerEmbedding {
+    /// Qwen3-TTS only: the speaker encoder's embedding of a clip, resampled to 24 kHz.
+    func speakerEmbedding(samples: [Float], sampleRate: Int) throws -> [Float] {
+        guard let qwen = modelForEmbedding as? Qwen3TTSModel else {
+            throw EngineError.generationFailed(backend: backendForEmbedding, message: "no speaker embedding for this model")
+        }
+        let audio = sampleRate == 24_000 ? samples : SpeedAdjust.resample(samples, from: sampleRate, to: 24_000)
+        guard let e = qwen.extractSpeakerEmbedding(MLXArray(audio)) else {
+            throw EngineError.generationFailed(backend: backendForEmbedding, message: "no speaker embedding for this model")
+        }
+        eval(e)
+        return e.asArray(Float.self)
     }
 }

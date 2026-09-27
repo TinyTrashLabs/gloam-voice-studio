@@ -1,5 +1,5 @@
 {
-  "originHash" : "c5263205062485bcd4f48e9d5530f86c69cf283393bb477f985f006f119a2859",
+  "originHash" : "903fc3cd1c56b073fed0de09cc9a47efa903bb42a2bf3550a4eb968a706f1bb7",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -33,7 +33,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
       "state" : {
-        "revision" : "a206f703540cb326d97f65669daeee947a6b793f"
+        "revision" : "453740c0c62bd32c1edd57e8f470d8f58d62e113"
       }
     },
     {

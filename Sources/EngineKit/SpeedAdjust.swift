@@ -16,4 +16,11 @@ enum SpeedAdjust {
         }
         return out
     }
+
+    /// Linear resample between rates — used only on a reference clip for the
+    /// speaker encoder, never on a take.
+    static func resample(_ samples: [Float], from: Int, to: Int) -> [Float] {
+        guard from != to, from > 0, to > 0 else { return samples }
+        return apply(samples, speed: Float(from) / Float(to))
+    }
 }

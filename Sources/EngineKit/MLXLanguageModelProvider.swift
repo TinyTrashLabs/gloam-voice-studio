@@ -1,6 +1,7 @@
 import Foundation
 import HuggingFace
 import MLX
+import MLXRandom
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
@@ -108,6 +109,7 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         if let size = request.repetitionContextSize { params.repetitionContextSize = size }
         params.presencePenalty = request.presencePenalty
         params.frequencyPenalty = request.frequencyPenalty
+        if let kv = request.maxKVSize { params.maxKVSize = kv }
         return params
     }
 
@@ -214,8 +216,10 @@ final class MLXLanguageModel: LanguageModel, @unchecked Sendable {
         let additionalContext = prepared.additionalContext
         let imageURLs = request.imageURLs ?? []
         let params = Self.generateParameters(for: request)
+        let seed = request.seed
 
         try await container.perform { context in
+            if let seed { MLXRandom.seed(seed) }
             var messages: [Chat.Message] = []
             if let instructions { messages.append(.system(instructions)) }
             messages.append(contentsOf: historyTurns.map(Self.chatMessage(from:)))

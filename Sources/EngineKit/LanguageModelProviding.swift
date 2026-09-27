@@ -68,6 +68,10 @@ public struct ChatRequest: Sendable, Equatable {
     /// Images attached to the FINAL user turn (vision models only; ignored by
     /// text-only providers). Local file URLs.
     public var imageURLs: [URL]?
+    /// Sampling seed (MLXRandom) applied right before generation; nil = unseeded.
+    public var seed: UInt64?
+    /// Rotating KV-cache cap in tokens (GenerateParameters.maxKVSize); nil = unbounded.
+    public var maxKVSize: Int?
 
     public init(messages: [ChatTurn], tools: [LLMTool]? = nil,
                 temperature: Float = 0.7, topP: Float? = nil,
@@ -76,7 +80,10 @@ public struct ChatRequest: Sendable, Equatable {
                 repetitionPenalty: Float? = nil, repetitionContextSize: Int? = nil,
                 presencePenalty: Float? = nil, frequencyPenalty: Float? = nil,
                 disableThinking: Bool = true,
-                imageURLs: [URL]? = nil) {
+                imageURLs: [URL]? = nil,
+                seed: UInt64? = nil, maxKVSize: Int? = nil) {
+        self.seed = seed
+        self.maxKVSize = maxKVSize
         self.messages = messages
         self.tools = tools
         self.temperature = temperature

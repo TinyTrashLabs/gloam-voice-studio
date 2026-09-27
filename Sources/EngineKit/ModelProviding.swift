@@ -132,3 +132,8 @@ public protocol DialogueSpeechModel: SpeechModel {
     func synthesizeDialogue(_ request: ProviderDialogueRequest) async throws -> DialogueChunk
     func openDialogueSession(_ request: ProviderDialogueRequest) throws -> any DialogueStreaming
 }
+
+/// A speech model that can say who a clip sounds like (Qwen's ECAPA speaker encoder).
+public protocol SpeakerEmbedding: SpeechModel {
+    func speakerEmbedding(samples: [Float], sampleRate: Int) throws -> [Float]
+}
