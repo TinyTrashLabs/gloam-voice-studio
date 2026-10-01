@@ -16,6 +16,13 @@ let package = Package(
         // deliberately no EngineKit, so the Furby control app (and anything
         // else) can get a voice changer without linking a TTS stack.
         .library(name: "VoiceFXKit", targets: ["VoiceFXKit"]),
+        // The voice editor, shared by the Studio app and (later) the radio app:
+        // detail/advanced screens, takes, reference window, avatar, pack share,
+        // and the pure rules behind them. Reads and writes a `VoiceLibraryStore`
+        // the host implements; app-specific work (engine render, ASR) arrives as
+        // optional `VoiceEditorCapabilities`. GVoiceKit + SwiftUI only -- no
+        // EngineKit, so it links on iOS and macOS without MLX.
+        .library(name: "GloamVoiceUI", targets: ["GloamVoiceUI"]),
     ],
     dependencies: [
         // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
@@ -227,6 +234,20 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .target(
+            name: "GloamVoiceUI",
+            dependencies: ["GVoiceKit"],
+            path: "Sources/GloamVoiceUI",
+            // Swift 5 mode, as the apps that host it build: the moved code was
+            // written under it (global statics, non-Sendable captures).
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "GloamVoiceUITests",
+            dependencies: ["GloamVoiceUI", "GVoiceKit"],
+            path: "Tests/GloamVoiceUITests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
             name: "StudioKit",
