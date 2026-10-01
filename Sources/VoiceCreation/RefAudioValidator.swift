@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import GVoiceKit
 
 /// Validates a prospective cloning reference before it enters the library:
 /// decodable by CoreAudio and within duration bounds. Decodability implies a

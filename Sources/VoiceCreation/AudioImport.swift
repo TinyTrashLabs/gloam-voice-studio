@@ -1,14 +1,14 @@
 import AVFoundation
 import Foundation
-import StudioKit
 
 /// Converts an audio file (e.g. MP3) to canonical 16-bit PCM WAV bytes
 /// suitable for storing as a voice reference clip.
-enum AudioImport {
+public enum AudioImport {
     /// Open the file at `url` with AVFoundation, read all samples, downmix to
-    /// mono Float, then encode as a 16-bit LE WAV using StudioKit's WAVEncoder.
+    /// mono Float, then encode as a 16-bit LE WAV (`WAVFile`, byte-identical to
+    /// StudioKit's WAVEncoder without provenance).
     /// Returns nil on any failure (bad format, read error, etc.).
-    static func wavData(fromFileAt url: URL) -> Data? {
+    public static func wavData(fromFileAt url: URL) -> Data? {
         guard let audioFile = try? AVAudioFile(forReading: url) else { return nil }
         let format = audioFile.processingFormat
         let frameCount = AVAudioFrameCount(audioFile.length)
@@ -39,7 +39,6 @@ enum AudioImport {
         }
 
         let sampleRate = Int(format.sampleRate)
-        let pcm = PCM16.data(from: mono)
-        return WAVEncoder.encode(pcm16: pcm, sampleRate: sampleRate)
+        return WAVFile.encode(mono: mono, sampleRate: sampleRate)
     }
 }

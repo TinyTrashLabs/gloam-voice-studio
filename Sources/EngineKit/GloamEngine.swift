@@ -1,4 +1,5 @@
 import Foundation
+import MLXRandom
 import os
 import VoiceFXKit
 
@@ -367,6 +368,23 @@ public actor GloamEngine {
         return try await work.value
     }
 
+    /// Who a clip sounds like, from the backend's speaker encoder (Qwen's ECAPA).
+    /// Loads `backend` if needed; chained like every other model call.
+    public func speakerEmbedding(backend: BackendID, samples: [Float], sampleRate: Int) async throws -> [Float] {
+        let previous = tail
+        let work = Task<[Float], Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            self.ttsBusy = true
+            defer { self.ttsWorkEnded() }
+            guard let m = try await self.residentModel(for: backend) as? any SpeakerEmbedding else {
+                throw EngineError.generationFailed(backend: backend, message: "no speaker embedding for this model")
+            }
+            return try m.speakerEmbedding(samples: samples, sampleRate: sampleRate)
+        }
+        tail = Task { _ = try? await work.value }
+        return try await work.value
+    }
+
     public func synthesize(backend: BackendID, request: SynthesisRequest)
         async throws -> SynthesisResult
     {
@@ -479,6 +497,7 @@ public actor GloamEngine {
                 temperature: plan.temperature, topK: plan.topK))
             raw = chunk.samples
         } else {
+            if let seed = request.seed { MLXRandom.seed(seed) }
             raw = try await model.synthesize(plan)
         }
         let wall = Date().timeIntervalSince(start)

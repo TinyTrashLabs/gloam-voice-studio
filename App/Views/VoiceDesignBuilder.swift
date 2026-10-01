@@ -1,3 +1,4 @@
+import StudioKit
 import SwiftUI
 
 /// Structured helper for Qwen3-TTS Voice Design / CustomVoice instructs. Fills in
@@ -41,11 +42,7 @@ struct VoiceDesignBuilder: View {
     }
 
     private func assemble() -> String {
-        rows
-            .map { ($0.0, $0.1.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            .filter { !$0.1.isEmpty }
-            .map { "\($0.0): \($0.1)." }
-            .joined(separator: "\n")
+        VoiceDesignAttributes.assemble(Dictionary(uniqueKeysWithValues: rows.map { ($0.0, $0.1.wrappedValue) }))
     }
 
     private var hasAny: Bool {

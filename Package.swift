@@ -11,6 +11,7 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "VoiceCreation", targets: ["VoiceCreation"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
@@ -69,9 +70,11 @@ let package = Package(
         // statics that default off, so the Mac app is unchanged.
         // a206f70 (2026-09-26) adds the 8-bit fused step,
         // frame pipelining and the async-decode silence-stop fix.
+        // 2026-09-27: + public Qwen speaker embedding (Promo Studio) —
+        // feat/public-speaker-embedding head, a206f70 plus one access modifier.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "a206f703540cb326d97f65669daeee947a6b793f"),
+            revision: "453740c0c62bd32c1edd57e8f470d8f58d62e113"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -228,10 +231,25 @@ let package = Package(
             ],
             path: "Sources/GVoiceKit"
         ),
+        // Voice creation shared by Voice Studio and Promo Studio: Qwen VoiceDesign
+        // auditions, the candidate store, reference import/validation and the
+        // recording checks (moved from the Mac and iOS apps). EngineKit +
+        // GVoiceKit only — no Hummingbird, so a sandboxed client can link it.
+        .target(
+            name: "VoiceCreation",
+            dependencies: ["EngineKit", "GVoiceKit"],
+            path: "Sources/VoiceCreation"
+        ),
+        .testTarget(
+            name: "VoiceCreationTests",
+            dependencies: ["VoiceCreation", "EngineKit"],
+            path: "Tests/VoiceCreationTests"
+        ),
         .target(
             name: "StudioKit",
             dependencies: [
                 "GVoiceKit",
+                "VoiceCreation",
                 "EngineKit",
                 "VoiceFXKit",
                 // Dia2 needs word timings for a conditioning clip, and the

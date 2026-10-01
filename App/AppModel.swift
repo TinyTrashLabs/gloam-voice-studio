@@ -1727,21 +1727,17 @@ final class AppModel {
         foundryGenerating = true
         defer { foundryGenerating = false }
         do {
-            let request = SynthesisRequest(
-                text: line, emotion: .neutral, instruct: instruct,
-                language: foundryLanguage == "auto" ? nil : foundryLanguage)
-            await ttsResidency.willUse(engine)
-            let raw = try await engine.synthesize(backend: designBackend, request: request)
-            let samples = AudioAssembler.normalizePeak(floats: raw.samples)
-            let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
-            let seconds = Double(samples.count) / Double(raw.sampleRate)
             let resolvedLanguage = foundryLanguage == "auto" ? nil : foundryLanguage
-            let entry = try foundryCandidateStore.save(
-                wav: wav, description: instruct, auditionLine: line, language: resolvedLanguage,
-                sampleRate: raw.sampleRate, seconds: seconds, wallSeconds: raw.wallSeconds)
+            await ttsResidency.willUse(engine)
+            // VoiceCreation.VoiceDesigner (shared with Promo Studio) renders,
+            // peak-normalises to 0.98 and saves the candidate, as this did inline.
+            guard let entry = try await VoiceDesigner(engine: engine, store: foundryCandidateStore, backend: designBackend)
+                .audition(description: instruct, line: line, language: resolvedLanguage, count: 1, seed: nil).first
+            else { return }
+            let wav = try Data(contentsOf: foundryCandidateStore.wavURL(entry.id))
             foundryCandidates.insert(
-                FoundryCandidate(id: entry.id, wavData: wav, sampleRate: raw.sampleRate,
-                                  seconds: seconds, wallSeconds: raw.wallSeconds,
+                FoundryCandidate(id: entry.id, wavData: wav, sampleRate: entry.sampleRate,
+                                  seconds: entry.seconds, wallSeconds: entry.wallSeconds,
                                   description: instruct, auditionLine: line, language: resolvedLanguage),
                 at: 0)
             if foundryCandidates.count > foundryCandidateRetentionCap {

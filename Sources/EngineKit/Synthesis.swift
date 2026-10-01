@@ -59,6 +59,8 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// audio, today's behaviour. Applied post-`SpeedAdjust` so a preset's
     /// tuning is not silently altered by an unrelated `speed` value.
     public var fx: FXPreset?
+    /// Sampling seed (MLXRandom) applied right before the model runs; nil = unseeded.
+    public var seed: UInt64?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -70,7 +72,8 @@ public struct SynthesisRequest: Sendable, Equatable {
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
-                fx: FXPreset? = nil) {
+                fx: FXPreset? = nil, seed: UInt64? = nil) {
+        self.seed = seed
         self.dialoguePrefix = dialoguePrefix
         self.fx = fx
         self.text = text
