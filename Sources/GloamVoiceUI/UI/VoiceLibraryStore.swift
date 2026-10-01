@@ -104,6 +104,9 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
     /// The voice's own pace; 1.0 when unset. `nil`-pace stores return 1.0.
     func pace(for voice: Voice) -> Double
     func setPace(of voice: Voice, _ pace: Double) throws
+    /// The range the Pace slider offers. Studio's is a narrow 0.75-1.35; a host
+    /// whose voices are paced over a wider range (the radio's 0.6-2.2) says so.
+    var paceRange: ClosedRange<Double> { get }
     func setGain(of voice: Voice, _ db: Double) throws
 
     // Reference recording
@@ -153,6 +156,7 @@ extension VoiceLibraryStore {
 
     public func pace(for voice: Voice) -> Double { 1.0 }
     public func setPace(of voice: Voice, _ pace: Double) throws { throw VoiceEditorUnsupported("set a pace") }
+    public var paceRange: ClosedRange<Double> { 0.75...1.35 }
     public func setGain(of voice: Voice, _ db: Double) throws { throw VoiceEditorUnsupported("set a loudness trim") }
 
     public func cleanReference(of voice: Voice) throws { throw VoiceEditorUnsupported("clean up a recording") }

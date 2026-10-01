@@ -119,7 +119,7 @@ public struct VoiceAdvancedView: View {
                     Text(abs(voicePace - 1) < 0.005 ? "as recorded" : String(format: "%.2f×", voicePace))
                         .font(t.console(12, .semibold)).foregroundStyle(t.accent)
                 } label: { Text("Pace").font(t.sans(14)).foregroundStyle(t.fg) }
-                Slider(value: $voicePace, in: 0.75...1.35, step: 0.05).tint(t.accent)
+                Slider(value: $voicePace, in: store.paceRange, step: 0.05).tint(t.accent)
                     .accessibilityLabel("Voice pace")
             }
             if hasGain {
