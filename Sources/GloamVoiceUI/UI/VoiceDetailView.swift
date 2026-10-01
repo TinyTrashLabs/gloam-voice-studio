@@ -263,7 +263,7 @@ public struct VoiceDetailView<Extra: View>: View {
             if features.contains(.avatars) { avatarSection }
             Section {
                 TextField("Name", text: $name)
-                    .font(t.masthead(18)).foregroundStyle(t.fg).tint(t.accent)
+                    .font(t.masthead(18)).foregroundStyle(t.fg).tint(t.accent).foregroundStyle(t.accent)
                     .focused($focused, equals: .name)
                     .submitLabel(.next)
                     .onSubmit { focused = .notes }
@@ -275,7 +275,7 @@ public struct VoiceDetailView<Extra: View>: View {
                 Section {
                     TextField("What this voice sounds like", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
-                        .font(t.sans(15)).foregroundStyle(t.fg).tint(t.accent)
+                        .font(t.sans(15)).foregroundStyle(t.fg).tint(t.accent).foregroundStyle(t.accent)
                         .focused($focused, equals: .notes)
                 } header: {
                     Text("Notes").font(t.console(11, .medium)).tracking(1.5).foregroundStyle(t.fgFaint)
@@ -298,7 +298,7 @@ public struct VoiceDetailView<Extra: View>: View {
                     } else {
                         TextField("What the recording says", text: $transcript, axis: .vertical)
                             .lineLimit(2...6)
-                            .font(t.sans(13)).foregroundStyle(t.fg).tint(t.accent)
+                            .font(t.sans(13)).foregroundStyle(t.fg).tint(t.accent).foregroundStyle(t.accent)
                             .focused($focused, equals: .transcript)
                             .accessibilityIdentifier("voice-transcript")
                     }
@@ -312,7 +312,7 @@ public struct VoiceDetailView<Extra: View>: View {
                         Button(listening ? "Listening…" : "Listen for the words", systemImage: "ear") {
                             listenForWords()
                         }
-                        .font(t.sans(14)).tint(t.accent)
+                        .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                         .disabled(listening)
                     }
                     // Trim the silence and level the master in place. Not with
@@ -321,7 +321,7 @@ public struct VoiceDetailView<Extra: View>: View {
                         Button(cleaning ? "Cleaning up…" : "Clean up recording", systemImage: "wand.and.sparkles") {
                             cleanUp()
                         }
-                        .font(t.sans(14)).tint(t.accent)
+                        .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                         .disabled(cleaning)
                     }
                     // The clone-time check, for a voice that never had it (or
@@ -330,7 +330,7 @@ public struct VoiceDetailView<Extra: View>: View {
                     if !voice.hasWindow, caps.voiceCheck != nil {
                         Button(checkingVoice ? "Checking… (test-rendering on \(caps.deviceNoun))" : "Check this voice",
                                systemImage: "checkmark.shield") { checkVoice() }
-                            .font(t.sans(14)).tint(t.accent)
+                            .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                             .disabled(checkingVoice)
                             .accessibilityIdentifier("check-voice")
                         if let voiceCheckNote {
@@ -340,7 +340,7 @@ public struct VoiceDetailView<Extra: View>: View {
                         if voiceCheck?.result.chosen == .cleaned {
                             // The sheet hangs off this one row, never the Section.
                             Button("Compare with original", systemImage: "waveform") { player.stop(); comparingCleanup = true }
-                                .font(t.sans(14)).tint(t.accent)
+                                .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                                 .accessibilityIdentifier("compare-cleanup")
                                 .sheet(isPresented: $comparingCleanup) {
                                     CleanupCompareView(original: preview(.original), cleaned: preview(.cleaned),
@@ -357,12 +357,12 @@ public struct VoiceDetailView<Extra: View>: View {
                             try? player.play(fileURL: url, gain: host.outputGain(for: voice))
                         }
                     }
-                    .font(t.sans(14)).tint(t.accent)
+                    .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                     // The one quality lever a new user needs. The recorder
                     // is the take flow's; the list of takes lives in Advanced.
                     if caps.canRecord, features.contains(.takes) {
                         Button("Record another take", systemImage: "mic.badge.plus") { player.stop(); recording = true }
-                            .font(t.sans(14)).tint(t.accent)
+                            .font(t.sans(14)).tint(t.accent).foregroundStyle(t.accent)
                             .accessibilityIdentifier("record-another-take")
                             .voiceCover(isPresented: $recording) {
                                 TakeRecorderView(title: "New take", script: TakeScripts.readLine,
@@ -441,7 +441,7 @@ public struct VoiceDetailView<Extra: View>: View {
             }
             ToolbarItem(placement: .voiceTrailing) {
                 Button("Save") { save() }.disabled(!canSave)
-                    .font(t.console(13, .semibold)).tint(t.accent)
+                    .font(t.console(13, .semibold)).tint(t.accent).foregroundStyle(t.accent)
             }
             // The keyboard's own way out. Save drops focus too, but a name
             // typed and left alone otherwise had no obvious dismissal.
@@ -632,6 +632,6 @@ public struct VoiceDetailView<Extra: View>: View {
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
-        .tint(t.accent)
+        .tint(t.accent).foregroundStyle(t.accent)
     }
 }
