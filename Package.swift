@@ -11,6 +11,7 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "GVoiceProductionKit", targets: ["GVoiceProductionKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
@@ -227,6 +228,16 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .target(
+            name: "GVoiceProductionKit",
+            dependencies: ["GVoiceKit", "EngineKit"],
+            path: "Sources/GVoiceProductionKit"
+        ),
+        .testTarget(
+            name: "GVoiceProductionKitTests",
+            dependencies: ["GVoiceProductionKit", "GVoiceKit"],
+            path: "Tests/GVoiceProductionKitTests"
         ),
         .target(
             name: "StudioKit",
