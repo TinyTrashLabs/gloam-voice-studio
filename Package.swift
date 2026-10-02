@@ -231,8 +231,24 @@ let package = Package(
         ),
         .target(
             name: "GVoiceProductionKit",
-            dependencies: ["GVoiceKit", "EngineKit"],
+            dependencies: [
+                "GVoiceKit", "EngineKit", "SwiftDemucs",
+            ],
             path: "Sources/GVoiceProductionKit"
+        ),
+        // MIT-licensed native HTDemucs v4 implementation, vendored from
+        // xocialize/demucs-mlx-swift at b490cc1. Compiled here so the portable
+        // package keeps its macOS 14 deployment floor (upstream's manifest
+        // unnecessarily declares macOS 15; the source uses no 15-only API).
+        .target(
+            name: "SwiftDemucs",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "Sources/SwiftDemucs"
         ),
         .testTarget(
             name: "GVoiceProductionKitTests",
