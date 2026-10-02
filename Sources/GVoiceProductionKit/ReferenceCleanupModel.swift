@@ -122,3 +122,26 @@ public enum ReferencePreparationError: Error, Sendable, Equatable {
     case verificationFailed([String])
     case cancelled
 }
+
+public struct ReferencePreparationRequest: Sendable {
+    public var sourceURL: URL; public var sourceIdentity: String?
+    public var transcript: String; public var language: String?
+    public var recipe: ReferenceCleanupRecipe
+    public init(sourceURL: URL, sourceIdentity: String? = nil, transcript: String,
+                language: String? = nil, recipe: ReferenceCleanupRecipe) {
+        self.sourceURL = sourceURL; self.sourceIdentity = sourceIdentity
+        self.transcript = transcript; self.language = language; self.recipe = recipe
+    }
+}
+
+public struct PreparedReference: Sendable {
+    public var wav: Data; public var transcript: String
+    public var metrics: ReferenceCleanupMetrics
+    public var verification: ReferenceVerification
+    public var provenance: JSONValue
+    public init(wav: Data, transcript: String, metrics: ReferenceCleanupMetrics,
+                verification: ReferenceVerification, provenance: JSONValue) {
+        self.wav = wav; self.transcript = transcript; self.metrics = metrics
+        self.verification = verification; self.provenance = provenance
+    }
+}
