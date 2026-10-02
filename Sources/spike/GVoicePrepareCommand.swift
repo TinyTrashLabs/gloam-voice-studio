@@ -20,7 +20,8 @@ func runGVoicePrepare(_ arguments: [String]) async throws {
     try result.wav.write(to: options.output.appendingPathComponent("ref.wav"), options: .atomic)
     try Data(result.transcript.utf8).write(to: options.output.appendingPathComponent("ref.txt"), options: .atomic)
     let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let report = ReferenceCleanupReport(recipe: options.recipe, metrics: result.metrics,
+    let report = ReferenceCleanupReport(sourceIdentity: options.sourceIdentity,
+                                        recipe: options.recipe, metrics: result.metrics,
                                         verification: result.verification)
     try encoder.encode(report).write(to: options.output.appendingPathComponent("cleanup-report.json"), options: .atomic)
     try encoder.encode(result.provenance).write(to: options.output.appendingPathComponent("provenance.json"), options: .atomic)

@@ -54,7 +54,9 @@ public struct ReferencePreparer: Sendable {
             transcriber: "manual", transcriberVersion: nil, speechOnly: true,
             noOverlappingSpeaker: true,
             musicRemoved: recipe.mode == .isolateVocals ? true : nil, warnings: [])
-        let report = ReferenceCleanupReport(recipe: recipe, metrics: metrics, verification: verification)
+        let report = ReferenceCleanupReport(sourceIdentity: request.sourceIdentity,
+                                            recipe: recipe, metrics: metrics,
+                                            verification: verification)
         let provenance = try ReferenceCleanupProvenance.merging(report, into: nil)
         return .init(wav: wav, transcript: transcript, metrics: metrics,
                      verification: verification, provenance: provenance)

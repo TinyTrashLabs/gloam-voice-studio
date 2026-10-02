@@ -14,8 +14,9 @@ final class ReferencePreparerTests: XCTestCase {
         XCTAssertEqual(String(data: result.wav.prefix(4), encoding: .ascii), "RIFF")
         XCTAssertEqual(result.metrics.sampleRate, 24_000)
         XCTAssertEqual(result.metrics.channels, 1)
-        guard case .object(let root) = result.provenance else { return XCTFail("provenance object") }
-        XCTAssertNotNil(root["referenceCleanup"])
+        guard case .object(let root) = result.provenance,
+              case .object(let cleanup)? = root["referenceCleanup"] else { return XCTFail("cleanup provenance object") }
+        XCTAssertEqual(cleanup["sourceIdentity"], .string("owned fixture"))
     }
 
     func testIsolationSeparatesEverySegmentBeforeJoining() async throws {

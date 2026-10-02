@@ -105,11 +105,14 @@ public struct ReferenceVerification: Codable, Sendable, Equatable {
 
 public struct ReferenceCleanupReport: Codable, Sendable, Equatable {
     public var schema = ReferenceCleanupRecipe.schema
+    public var sourceIdentity: String?
     public var recipe: ReferenceCleanupRecipe
     public var metrics: ReferenceCleanupMetrics
     public var verification: ReferenceVerification
-    public init(recipe: ReferenceCleanupRecipe, metrics: ReferenceCleanupMetrics, verification: ReferenceVerification) {
-        self.recipe = recipe; self.metrics = metrics; self.verification = verification
+    public init(sourceIdentity: String? = nil, recipe: ReferenceCleanupRecipe,
+                metrics: ReferenceCleanupMetrics, verification: ReferenceVerification) {
+        self.sourceIdentity = sourceIdentity; self.recipe = recipe
+        self.metrics = metrics; self.verification = verification
     }
 }
 
