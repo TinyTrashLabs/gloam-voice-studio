@@ -214,7 +214,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
