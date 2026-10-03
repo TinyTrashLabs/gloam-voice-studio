@@ -12,6 +12,10 @@ let package = Package(
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
+        // Qwen3-TTS 0.6B on the Neural Engine (Core ML). Foundation + CoreML +
+        // Accelerate ONLY: no MLX, no ONNX Runtime, so the iOS radio app and
+        // the Studio apps can link it alone.
+        .library(name: "QwenANE", targets: ["QwenANE"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
         // else) can get a voice changer without linking a TTS stack.
@@ -279,6 +283,18 @@ let package = Package(
                 .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources/SpeechKit"
+        ),
+        .target(
+            name: "QwenANE",
+            path: "Sources/QwenANE",
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "QwenANETests",
+            dependencies: ["QwenANE"],
+            path: "Tests/QwenANETests",
+            exclude: ["make_reference.py"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "SpeechKitTests",
