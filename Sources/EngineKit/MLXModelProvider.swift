@@ -195,12 +195,14 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 // Set on every call (nil included) so one take's guidance
                 // never carries into the next.
                 breeze.cfgScaleOverride = request.cfgScale
+                breeze.referenceGuidanceOverride = request.referenceGuidance
             }
             var params = model.defaultGenerationParameters
             if let temperature = request.temperature { params.temperature = temperature }
             if let topP = request.topP { params.topP = topP }
             if let topK = request.topK { params.topK = topK }
             if let rep = request.repetitionPenalty { params.repetitionPenalty = rep }
+            if let seed = request.seed { params.seed = seed }
 
             // NOTE: this MUST run on the GPU on iOS — MLX has NO CPU backend there
             // ("[Compiled::eval_cpu] CPU compilation not supported on the platform"),

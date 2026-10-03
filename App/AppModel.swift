@@ -550,6 +550,12 @@ final class AppModel {
     var breezeTopK: Int = BackendID.breezeSamplingDefaults.topK
     var breezeRepetitionPenalty: Float = BackendID.breezeSamplingDefaults.repetitionPenalty
     var breezeCfgScale: Float = BackendID.breezeSamplingDefaults.cfgScale
+    /// Identity strength: guidance toward the cloned voice (1 = off).
+    var breezeReferenceGuidance: Float = 1
+    /// Fixed seed: when locked, every Breeze take samples from `breezeSeed`, so
+    /// changing one setting changes only what that setting does.
+    var breezeSeedLocked = false
+    var breezeSeed: Int = Int.random(in: 1...999_999)
 
     /// Where `backend`'s Top-p / Top-k / Repetition sliders live. The ONE place
     /// that decides it: the Advanced pane binds through these and the request
@@ -1124,6 +1130,8 @@ final class AppModel {
         breezeTopK = BackendID.breezeSamplingDefaults.topK
         breezeRepetitionPenalty = BackendID.breezeSamplingDefaults.repetitionPenalty
         breezeCfgScale = BackendID.breezeSamplingDefaults.cfgScale
+        breezeReferenceGuidance = 1
+        breezeSeedLocked = false
     }
 
     // MARK: model residency
@@ -1408,6 +1416,8 @@ final class AppModel {
             // Breeze's CFG slider. Dia2 also declares the knob, but its slider
             // lives in the Dialogue composer, so the bench leaves it alone.
             cfgScaleOverride: backend == .breezeTTS2 ? breezeCfgScale : nil,
+            referenceGuidanceOverride: backend == .breezeTTS2 ? breezeReferenceGuidance : nil,
+            seed: backend == .breezeTTS2 && breezeSeedLocked ? UInt64(breezeSeed) : nil,
             dialoguePrefix: dialoguePrefix)
         // Must precede queuing work on `engine` (see TTSResidencyPolicy's
         // deadlock-safety contract).

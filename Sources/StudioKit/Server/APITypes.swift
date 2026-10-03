@@ -219,6 +219,12 @@ struct SpeechRequest: Codable {
     /// default 4, 1 = off; acts only when there is an instruct/emotion to
     /// follow). Ignored elsewhere.
     let cfg_scale: Float?
+    /// Breeze identity strength: guidance toward the reference voice, clamped
+    /// to 1–4 (1 = off). Only acts on a cloned take. Ignored elsewhere.
+    let reference_guidance: Float?
+    /// Fixed sampling seed: the same seed and settings give the same take.
+    /// Breeze only; ignored elsewhere.
+    let seed: UInt64?
     let response_format: String?
     /// Character-voice effects. Either a built-in name ("demon", "glitch",
     /// "whisper") or an inline preset object. Absent = unprocessed audio, so

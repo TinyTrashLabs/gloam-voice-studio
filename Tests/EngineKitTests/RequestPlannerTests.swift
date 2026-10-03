@@ -331,6 +331,36 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(unset.cfgScale, "nil keeps the model default")
     }
 
+    func testBreezeIdentityStrengthIsClampedAndOneMeansOff() throws {
+        func plan(_ v: Float?) throws -> Float? {
+            try RequestPlanner.plan(backend: .breezeTTS2,
+                                    request: SynthesisRequest(text: "hi", referenceGuidanceOverride: v))
+                .referenceGuidance
+        }
+        XCTAssertEqual(try plan(2.5), 2.5)
+        XCTAssertEqual(try plan(50), 4, "clamped to the offered 1–4")
+        XCTAssertNil(try plan(1), "1 is off: no extra guidance pass")
+        XCTAssertNil(try plan(-3), "below the floor clamps to 1, which is off")
+        XCTAssertNil(try plan(nil))
+    }
+
+    func testBreezeForwardsAFixedSeed() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", seed: 42))
+        XCTAssertEqual(p.seed, 42)
+        XCTAssertNil(try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi")).seed)
+    }
+
+    func testIdentityStrengthAndSeedNeverReachABackendWithoutTheKnob() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwen17B,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "r",
+                                      referenceGuidanceOverride: 3, seed: 42))
+        XCTAssertNil(p.referenceGuidance)
+        XCTAssertNil(p.seed)
+    }
+
     func testCFGNeverReachesABackendWithoutTheKnob() throws {
         let p = try RequestPlanner.plan(
             backend: .qwenDesign,

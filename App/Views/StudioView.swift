@@ -512,6 +512,7 @@ struct StudioView: View {
             || k.repetitionPenalty != nil || k.exaggeration != nil || k.cfgWeight != nil
             || k.numSteps != nil || k.guidanceScale != nil || k.tShift != nil
             || k.speed != nil || k.returnSmooth != nil || k.cfgScale != nil
+            || k.referenceGuidance != nil || k.seed != nil
     }
 
     @ViewBuilder
@@ -592,6 +593,31 @@ struct StudioView: View {
                     knobRow("Pace", $model.speed, r,
                             desc: "LuxTTS's native duration pacing (not a post-hoc resample — no pitch "
                                 + "shift). Lower it if a fast reference rushes or drops words.")
+                }
+                if let r = knobs.referenceGuidance {
+                    knobRow("Identity strength", $model.breezeReferenceGuidance, r,
+                            desc: "Pulls a cloned take harder toward the reference voice — try it "
+                                + "when the accent or timbre drifts. 1 = off. Slower: an extra pass "
+                                + "per frame. No effect without a voice.")
+                }
+                if knobs.seed == true {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Toggle("Fixed seed", isOn: $model.breezeSeedLocked)
+                            TextField("Seed", value: $model.breezeSeed, format: .number.grouping(.never))
+                                .frame(width: 80)
+                                .disabled(!model.breezeSeedLocked)
+                                .accessibilityIdentifier("breeze-seed")
+                            Button {
+                                model.breezeSeed = Int.random(in: 1...999_999)
+                            } label: { Image(systemName: "dice") }
+                                .buttonStyle(.borderless)
+                                .help("New seed")
+                        }
+                        Text("On = the same seed and settings give the same take, so you can hear "
+                             + "what one slider changes. Off = a fresh take every time.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 if knobs.returnSmooth != nil {
                     Toggle(isOn: $model.luxReturnSmooth) {

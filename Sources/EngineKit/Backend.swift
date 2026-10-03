@@ -246,19 +246,28 @@ public struct Knobs: Sendable, Equatable {
     /// Dia2: classifier-free guidance scale. Higher tracks the text more closely at
     /// the cost of naturalness.
     public var cfgScale: ClosedRange<Float>?
+    /// Breeze: identity strength, guidance toward the reference voice (the fork's
+    /// `BreezeTTSModel.referenceGuidanceOverride`). 1 = off. Only acts on a cloned
+    /// take; costs an extra model pass per frame.
+    public var referenceGuidance: ClosedRange<Float>?
+    /// Whether a fixed sampling seed is honoured (same seed + same settings =
+    /// the same take). Not a range: nil hides the control.
+    public var seed: Bool?
 
     public init(temperature: ClosedRange<Float>? = nil, topP: ClosedRange<Float>? = nil,
                 topK: ClosedRange<Int>? = nil, repetitionPenalty: ClosedRange<Float>? = nil,
                 exaggeration: ClosedRange<Float>? = nil, cfgWeight: ClosedRange<Float>? = nil,
                 numSteps: ClosedRange<Int>? = nil, guidanceScale: ClosedRange<Float>? = nil,
                 tShift: ClosedRange<Float>? = nil, speed: ClosedRange<Float>? = nil,
-                returnSmooth: Bool? = nil, cfgScale: ClosedRange<Float>? = nil) {
+                returnSmooth: Bool? = nil, cfgScale: ClosedRange<Float>? = nil,
+                referenceGuidance: ClosedRange<Float>? = nil, seed: Bool? = nil) {
         self.temperature = temperature; self.topP = topP; self.topK = topK
         self.repetitionPenalty = repetitionPenalty; self.exaggeration = exaggeration
         self.cfgWeight = cfgWeight
         self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.speed = speed; self.returnSmooth = returnSmooth
         self.cfgScale = cfgScale
+        self.referenceGuidance = referenceGuidance; self.seed = seed
     }
 }
 
@@ -389,7 +398,8 @@ extension BackendID {
                            language: false,
                            knobs: Knobs(temperature: 0.5...1.2, topP: 0.5...1.0,
                                         topK: 1...100, repetitionPenalty: 1.0...1.5,
-                                        cfgScale: 1.0...8.0))
+                                        cfgScale: 1.0...8.0, referenceGuidance: 1.0...4.0,
+                                        seed: true))
         case .chatterbox:
             ControlSurface(voiceClone: .required, instruct: .none,
                            language: false,

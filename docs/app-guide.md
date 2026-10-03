@@ -66,8 +66,13 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   sliders' — plus **Guidance (CFG)**, default 4: how strongly a take follows
   the Direction, Emotion and Expression. Higher is more pronounced and less
   natural; 1 turns it off (and the slower guided pass with it). It does
-  nothing on a plain clone with nothing to follow. Reset restores all of
-  these. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
+  nothing on a plain clone with nothing to follow. **Identity strength**
+  (1 = off, up to 4) pulls a cloned take harder toward the reference voice —
+  for an accent or timbre that drifts — at the cost of an extra model pass
+  per frame; with a Direction it weighs the voice and the Direction
+  separately (upstream's dual guidance). **Fixed seed** makes takes
+  repeatable, so changing one slider changes only what that slider does.
+  Reset restores all of these. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
   (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
   RAM. Breeze stops at about 60 seconds of speech per pass, so a longer line
   is rendered in sentence-sized pieces with the same voice and Direction and

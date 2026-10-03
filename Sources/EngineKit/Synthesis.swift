@@ -51,6 +51,12 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// Breeze classifier-free guidance scale for instructed takes (nil = model
     /// default 4; 1 = off). Honored where `Knobs.cfgScale` is offered.
     public var cfgScaleOverride: Float?
+    /// Breeze identity strength: guidance toward the reference voice (nil or 1 =
+    /// off). Honored where `Knobs.referenceGuidance` is offered.
+    public var referenceGuidanceOverride: Float?
+    /// Fixed sampling seed (nil = fresh randomness every take). Honored where
+    /// `Knobs.seed` is offered.
+    public var seed: UInt64?
     /// Dia2 only: the selected voice's word-aligned conditioning prefix.
     ///
     /// Dia2 does not clone from `refAudioPath` — it conditions on a prefix whose
@@ -74,6 +80,7 @@ public struct SynthesisRequest: Sendable, Equatable {
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
                 cfgScaleOverride: Float? = nil,
+                referenceGuidanceOverride: Float? = nil, seed: UInt64? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
                 fx: FXPreset? = nil) {
         self.dialoguePrefix = dialoguePrefix
@@ -100,6 +107,8 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.tShiftOverride = tShiftOverride
         self.returnSmoothOverride = returnSmoothOverride
         self.cfgScaleOverride = cfgScaleOverride
+        self.referenceGuidanceOverride = referenceGuidanceOverride
+        self.seed = seed
     }
 }
 
@@ -142,6 +151,10 @@ public struct ProviderRequest: Sendable, Equatable {
     public var returnSmooth: Bool?
     /// Breeze only: classifier-free guidance scale (nil = model default 4).
     public var cfgScale: Float?
+    /// Breeze only: identity strength (nil = off).
+    public var referenceGuidance: Float?
+    /// Fixed sampling seed (nil = random).
+    public var seed: UInt64?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
@@ -149,7 +162,8 @@ public struct ProviderRequest: Sendable, Equatable {
                 language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
-                tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil) {
+                tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil,
+                referenceGuidance: Float? = nil, seed: UInt64? = nil) {
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
@@ -158,6 +172,7 @@ public struct ProviderRequest: Sendable, Equatable {
         self.speed = speed; self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.returnSmooth = returnSmooth
         self.cfgScale = cfgScale
+        self.referenceGuidance = referenceGuidance; self.seed = seed
     }
 }
 
@@ -329,7 +344,15 @@ enum RequestPlanner {
             // caller would steer AWAY from the instruction.
             cfgScale: knobs.cfgScale.flatMap { range in
                 request.cfgScaleOverride.map { min(max($0, range.lowerBound), range.upperBound) }
-            }
+            },
+            // Clamped the same way; 1 (the floor) is "off", so it is dropped
+            // rather than sent as a guidance pass that changes nothing.
+            referenceGuidance: knobs.referenceGuidance.flatMap { range in
+                request.referenceGuidanceOverride
+                    .map { min(max($0, range.lowerBound), range.upperBound) }
+                    .flatMap { $0 > 1 ? $0 : nil }
+            },
+            seed: knobs.seed == true ? request.seed : nil
         )
     }
 }

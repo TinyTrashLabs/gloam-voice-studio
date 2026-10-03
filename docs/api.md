@@ -39,6 +39,8 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
 | `cfg_scale` | number | Classifier-free guidance, clamped to 1–8. `breeze-tts-2`: default 4, 1 = off, and it acts only when there is an `instruct` or `emotion` to follow. `dia2` (single-voice requests): overrides its default guidance. Ignored by other backends |
+| `reference_guidance` | number | `breeze-tts-2` identity strength: extra guidance toward the reference voice, clamped to 1–4 (1 = off). Only acts on a cloned take; with an `instruct` it uses upstream's dual guidance (reference and instruction weighted separately). Costs an extra model pass per frame. Ignored by other backends |
+| `seed` | int | `breeze-tts-2`: fixed sampling seed. The same seed, text, voice and settings give the same take. Omitted means fresh randomness. Ignored by other backends |
 | `response_format` | string | Only `wav` |
 | `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
