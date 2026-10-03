@@ -62,7 +62,7 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   is read aloud) and `[笑]` / `[叹气]` / `[咳嗽]` / `[清嗓子]` for Chinese.
 
   Advanced has Temperature, Top-p, Top-k and Repetition — Breeze's own,
-  starting at its defaults (top-k 50, repetition 1.0) rather than the Qwen
+  starting at its defaults (top-k 50, repetition 1.1) rather than the Qwen
   sliders' — plus **Guidance (CFG)**, default 4: how strongly a take follows
   the Direction, Emotion and Expression. Higher is more pronounced and less
   natural; 1 turns it off (and the slower guided pass with it). It does

@@ -75,9 +75,12 @@ let package = Package(
         // (BreezeTTSModel.cfgScaleOverride), a cached reference prefix,
         // static sampler defaults and tested guidance rules. No other model
         // touched. Repin to the merge commit once that branch lands.
+        // eac586e (2026-10-03, feat/breeze-tts) defaults Breeze's repetition
+        // penalty to upstream's 1.1: at 1.0 a take could loop on a silent
+        // frame and leave 10 s+ of dead air at a "(clears throat)".
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "e6b2a990c80e5927920d11d126c1e26574c68c16"),
+            revision: "eac586e930320a511b3f4828b1ed8672677a23ee"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

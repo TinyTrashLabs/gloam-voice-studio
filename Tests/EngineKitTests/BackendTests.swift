@@ -378,7 +378,7 @@ final class BackendTests: XCTestCase {
         let d = BackendID.breezeSamplingDefaults
         XCTAssertEqual(d.topP, 1.0)
         XCTAssertEqual(d.topK, 50)
-        XCTAssertEqual(d.repetitionPenalty, 1.0)
+        XCTAssertEqual(d.repetitionPenalty, 1.1)   // upstream's; 1.0 loops on silence
         XCTAssertEqual(d.cfgScale, 4.0)
         let knobs = BackendID.breezeTTS2.controls.knobs
         XCTAssertTrue(knobs.topP!.contains(d.topP))

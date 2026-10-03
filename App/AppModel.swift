@@ -544,7 +544,7 @@ final class AppModel {
 
     // Breeze sampler knobs (Advanced disclosure). Its own state rather than the
     // Qwen sliders': those default to top-k off / repetition 1.05, which would
-    // replace Breeze's own top-k 50 / repetition 1.0. Temperature stays shared
+    // replace Breeze's own top-k 50 / repetition 1.1. Temperature stays shared
     // (0.9 is Breeze's default too). CFG only acts on instructed takes.
     var breezeTopP: Float = BackendID.breezeSamplingDefaults.topP
     var breezeTopK: Int = BackendID.breezeSamplingDefaults.topK

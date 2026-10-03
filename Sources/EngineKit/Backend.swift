@@ -382,7 +382,7 @@ extension BackendID {
             // CFG are bound to Breeze's OWN app state (AppModel.breeze*), not
             // the Qwen sliders' — those default to top-k off / repetition
             // 1.05, which would quietly replace Breeze's top-k 50 /
-            // repetition 1.0. Temperature is shared: its 0.9 default is
+            // repetition 1.1. Temperature is shared: its 0.9 default is
             // Breeze's too. CFG only acts on instructed takes (design,
             // direction, emotion); 1 turns it off.
             ControlSurface(voiceClone: .optional, instruct: .optional,
