@@ -11,6 +11,7 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "GVoiceProductionKit", targets: ["GVoiceProductionKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
         // Qwen3-TTS 0.6B on the Neural Engine (Core ML). Foundation + CoreML +
         // Accelerate ONLY: no MLX, no ONNX Runtime, so the iOS radio app and
@@ -217,7 +218,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
@@ -231,6 +232,32 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .target(
+            name: "GVoiceProductionKit",
+            dependencies: [
+                "GVoiceKit", "EngineKit", "SwiftDemucs",
+            ],
+            path: "Sources/GVoiceProductionKit"
+        ),
+        // MIT-licensed native HTDemucs v4 implementation, vendored from
+        // xocialize/demucs-mlx-swift at b490cc1. Compiled here so the portable
+        // package keeps its macOS 14 deployment floor (upstream's manifest
+        // unnecessarily declares macOS 15; the source uses no 15-only API).
+        .target(
+            name: "SwiftDemucs",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "Sources/SwiftDemucs"
+        ),
+        .testTarget(
+            name: "GVoiceProductionKitTests",
+            dependencies: ["GVoiceProductionKit", "GVoiceKit"],
+            path: "Tests/GVoiceProductionKitTests"
         ),
         .target(
             name: "StudioKit",
