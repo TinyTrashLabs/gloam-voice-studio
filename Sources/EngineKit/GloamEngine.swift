@@ -517,7 +517,8 @@ public actor GloamEngine {
     /// sentence group, each carrying the same voice, direction and knobs.
     /// Pieces target two thirds of the cap, leaving room for a slow Direction.
     /// When later passes will clone the first (`needsIdentityAnchor`), the
-    /// first pass is only the opening sentences (~`anchorSeconds`): that
+    /// first pass is only the opening sentences (~`anchorSeconds`, but never
+    /// less than the whole first sentence when it fits a piece): that
     /// audio becomes the reference, and a short clean clip clones better and
     /// faster than a 40 s one.
     static func passes(of plan: ProviderRequest, backend: BackendID) -> [ProviderRequest] {
@@ -526,10 +527,21 @@ public actor GloamEngine {
         var pieces = LongTextChunker.chunks(plan.text, maxSeconds: budget)
         guard pieces.count > 1 else { return [plan] }
         if needsIdentityAnchor(plan, backend: backend),
-           let opening = LongTextChunker.chunks(plan.text, maxSeconds: anchorSeconds).first {
-            // Chunks are exact prefixes of the trimmed text, so the rest is
-            // what follows the opening.
+           var opening = LongTextChunker.chunks(plan.text, maxSeconds: anchorSeconds).first {
             let text = plan.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Never end the anchor mid-sentence: a first sentence past the
+            // anchor target but within a piece stays whole. Cutting it would
+            // put a gap mid-sentence and hand every later pass a reference
+            // that stops mid-phrase, which a continuation model carries into
+            // each seam.
+            if let first = LongTextChunker.sentences(text).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               first.count > opening.count,
+               LongTextChunker.estimatedSeconds(first) <= budget {
+                opening = first
+            }
+            // Chunks and sentences are exact prefixes of the trimmed text, so
+            // the rest is what follows the opening.
             pieces = [opening] + LongTextChunker.chunks(
                 String(text.dropFirst(opening.count)), maxSeconds: budget)
         }

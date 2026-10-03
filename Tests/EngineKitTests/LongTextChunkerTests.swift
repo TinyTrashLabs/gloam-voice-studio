@@ -150,6 +150,21 @@ final class LongTextChunkerTests: XCTestCase {
                        text.split(separator: " "), "nothing lost or reordered")
     }
 
+    func testAnchorNeverEndsMidSentence() {
+        // A first sentence past the ~12 s anchor target (~20 s estimated) but
+        // well inside a piece. Cutting it would put a gap mid-sentence AND
+        // hand the later passes a reference that stops mid-phrase, which a
+        // continuation model carries into every seam. It stays whole.
+        let opening = String(repeating: "word ", count: 39) + "end."
+        let text = opening + " " + String(repeating: "A long sentence goes right here. ", count: 120)
+        let plan = ProviderRequest(text: text, instruct: "a warm narrator")
+        XCTAssertGreaterThan(LongTextChunker.estimatedSeconds(opening), GloamEngine.anchorSeconds)
+        let passes = GloamEngine.passes(of: plan, backend: .breezeTTS2)
+        XCTAssertEqual(passes.first?.text, opening)
+        XCTAssertEqual(passes.map(\.text).joined(separator: " ").split(separator: " "),
+                       text.split(separator: " "), "nothing lost or reordered")
+    }
+
     func testACloneIsNeverReAnchored() {
         let plan = ProviderRequest(text: "x", refAudioPath: "/tmp/r.wav", refText: "ref")
         XCTAssertFalse(GloamEngine.needsIdentityAnchor(plan, backend: .breezeTTS2))
