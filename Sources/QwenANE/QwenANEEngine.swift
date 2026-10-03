@@ -57,7 +57,13 @@ public struct QwenRender: Sendable {
     public var codes: [Int64]
     public var stopReason: QwenStopReason
     public var timings: QwenTimings
-    /// Seconds of audio.
+    /// Silence in the vocoder output, before `Options.capPauses` ran (`.empty` when cancelled).
+    public var silenceBefore: SilenceReport = .empty
+    /// Silence in `samples` as returned (equals `silenceBefore` when capping is off or nothing was cut).
+    public var silence: SilenceReport = .empty
+    /// Internal pauses shortened by `Options.capPauses`.
+    public var pausesCapped: Int = 0
+    /// Seconds of audio. `frames` and `codes` describe the uncapped render; `samples` is capped.
     public var audioSeconds: Double { Double(samples.count) / Double(sampleRate) }
 }
 
@@ -66,7 +72,12 @@ extension QwenANEEngine {
     public struct Options: Sendable {
         /// Decode vocoder chunks on a serial queue beside the talker loop (same samples, less wall time).
         public var overlapVocoder = true
-        public init(overlapVocoder: Bool = true) { self.overlapVocoder = overlapVocoder }
+        /// Shorten dead air in the finished line (see `QwenSilence.cap`): internal pauses over 0.7 s down
+        /// to 0.45 s, leading silence to 0.05 s, trailing to 0.1 s.
+        public var capPauses = true
+        public init(overlapVocoder: Bool = true, capPauses: Bool = true) {
+            self.overlapVocoder = overlapVocoder; self.capPauses = capPauses
+        }
     }
 }
 
@@ -169,6 +180,16 @@ public final class QwenANEEngine: @unchecked Sendable {
             n = cut; wav = Array(wav[0..<(cut * samplesPerFrame)]); codes = Array(codes[0..<(cut * 16)])
             if stop != .contextFull { stop = .trailingSilence }
         }
-        return result(wav, stop, codes)
+        var out = result(wav, stop, codes)
+        out.silenceBefore = QwenSilence.analyze(samples: wav, sampleRate: sampleRate)
+        out.silence = out.silenceBefore
+        if options.capPauses {
+            let c = QwenSilence.cap(samples: wav, sampleRate: sampleRate)
+            if c.samples.count != wav.count {
+                out.samples = c.samples; out.pausesCapped = c.pausesCapped
+                out.silence = QwenSilence.analyze(samples: c.samples, sampleRate: sampleRate)
+            }
+        }
+        return out
     }
 }
