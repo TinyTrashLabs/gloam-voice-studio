@@ -326,6 +326,9 @@ let package = Package(
         ),
         .target(
             name: "QwenANE",
+            // Voice prep: ReferenceTail (GVoiceKit) and the cleanup pipeline's
+            // PreparedReference (GVoiceProductionKit). Both are MLX-free.
+            dependencies: ["GVoiceKit", "GVoiceProductionKit"],
             path: "Sources/QwenANE",
             exclude: ["README.md"]
         ),
