@@ -77,7 +77,7 @@ let package = Package(
         // frame pipelining and the async-decode silence-stop fix.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "a206f703540cb326d97f65669daeee947a6b793f"),
+            revision: "60c05fee22121de5ab4f2a49ec175cd3b7093907"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
