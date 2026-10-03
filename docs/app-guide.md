@@ -57,7 +57,9 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   Temperature is under Advanced; the model keeps its own top-k and
   repetition settings. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
   (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
-  RAM. The weights and the audio you generate with them are under the
+  RAM. Breeze stops at about 60 seconds of speech per pass, so a longer line
+  is rendered in sentence-sized pieces with the same voice and Direction and
+  joined with a short breath. The weights and the audio you generate with them are under the
   BreezeBlue Research and Non-Commercial License — acknowledge it in
   Settings first.
 - `lux-tts` — fast cloning-only English, 48 kHz, the lightest of the set
