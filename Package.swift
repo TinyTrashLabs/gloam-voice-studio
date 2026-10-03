@@ -11,7 +11,13 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "GVoiceProductionKit", targets: ["GVoiceProductionKit"]),
+        .library(name: "GVoiceDemucsKit", targets: ["GVoiceDemucsKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
+        // Qwen3-TTS 0.6B on the Neural Engine (Core ML). Foundation + CoreML +
+        // Accelerate ONLY: no MLX, no ONNX Runtime, so the iOS radio app and
+        // the Studio apps can link it alone.
+        .library(name: "QwenANE", targets: ["QwenANE"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
         // else) can get a voice changer without linking a TTS stack.
@@ -152,8 +158,8 @@ let package = Package(
         .target(
             name: "EngineKit",
             dependencies: [
-                // WAV parsing for ReferenceTail (RefLoudness.dataChunk);
-                // Foundation + ZIPFoundation only, so no cycle.
+                // ReferenceStandard / ReferenceTail live in GVoiceKit now;
+                // EngineKit re-exports it so existing callers compile unchanged.
                 "GVoiceKit",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
@@ -213,7 +219,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
@@ -227,6 +233,44 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .target(
+            name: "GVoiceProductionKit",
+            dependencies: [
+                "GVoiceKit",
+            ],
+            path: "Sources/GVoiceProductionKit"
+        ),
+        // The in-process MLX Demucs adapter for VoiceStemSeparating. macOS
+        // tooling only; an MLX-free iOS app links GVoiceProductionKit alone.
+        .target(
+            name: "GVoiceDemucsKit",
+            dependencies: ["GVoiceProductionKit", "SwiftDemucs"],
+            path: "Sources/GVoiceDemucsKit"
+        ),
+        // MIT-licensed native HTDemucs v4 implementation, vendored from
+        // xocialize/demucs-mlx-swift at b490cc1. Compiled here so the portable
+        // package keeps its macOS 14 deployment floor (upstream's manifest
+        // unnecessarily declares macOS 15; the source uses no 15-only API).
+        .target(
+            name: "SwiftDemucs",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "Sources/SwiftDemucs"
+        ),
+        .testTarget(
+            name: "GVoiceProductionKitTests",
+            dependencies: ["GVoiceProductionKit", "GVoiceKit"],
+            path: "Tests/GVoiceProductionKitTests"
+        ),
+        .testTarget(
+            name: "GVoiceDemucsKitTests",
+            dependencies: ["GVoiceDemucsKit", "GVoiceProductionKit"],
+            path: "Tests/GVoiceDemucsKitTests"
         ),
         .target(
             name: "StudioKit",
@@ -279,6 +323,21 @@ let package = Package(
                 .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources/SpeechKit"
+        ),
+        .target(
+            name: "QwenANE",
+            // Voice prep: ReferenceTail (GVoiceKit) and the cleanup pipeline's
+            // PreparedReference (GVoiceProductionKit). Both are MLX-free.
+            dependencies: ["GVoiceKit", "GVoiceProductionKit"],
+            path: "Sources/QwenANE",
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "QwenANETests",
+            dependencies: ["QwenANE"],
+            path: "Tests/QwenANETests",
+            exclude: ["make_reference.py"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "SpeechKitTests",
