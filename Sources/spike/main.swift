@@ -5,6 +5,16 @@ import MLX
 import MLXFFT
 import StudioKit
 import SpeechKit
+import GVoiceProductionKit
+
+if CommandLine.arguments.dropFirst().first == "gvoice-prepare" {
+    do {
+        try await runGVoicePrepare(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("gvoice-prepare failed: \(error)")
+    }
+}
 
 // Times a Dia2 render of one script through the SAME path the app uses, so
 // "is MLX faster than the CPU reference" is a measurement and not a belief.
@@ -1058,7 +1068,8 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
     func gvoiceBuildUsage() -> Never {
         die("""
             usage: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
-                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--provenance-file <path>]
+                     [--strip-comment-lines]
                      [--engine <engineId>:<filename>=<value>]...  [--no-source]
                    <value> is @<path> to read a file's raw bytes, or a literal string written as UTF-8.
             """)
@@ -1070,6 +1081,7 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
     var refWavPath: String?
     var refText: String?
     var refTextFile: String?
+    var provenanceFile: String?
     var stripCommentLines = false
     var includeSource = true
     var engineSpecs: [String] = []
@@ -1083,6 +1095,7 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         case "--ref-wav": refWavPath = it.next()
         case "--ref-text": refText = it.next()
         case "--ref-text-file": refTextFile = it.next()
+        case "--provenance-file": provenanceFile = it.next()
         case "--strip-comment-lines": stripCommentLines = true
         case "--no-source": includeSource = false
         case "--engine":
@@ -1124,6 +1137,9 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         }
 
         let refWav: Data? = try refWavPath.map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+        let provenance: JSONValue? = try provenanceFile.map {
+            try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: $0)))
+        }
 
         // "engineId:filename=value", repeatable.
         var engines: [String: [String: Data]] = [:]
@@ -1150,7 +1166,8 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let lib = VoiceLibrary(directory: tempDir)
-        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText, engines: engines)
+        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText,
+                       provenance: provenance, engines: engines)
         let packData = try GVoice.export(slug, from: lib, includeSource: includeSource)
         try packData.write(to: URL(fileURLWithPath: out))
         print("wrote \(out) (\(packData.count) bytes)")
