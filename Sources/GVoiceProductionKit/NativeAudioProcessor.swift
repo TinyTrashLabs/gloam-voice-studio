@@ -101,20 +101,52 @@ public enum NativeAudioProcessor {
         return output
     }
 
+    /// Band-limited sample-rate conversion with the system's mastering-grade converter
+    /// (`AVAudioConverter`, maximum quality), so content above the new Nyquist is filtered out
+    /// instead of folding back into the band the way plain interpolation does. The output has
+    /// exactly `round(frames * rate / inputRate)` samples.
     public static func resample(_ input: ReferenceAudioBuffer, to rate: Int) throws -> ReferenceAudioBuffer {
         guard rate > 0 else { throw ReferencePreparationError.invalidRecipe("sample rate must be positive") }
         guard rate != input.sampleRate else { return input }
+        guard input.sampleRate > 0 else { throw ReferencePreparationError.invalidRecipe("source sample rate must be positive") }
         let count = Int((Double(input.frameCount) * Double(rate) / Double(input.sampleRate)).rounded())
-        let channels = input.channels.map { source -> [Float] in
-            guard count > 1, source.count > 1 else { return Array(source.prefix(count)) }
-            return (0..<count).map { i in
-                let position = Double(i) * Double(source.count - 1) / Double(count - 1)
-                let lower = Int(position), upper = min(source.count - 1, lower + 1)
-                let fraction = Float(position - Double(lower))
-                return source[lower] * (1 - fraction) + source[upper] * fraction
-            }
+        let channels = try input.channels.map { source -> [Float] in
+            guard count > 0, !source.isEmpty else { return [] }
+            return try convertChannel(source, from: input.sampleRate, to: rate, count: count)
         }
         return .init(sampleRate: rate, channels: channels)
+    }
+
+    private static func convertChannel(_ source: [Float], from inRate: Int, to outRate: Int, count: Int) throws -> [Float] {
+        guard let inFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(inRate), channels: 1, interleaved: false),
+              let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(outRate), channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: inFormat, to: outFormat),
+              let inBuffer = AVAudioPCMBuffer(pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(source.count)),
+              let outBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(count + 4096)) else {
+            throw ReferencePreparationError.invalidRecipe("cannot resample \(inRate) Hz to \(outRate) Hz")
+        }
+        converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
+        converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
+        inBuffer.frameLength = AVAudioFrameCount(source.count)
+        source.withUnsafeBufferPointer { inBuffer.floatChannelData![0].update(from: $0.baseAddress!, count: source.count) }
+        var supplied = false
+        var failure: NSError?
+        var out: [Float] = []
+        out.reserveCapacity(count + 4096)
+        while out.count < count {
+            outBuffer.frameLength = 0
+            let status = converter.convert(to: outBuffer, error: &failure) { _, inStatus in
+                if supplied { inStatus.pointee = .endOfStream; return nil }
+                supplied = true; inStatus.pointee = .haveData; return inBuffer
+            }
+            if status == .error { throw ReferencePreparationError.invalidRecipe("resample failed: \(failure?.localizedDescription ?? "unknown")") }
+            let n = Int(outBuffer.frameLength)
+            if n > 0 { out.append(contentsOf: UnsafeBufferPointer(start: outBuffer.floatChannelData![0], count: n)) }
+            if status == .endOfStream || n == 0 { break }
+        }
+        if out.count > count { out.removeLast(out.count - count) }
+        else if out.count < count { out.append(contentsOf: [Float](repeating: 0, count: count - out.count)) }
+        return out
     }
 
     public static func pcm16WAV(_ input: ReferenceAudioBuffer) throws -> Data {
