@@ -4,19 +4,28 @@ import Foundation
 public enum QwenStopReason: String, Sendable {
     /// The talker emitted its end-of-speech token.
     case eos
-    /// The frame cap (6 frames per text token, at least 75, at most 4096, and the KV window) was reached.
+    /// The frame cap (6 frames per text token, at least 75, at most 4096) was reached.
     case maxTokens
     /// `cancelled()` returned true; `QwenRender.samples` is empty.
     case cancelled
     /// The line ended in 1.5 s of silence, which was cut (the order render_onnx.py uses).
     case trailingSilence
+    /// The talker's 1024-row KV window filled before the end-of-speech token, so the line is cut short
+    /// (the audio is a truncated line). Split the text first: see `QwenANEEngine.maxFrames(text:voice:)`.
+    case contextFull
 }
 
 public enum QwenANEError: Error, LocalizedError {
     case invalid(String)
+    /// The Neural Engine produced NaN/Inf (or a code outside the codebook). The line is abandoned, the
+    /// KV state is reset, and the engine is usable for the next line.
+    case nonFinite(String)
 
     public var errorDescription: String? {
-        switch self { case .invalid(let m): return "QwenANE: \(m)" }
+        switch self {
+        case .invalid(let m): return "QwenANE: \(m)"
+        case .nonFinite(let m): return "QwenANE: non-finite output (\(m))"
+        }
     }
 }
 
@@ -77,6 +86,23 @@ public final class QwenANEEngine: @unchecked Sendable {
     private let lock = NSLock()
     /// The directory the engine was loaded from; `loadVoice(named:)` reads `voices/<name>` under it.
     public let modelsDirectory: URL
+    /// Frames (80 ms each) the talker can generate for `text` in `voice` before its KV window fills: the
+    /// smaller of the 6-frames-per-token cap and the window left after the prompt (reference + text).
+    /// A line that hits the window ends with `.contextFull`; hosts split text so this stays above the
+    /// frames the line needs. Throws for a voice that fails validation.
+    public func maxFrames(text: String, voice: QwenVoiceFiles) throws -> Int {
+        try QwenVoiceFiles.validate(refCodes: voice.refCodes)
+        let p = buildICLPrompt(host: host, voice: voice, text: text)
+        return min(effectiveMaxTokens(p.nTextTokens), ANETalkerEngine.windowFrames(promptRows: p.T))
+    }
+
+    /// Drops every cache that can be rebuilt: the vocoder's primed per-voice states (the next line of a
+    /// voice re-primes, about a second). Call on a memory warning.
+    public func dropCaches() {
+        lock.lock(); defer { lock.unlock() }
+        vocoder.dropCaches()
+    }
+
     /// Read at the start of each `render`; set between renders.
     public var options = Options()
 
@@ -106,10 +132,7 @@ public final class QwenANEEngine: @unchecked Sendable {
     public func render(text: String, voice: QwenVoiceFiles, seed: UInt64? = nil, maxFrames: Int? = nil,
                        cancelled: () -> Bool = { false }, pace: () -> Void = {}) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
-        guard voice.refCodes.count == 16, let t = voice.refCodes.first?.count, t > 0,
-              voice.refCodes.allSatisfy({ $0.count == t }) else {
-            throw QwenANEError.invalid("refCodes must be 16 rows of equal, non-zero length")
-        }
+        try QwenVoiceFiles.validate(refCodes: voice.refCodes)
         guard voice.spkEmbedding.count == HostTables.H else {
             throw QwenANEError.invalid("spkEmbedding must have \(HostTables.H) values")
         }
@@ -144,7 +167,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         let cut = trailingSilenceCut(wav, frames: n)
         if cut < n {
             n = cut; wav = Array(wav[0..<(cut * samplesPerFrame)]); codes = Array(codes[0..<(cut * 16)])
-            stop = .trailingSilence
+            if stop != .contextFull { stop = .trailingSilence }
         }
         return result(wav, stop, codes)
     }
