@@ -6,8 +6,15 @@ import XCTest
 /// (QwenSpeechEncoder.mlmodelc, QwenSpeakerEncoder.mlmodelc) and the pack source clips; they skip otherwise:
 ///   QWEN_ANE_MODELS=/path/to/Models swift test --filter QwenVoicePrepTests
 final class QwenVoicePrepTests: XCTestCase {
-    static let packs = "/Users/david/projects/gloam.fm/gloam-voice-studio-ios/Packs"
-    static let texts = "/Users/david/projects/gloam.fm/qwen-onnx-cpu/out/voices"
+    /// `$QWEN_ANE_PACKS`: the Packs directory (`<slug>/source/ref.wav`); `$QWEN_ANE_VOICE_TEXTS`: the
+    /// reference transcripts (`<slug>/ref_text.txt`). Parity tests skip when either is unset.
+    static var packs: String { ProcessInfo.processInfo.environment["QWEN_ANE_PACKS"] ?? "" }
+    static var texts: String { ProcessInfo.processInfo.environment["QWEN_ANE_VOICE_TEXTS"] ?? "" }
+    static func requirePacks() throws {
+        guard !packs.isEmpty, !texts.isEmpty else {
+            throw XCTSkip("set QWEN_ANE_PACKS (Packs dir) and QWEN_ANE_VOICE_TEXTS (voices dir with <slug>/ref_text.txt) to run this test")
+        }
+    }
     static let slugs = ["jeff", "benson", "cruz", "billie-frost"]
 
     // MARK: helpers
@@ -118,6 +125,7 @@ final class QwenVoicePrepTests: XCTestCase {
     // MARK: with models
 
     func testParityAgainstCoreMLPythonReference() throws {
+        try Self.requirePacks()
         let models = try modelsDirectory()
         for slug in Self.slugs {
             let refURL = URL(fileURLWithPath: "\(Self.packs)/\(slug)/source/ref.wav")
@@ -151,6 +159,7 @@ final class QwenVoicePrepTests: XCTestCase {
     }
 
     func testCacheRoundTripWithModels() throws {
+        try Self.requirePacks()
         let models = try modelsDirectory()
         guard let ref = try? Data(contentsOf: URL(fileURLWithPath: "\(Self.packs)/benson/source/ref.wav")) else { throw XCTSkip("no benson clip") }
         let dir = tempDir()

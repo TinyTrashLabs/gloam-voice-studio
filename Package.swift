@@ -336,7 +336,7 @@ let package = Package(
             name: "QwenANETests",
             dependencies: ["QwenANE"],
             path: "Tests/QwenANETests",
-            exclude: ["make_reference.py"],
+            exclude: ["make_reference.py", "make_voice_prep_reference.py"],
             resources: [.copy("Fixtures")]
         ),
         .testTarget(
