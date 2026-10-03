@@ -11,4 +11,5 @@ models run on-device via MLX; nothing leaves your Mac.
 | [MCP Server](mcp.md) | Give any MCP-aware agent (Claude Code, Cursor, …) a voice |
 
 Engineering notes live alongside: [Qwen control surface](gloam-fm-qwen-controls-handoff.md),
-[OpenAudio phase 0](openaudio-phase0/README.md).
+[OpenAudio phase 0](openaudio-phase0/README.md), and the
+[`.gvoice` reference-cleanup handoff](gvoice-reference-cleanup-handoff.md).
