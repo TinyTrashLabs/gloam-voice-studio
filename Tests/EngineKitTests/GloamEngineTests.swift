@@ -132,6 +132,16 @@ final class GloamEngineTests: XCTestCase {
         XCTAssertGreaterThan(model.received.count, 1)
         let gap = GloamEngine.passGap(sampleRate: model.sampleRate).count
         XCTAssertEqual(result.samples.count, model.received.count + gap * (model.received.count - 1))
+        // No reference (design): every later pass clones the first one, so
+        // the line keeps one speaker. The anchor file is cleaned up after.
+        let first = model.received[0]
+        XCTAssertNil(first.refAudioPath)
+        for later in model.received.dropFirst() {
+            XCTAssertEqual(later.refText, first.text)
+            XCTAssertNotNil(later.refAudioPath)
+        }
+        let anchor = try XCTUnwrap(model.received.last?.refAudioPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: anchor))
     }
 
     func testFishAckDoesNotUnlockBreeze() async {

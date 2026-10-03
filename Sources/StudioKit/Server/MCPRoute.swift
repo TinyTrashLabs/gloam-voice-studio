@@ -241,6 +241,10 @@ enum MCPRoute {
                 return def.isEmpty ? nil : def
             }()
             let resolved: (path: String, text: String?)?
+            // Same rule as /v1/audio/speech: an acted take named directly
+            // already performs its emotion, so a `.directed` backend (Breeze)
+            // must not direct it again.
+            var resolvedIsTake = false
             if let voice = effectiveVoice {
                 guard let found = try? deps.voices.get(voice) else {
                     APIRouter.logError("mcp speak: voice '\(voice)' not found"
@@ -257,6 +261,7 @@ enum MCPRoute {
                 }
                 resolved = (found.refURL.path,
                             found.meta.refText.isEmpty ? nil : found.meta.refText)
+                resolvedIsTake = found.meta.isTake
             } else if clones {
                 APIRouter.logError("mcp speak: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -267,8 +272,10 @@ enum MCPRoute {
             }
             let refPath = resolved?.path
             let refText = resolved?.text
-            let emotion = (arguments["emotion"] as? String)
+            let requested = (arguments["emotion"] as? String)
                 .flatMap(Emotion.init(rawValue:)) ?? .neutral
+            let emotion = backend.emotionMechanism == .directed && resolvedIsTake
+                ? Emotion.neutral : requested
             do {
                 let result = try await deps.gate.run {
                     await deps.prepareTTS()

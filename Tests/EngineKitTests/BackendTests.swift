@@ -344,7 +344,10 @@ final class BackendTests: XCTestCase {
         let spec = BackendID.breezeTTS2.spec
         XCTAssertEqual(spec.modelRepo, "mlx-community/Breeze-TTS-2-mlx-8bit")
         XCTAssertEqual(spec.defaultSampleRate, 24000)
-        XCTAssertTrue(spec.honorsTags, "(laugh)-style events are part of its text")
+        // /health reports honorsTags to clients as "send [markers]"; Breeze
+        // would read those aloud. Its (laugh) chips come from fixedNonverbalTags.
+        XCTAssertFalse(spec.honorsTags)
+        XCTAssertFalse(BackendID.breezeTTS2.fixedNonverbalTags.isEmpty)
         // BreezeBlue Research and Non-Commercial License — explicit ack like Fish.
         XCTAssertTrue(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio, "designs a voice from a Direction alone")

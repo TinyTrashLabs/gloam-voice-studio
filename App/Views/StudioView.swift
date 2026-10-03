@@ -685,8 +685,12 @@ struct StudioView: View {
                 voicePickerOpen.toggle()
             } label: {
                 HStack(spacing: 6) {
+                    // `voiceList` holds base voices only; an acted take picked
+                    // from the popover is looked up directly so the button
+                    // names it instead of claiming no voice is selected.
                     if let slug = model.selectedVoiceSlug,
-                       let voice = voices.first(where: { $0.slug == slug }) {
+                       let voice = voices.first(where: { $0.slug == slug })
+                           ?? (try? model.voices.meta(slug)) {
                         VoiceAvatarView(
                             slug: voice.slug,
                             name: voice.name,
@@ -695,7 +699,7 @@ struct StudioView: View {
                         Text(voice.name)
                             .font(.system(.callout, design: .default))
                             .foregroundStyle(Brand.fg)
-                    } else if model.backend.designsFromDirection {
+                    } else if model.selectedVoiceSlug == nil && model.backend.designsFromDirection {
                         Text("No voice · design from Direction")
                             .foregroundStyle(Brand.fgDim)
                     } else {
@@ -743,7 +747,8 @@ struct StudioView: View {
     /// now live in the Dialogue composer.
     @ViewBuilder
     var tagSection: some View {
-        if model.backend.spec.honorsTags {
+        // Free-form [marker] engines (Fish), or a documented fixed list (Breeze).
+        if model.backend.spec.honorsTags || !model.backend.fixedNonverbalTags.isEmpty {
             @Bindable var model = model
             zoneLabel("TAGS")
             // An engine with a fixed vocabulary supplies it; one without gets

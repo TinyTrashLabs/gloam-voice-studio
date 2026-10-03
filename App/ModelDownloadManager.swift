@@ -101,14 +101,12 @@ final class ModelDownloadManager {
     /// choices survive; a stored value the backend doesn't offer reads as the
     /// default rather than pointing at a folder nothing ever downloads.
     func quant(for backend: BackendID) -> QwenQuant {
-        backend.effectiveQuant(
-            stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))
-            ?? BackendID.defaultQuant
+        backend.effectiveQuant(in: .standard) ?? BackendID.defaultQuant
     }
 
     func setQuant(_ quant: QwenQuant, for backend: BackendID) {
         guard backend.availableQuants.contains(quant) else { return }
-        UserDefaults.standard.set(quant.rawValue, forKey: "qwenQuant.\(backend.rawValue)")
+        UserDefaults.standard.set(quant.rawValue, forKey: backend.quantDefaultsKey)
         refresh()   // selected dir may differ → recompute state
     }
 
@@ -119,8 +117,7 @@ final class ModelDownloadManager {
         // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
         // reported the model ready somewhere the loader never looked, and the
         // load fell through to the HF repo id and failed with a 401.
-        let quantRaw = backend.effectiveQuant(
-            stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))?.rawValue
+        let quantRaw = backend.effectiveQuant(in: .standard)?.rawValue
         return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 

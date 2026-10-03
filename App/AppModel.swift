@@ -801,8 +801,7 @@ final class AppModel {
             let ttsResolver: @Sendable (BackendID) -> String? = { backend in
                 // Same rule as ModelDownloadManager.directory(for:) — shared,
                 // so the loader can't look in a folder the downloader didn't fill.
-                let quantRaw = backend.effectiveQuant(
-                    stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))?.rawValue
+                let quantRaw = backend.effectiveQuant(in: .standard)?.rawValue
                 let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
                 // Pocket is a sherpa-onnx layout, not an HF snapshot — no
                 // config.json; its own manifest check is the readiness marker.
@@ -921,7 +920,8 @@ final class AppModel {
             do {
                 let result = try await synthesizeLine(
                     text: text, voiceSlug: selectedVoiceSlug,
-                    emotion: emotion, expression: expression?.rawValue, speed: speed)
+                    emotion: emotion, expression: expression?.rawValue,
+                    designing: true, speed: speed)
                 let pcm = PCM16.data(from: result.samples)
                 let seconds = Double(result.samples.count) / Double(result.sampleRate)
                 let wav = WAVEncoder.encode(pcm16: pcm, sampleRate: result.sampleRate)
@@ -1249,8 +1249,10 @@ final class AppModel {
     /// stream (identical to the normal path when no stream is active).
     /// `backendOverride`/`engineOverride` let chat render with its own voice
     /// engine on the second (parallel) GloamEngine.
+    /// `designing`: the caller is the Studio bench, the one place a backend
+    /// that designs from a Direction may run with no voice (see the guard).
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
-                        expression: String? = nil,
+                        expression: String? = nil, designing: Bool = false,
                         speed: Float, recordHistory: Bool = true,
                         interleaved: Bool = false,
                         backendOverride: BackendID? = nil,
@@ -1286,6 +1288,21 @@ final class AppModel {
             // thing as "no voice picked" that still speaks.
             throw AppGenerationError(
                 message: "Pick a voice — \(backend.rawValue)'s presets are in the sidebar.")
+        } else if backend.designsFromDirection {
+            // Designing from a Direction (Breeze, no voice) invents a new
+            // speaker per call. That is the point on the Studio bench, where
+            // each take is auditioned; in chat (a call per sentence) or Script
+            // (a call per line) it would be a different person every time —
+            // and with no Direction it would be nobody anyone asked for.
+            guard designing else {
+                throw AppGenerationError(
+                    message: "Pick a voice for \(backend.rawValue) — designing from a Direction "
+                        + "makes a new speaker every time, so it's only offered on the Studio bench.")
+            }
+            guard !instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AppGenerationError(
+                    message: "Write a Direction to design a voice, or pick one to clone.")
+            }
         }
         var refPath: String?
         var refText: String?
@@ -1318,7 +1335,7 @@ final class AppModel {
                 // An acted take — resolved from the emotion, or picked directly
                 // (the popover lists takes) — already performs its emotion.
                 if backend.emotionMechanism == .directed
-                    && (found.meta.slug != slug || found.meta.variantOf != nil) {
+                    && (found.meta.slug != slug || found.meta.isTake) {
                     requestEmotion = .neutral
                 }
             } else if rendition == nil {

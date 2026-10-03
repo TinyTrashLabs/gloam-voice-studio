@@ -1,3 +1,5 @@
+import Foundation
+
 /// TTS backends, raw values identical to the Python engine's backend strings
 /// so .gvoice metadata and API payloads interoperate.
 public enum BackendID: String, CaseIterable, Sendable, Codable {
@@ -132,6 +134,16 @@ extension BackendID {
         guard !availableQuants.isEmpty else { return nil }
         let stored = raw.flatMap(QwenQuant.init(rawValue:))
         return stored.flatMap { availableQuants.contains($0) ? $0 : nil } ?? Self.defaultQuant
+    }
+
+    /// Where the chosen precision is persisted. Keeps its historical `qwenQuant.`
+    /// prefix so existing Qwen choices survive.
+    public var quantDefaultsKey: String { "qwenQuant.\(rawValue)" }
+
+    /// `effectiveQuant(stored:)` read straight from `defaults` — what the
+    /// downloader and the load resolver both call.
+    public func effectiveQuant(in defaults: UserDefaults) -> QwenQuant? {
+        effectiveQuant(stored: defaults.string(forKey: quantDefaultsKey))
     }
 
     /// Measured download size at a precision, when it doesn't scale with
@@ -577,15 +589,18 @@ extension BackendID {
                         minRAMBytes: 16_000_000_000)
         case .breezeTTS2:
             // BreezeBlue Research and Non-Commercial License — require an ack
-            // like Fish. Tags are its English `(laugh)` vocabulary (see
-            // `fixedNonverbalTags`). The repo here is the 8-bit default; the
+            // like Fish. honorsTags is FALSE: it means free-form `[marker]`
+            // tags (what /health tells API clients they may send), and Breeze
+            // reads a bracketed English tag aloud. Its own sounds come from
+            // `fixedNonverbalTags`, which drives the TAGS chips instead. The
+            // repo here is the 8-bit default; the
             // precision picker resolves the others via `breezeRepo(quant:)`.
             // RAM floor: 4.6 GB of 8-bit weights plus a 3B backbone's two KV
             // caches (CFG runs a conditional and an unconditional pass) leave
             // an 8 GB Mac nothing for the app or a chat model — same floor as
             // Fish.
             BackendSpec(modelRepo: "mlx-community/Breeze-TTS-2-mlx-8bit",
-                        defaultSampleRate: 24000, honorsTags: true,
+                        defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 16_000_000_000)
         case .kokoro:

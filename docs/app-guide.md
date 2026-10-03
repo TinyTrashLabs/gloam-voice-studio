@@ -42,6 +42,9 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
     the voice picker and write a Direction ("a warm, unhurried late-night
     radio host"); every take is a fresh speaker matching it. Generate stays
     off until there is a Direction, so a take is never a random stranger.
+    Design is a Studio-bench mode: chat and Script mode speak a call per
+    sentence or line, which would be a new person each time, so they ask for
+    a voice instead.
   - **Direct** — pick a voice *and* write a Direction. The voice keeps its
     identity; the Direction steers tone, pace and emotion. It is the only
     model where a Direction is honored alongside a cloned voice.
@@ -68,7 +71,10 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
   RAM. Breeze stops at about 60 seconds of speech per pass, so a longer line
   is rendered in sentence-sized pieces with the same voice and Direction and
-  joined with a short breath. The weights and the audio you generate with them are under the
+  joined with a short breath (streamed piece by piece where the caller
+  streams). A long *designed* line opens with a short piece and clones it for
+  the rest, so the whole line keeps one speaker. As a chat voice, Breeze
+  speaks with the Studio's Direction, the same as `qwen3-custom`. The weights and the audio you generate with them are under the
   BreezeBlue Research and Non-Commercial License — acknowledge it in
   Settings first.
 - `lux-tts` — fast cloning-only English, 48 kHz, the lightest of the set

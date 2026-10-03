@@ -71,15 +71,26 @@ public enum DeliveryDirection {
     }
 
     /// `text` ending in sentence punctuation: unchanged when it already does
-    /// (Latin or full-width, closing quotes allowed), otherwise with a "." —
-    /// or "。" after Chinese, so a Chinese Direction stays Chinese.
+    /// (Latin or full-width, closing quotes allowed); otherwise any trailing
+    /// pause mark (`,` `，` `、` `;` `：` …) becomes a full stop — "。" after
+    /// Chinese, so a Chinese Direction stays Chinese, "." otherwise.
     static func sentence(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let closers: Set<Character> = ["\"", "'", "”", "’", ")", "」"]
-        let core = trimmed.reversed().drop(while: { closers.contains($0) })
-        guard let last = core.first else { return trimmed }
-        if ".!?…。！？".contains(last) { return trimmed }
-        let isCJK = last.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
-        return trimmed + (isCJK ? "。" : ".")
+        let closers: Set<Character> = ["\"", "'", "”", "’", ")", "」", "）"]
+        if let last = trimmed.reversed().first(where: { !closers.contains($0) }),
+           ".!?…。！？".contains(last) {
+            return trimmed
+        }
+        let pauses: Set<Character> = [",", ";", ":", "，", "、", "；", "：", "-", "—"]
+        var core = trimmed
+        while let last = core.last, pauses.contains(last) || last.isWhitespace { core.removeLast() }
+        // Judge the language by the last real character, not a closing bracket.
+        guard let last = core.reversed().first(where: { !closers.contains($0) }) else {
+            return trimmed
+        }
+        let isCJK = last.unicodeScalars.contains {
+            (0x3040...0x9FFF).contains($0.value) || (0xAC00...0xD7AF).contains($0.value)
+        }
+        return core + (isCJK ? "。" : ".")
     }
 }

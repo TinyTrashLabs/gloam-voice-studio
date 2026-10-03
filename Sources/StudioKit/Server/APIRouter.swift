@@ -286,6 +286,8 @@ public enum APIRouter {
             var refPath: String? = nil
             var refText: String? = nil
             var usedVariant = false
+            // The resolved voice is itself an acted take (named directly).
+            var resolvedIsTake = false
             // The library slug actually rendered, so the voice's own loudness
             // trim can be applied to the output below. Nil for preset/instruct
             // backends, whose `voice` is not a library slug at all.
@@ -354,6 +356,7 @@ public enum APIRouter {
                     refPath = resolved.refURL.path
                     refText = resolved.meta.refText.isEmpty ? nil : resolved.meta.refText
                     trimSlug = resolved.slug
+                    resolvedIsTake = resolved.meta.isTake
                 } else if clones {
                     logError("/v1/audio/speech: \(StudioError.voiceNotFound(slug: voice))"
                         + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -375,8 +378,7 @@ public enum APIRouter {
             // ("cruz-excited") as already performing its emotion, so the
             // emotion isn't directed on top of it. Other mechanisms keep
             // their long-standing behaviour.
-            let namedTake = backend.emotionMechanism == .directed
-                && trimSlug.flatMap { try? deps.voices.meta($0) }?.variantOf != nil
+            let namedTake = backend.emotionMechanism == .directed && resolvedIsTake
             let knobEmotion = usedVariant || namedTake ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
             // Dia2 conditions on a word-aligned prefix, not on `refAudioPath`, so

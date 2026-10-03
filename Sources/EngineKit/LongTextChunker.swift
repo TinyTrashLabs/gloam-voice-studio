@@ -12,7 +12,13 @@ import Foundation
 /// sentence still too long is cut at token boundaries — a CJK character, a
 /// Latin word, or a whole `(tag)` / `[tag]`, never half of one.
 public enum LongTextChunker {
-    /// Rough speaking rates: ~15 Latin characters/s, ~4.5 CJK characters/s.
+    /// Deliberately SLOW speaking rates — ~10 non-space Latin characters/s
+    /// (about 115 wpm) and ~3.5 CJK characters/s — so a piece estimated at
+    /// 40 s still fits Breeze's 60 s cap when the delivery is slow: a "sad",
+    /// "singing" or "drawn out" Expression, or an unhurried narrator, runs
+    /// near 100 wpm (≈ 46 s for such a piece). At a typical 150 wpm it is
+    /// ≈ 31 s. Overestimating only costs an extra, shorter piece;
+    /// underestimating ends a take mid-sentence.
     public static func estimatedSeconds(_ text: String) -> Double {
         var latin = 0, cjk = 0
         for scalar in text.unicodeScalars {
@@ -22,7 +28,7 @@ public enum LongTextChunker {
                 latin += 1
             }
         }
-        return Double(latin) / 15 + Double(cjk) / 4.5
+        return Double(latin) / 10 + Double(cjk) / 3.5
     }
 
     public static func chunks(_ text: String, maxSeconds: Double) -> [String] {
@@ -50,7 +56,9 @@ public enum LongTextChunker {
     // MARK: - Sentences
 
     /// Always end a sentence: full-width stops and line breaks.
-    private static let hardStops: Set<Character> = ["。", "！", "？", "…", "\n"]
+    /// "\r\n" is ONE Character in Swift, distinct from "\n", so Windows line
+    /// breaks need their own entry.
+    private static let hardStops: Set<Character> = ["。", "！", "？", "…", "\n", "\r\n", "\r"]
     /// End a sentence only when whitespace (or the end) follows, so "55.2",
     /// "v1.2" and "example.com" stay whole.
     private static let softStops: Set<Character> = [".", "!", "?"]

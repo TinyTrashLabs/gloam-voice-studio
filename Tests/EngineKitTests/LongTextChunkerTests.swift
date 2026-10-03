@@ -125,4 +125,33 @@ final class LongTextChunkerTests: XCTestCase {
         XCTAssertEqual(GloamEngine.passes(of: plan, backend: .breezeTTS2), [plan],
                        "a single pass is the plan itself, untouched")
     }
+
+    func testWindowsLineBreaksEndSentences() {
+        XCTAssertEqual(LongTextChunker.sentences("Line one\r\nLine two\r\nLine three"),
+                       ["Line one\r\n", "Line two\r\n", "Line three"])
+    }
+
+    func testEstimateLeavesRoomForASlowDelivery() {
+        // ~126 words at a slow 100 wpm is ~76 s. The estimate must call that
+        // well over a 40 s piece, so it gets split before Breeze's 60 s cap.
+        let words = String(repeating: "steady narration ", count: 63)
+        XCTAssertGreaterThan(LongTextChunker.estimatedSeconds(words), 60)
+    }
+
+    func testAnchoredDesignOpensWithAShortPassThenKeepsTheRest() {
+        let text = String(repeating: "A long sentence goes right here. ", count: 120)
+        let plan = ProviderRequest(text: text, instruct: "a warm narrator")   // design: no reference
+        XCTAssertTrue(GloamEngine.needsIdentityAnchor(plan, backend: .breezeTTS2))
+        let passes = GloamEngine.passes(of: plan, backend: .breezeTTS2)
+        XCTAssertGreaterThan(passes.count, 2)
+        XCTAssertLessThanOrEqual(LongTextChunker.estimatedSeconds(passes[0].text),
+                                 GloamEngine.anchorSeconds)
+        XCTAssertEqual(passes.map(\.text).joined(separator: " ").split(separator: " "),
+                       text.split(separator: " "), "nothing lost or reordered")
+    }
+
+    func testACloneIsNeverReAnchored() {
+        let plan = ProviderRequest(text: "x", refAudioPath: "/tmp/r.wav", refText: "ref")
+        XCTAssertFalse(GloamEngine.needsIdentityAnchor(plan, backend: .breezeTTS2))
+    }
 }

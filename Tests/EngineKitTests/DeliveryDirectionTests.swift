@@ -75,5 +75,9 @@ final class DeliveryDirectionTests: XCTestCase {
         XCTAssertEqual(DeliveryDirection.sentence(#"Say "hi.""#), #"Say "hi.""#)
         XCTAssertEqual(DeliveryDirection.sentence("一位温柔的女性"), "一位温柔的女性。")
         XCTAssertEqual(DeliveryDirection.sentence("温柔。"), "温柔。")
+        // A trailing pause mark becomes the full stop, never ", ." / "，.".
+        XCTAssertEqual(DeliveryDirection.sentence("温柔的女声，"), "温柔的女声。")
+        XCTAssertEqual(DeliveryDirection.sentence("calm, slow, "), "calm, slow.")
+        XCTAssertEqual(DeliveryDirection.sentence("（低声）"), "（低声）。")
     }
 }

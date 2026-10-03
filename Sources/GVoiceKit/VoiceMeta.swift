@@ -35,6 +35,10 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// independently-named voice like "dj-nova" must never be mistaken for a
     /// variant of "dj" just because its slug starts with "dj-".
     public var variantOf: String?
+    /// An acted take of another voice — its clip already performs an emotion
+    /// or style. The one test every surface uses when deciding not to direct
+    /// that emotion a second time.
+    public var isTake: Bool { variantOf != nil }
     /// Delivery pace, 1.0 = the reference's own pace. Nil means unset — which
     /// is NOT the same as 1.0, because writing a default into every pack would
     /// make "unset" indistinguishable from "deliberately 1.0" on re-export.

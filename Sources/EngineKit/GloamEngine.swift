@@ -436,18 +436,9 @@ public actor GloamEngine {
         var sampleCount = 0
         // A capped backend's long line streams piece by piece: the first
         // sentence group plays while the rest render.
-        for (index, piece) in Self.passes(of: plan, backend: backend).enumerated() {
-            if index > 0 {
-                let gap = Self.passGap(sampleRate: model.sampleRate)
-                sampleCount += gap.count
-                continuation.yield(SynthesisChunk(samples: gap, sampleRate: model.sampleRate))
-            }
-            for try await samples in model.synthesizeStream(piece) {
-                try Task.checkCancellation()
-                guard !samples.isEmpty else { continue }
-                sampleCount += samples.count
-                continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
-            }
+        try await renderPasses(of: plan, backend: backend, model: model, streaming: true) { samples in
+            sampleCount += samples.count
+            continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
         }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth stream \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(sampleCount) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
@@ -490,10 +481,8 @@ public actor GloamEngine {
             raw = chunk.samples
         } else {
             var joined: [Float] = []
-            for (index, piece) in Self.passes(of: plan, backend: backend).enumerated() {
-                try Task.checkCancellation()
-                if index > 0 { joined.append(contentsOf: Self.passGap(sampleRate: model.sampleRate)) }
-                joined.append(contentsOf: try await model.synthesize(piece))
+            try await renderPasses(of: plan, backend: backend, model: model, streaming: false) {
+                joined.append(contentsOf: $0)
             }
             raw = joined
         }
@@ -527,16 +516,90 @@ public actor GloamEngine {
     /// per-call cap a long line would hit (`maxSecondsPerPass`) — one per
     /// sentence group, each carrying the same voice, direction and knobs.
     /// Pieces target two thirds of the cap, leaving room for a slow Direction.
+    /// When later passes will clone the first (`needsIdentityAnchor`), the
+    /// first pass is only the opening sentences (~`anchorSeconds`): that
+    /// audio becomes the reference, and a short clean clip clones better and
+    /// faster than a 40 s one.
     static func passes(of plan: ProviderRequest, backend: BackendID) -> [ProviderRequest] {
         guard let cap = backend.maxSecondsPerPass else { return [plan] }
-        let pieces = LongTextChunker.chunks(plan.text, maxSeconds: cap * 2 / 3)
+        let budget = cap * 2 / 3
+        var pieces = LongTextChunker.chunks(plan.text, maxSeconds: budget)
         guard pieces.count > 1 else { return [plan] }
+        if needsIdentityAnchor(plan, backend: backend),
+           let opening = LongTextChunker.chunks(plan.text, maxSeconds: anchorSeconds).first {
+            // Chunks are exact prefixes of the trimmed text, so the rest is
+            // what follows the opening.
+            let text = plan.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            pieces = [opening] + LongTextChunker.chunks(
+                String(text.dropFirst(opening.count)), maxSeconds: budget)
+        }
         return pieces.map { var piece = plan; piece.text = $0; return piece }
     }
+
+    /// Target length of an anchoring first pass (see `passes(of:backend:)`).
+    static let anchorSeconds: Double = 12
 
     /// The breath between pieces of a split line: 150 ms of silence.
     static func passGap(sampleRate: Int) -> [Float] {
         [Float](repeating: 0, count: sampleRate * 15 / 100)
+    }
+
+    /// Renders `plan`'s passes in order, handing audio to `emit` as it comes
+    /// (per streamed chunk when `streaming`, per pass otherwise) with a
+    /// `passGap` between passes. One pass is exactly the old single call.
+    ///
+    /// Two things only a multi-pass line needs:
+    /// - Cancellation is checked before every later pass. A cancelled
+    ///   `AsyncThrowingStream` ends quietly rather than throwing, so without
+    ///   this each remaining pass would still start — and the default
+    ///   `synthesizeStream` runs its pass in a Task nobody cancels — leaving
+    ///   several generations racing on one model after the engine went idle.
+    /// - Identity is anchored. A pass with no reference (Breeze designing
+    ///   from a Direction) invents a new speaker every call, so the first
+    ///   pass's audio — written to a temporary WAV, with its text as the
+    ///   transcript — becomes the reference for the rest, which keep the
+    ///   Direction: one designed voice for the whole line.
+    private func renderPasses(
+        of plan: ProviderRequest, backend: BackendID, model: any SpeechModel,
+        streaming: Bool, emit: ([Float]) -> Void
+    ) async throws {
+        var passes = Self.passes(of: plan, backend: backend)
+        var anchor: URL?
+        defer { if let anchor { try? FileManager.default.removeItem(at: anchor) } }
+        for index in passes.indices {
+            if index > 0 {
+                try Task.checkCancellation()
+                emit(Self.passGap(sampleRate: model.sampleRate))
+            }
+            var rendered: [Float] = []
+            if streaming {
+                for try await samples in model.synthesizeStream(passes[index]) {
+                    try Task.checkCancellation()
+                    guard !samples.isEmpty else { continue }
+                    if index == 0 && passes.count > 1 { rendered.append(contentsOf: samples) }
+                    emit(samples)
+                }
+            } else {
+                rendered = try await model.synthesize(passes[index])
+                emit(rendered)
+            }
+            if index == 0, passes.count > 1, Self.needsIdentityAnchor(plan, backend: backend) {
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("gloam-pass-anchor-\(UUID().uuidString).wav")
+                try WAVWriter.write(samples: rendered, sampleRate: model.sampleRate, to: url)
+                anchor = url
+                for later in passes.indices.dropFirst() {
+                    passes[later].refAudioPath = url.path
+                    passes[later].refText = passes[0].text
+                }
+            }
+        }
+    }
+
+    /// Whether later passes must clone the first one to keep one speaker:
+    /// no reference of its own, on a backend that can take one.
+    static func needsIdentityAnchor(_ plan: ProviderRequest, backend: BackendID) -> Bool {
+        plan.refAudioPath == nil && backend.controls.voiceClone != .none
     }
 
     private func residentModel(for backend: BackendID) async throws -> any SpeechModel {
