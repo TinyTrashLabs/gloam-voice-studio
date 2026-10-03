@@ -24,6 +24,10 @@ final class ANEVocoder {
     private var first = true
     private var wav: [Float] = []
     private var primed: [[Int64]: (head: VocoderHead.State, hist: [Float])] = [:]   // per voice reference
+    private var primedOrder: [[Int64]] = []    // least recently used first; `primed` never holds more than `maxPrimed`
+    static let maxPrimed = 4
+    /// Number of primed voice states held (read on the vocoder queue).
+    var primedCount: Int { queue.sync { primed.count } }
     /// Wall seconds spent decoding (head + upsamplers) since `resetStats`; read after `finish()`/`drain()`.
     private(set) var wall = 0.0
     /// When true, chunks decode on `queue` while the caller keeps generating. Every touch of the head,
@@ -57,6 +61,9 @@ final class ANEVocoder {
         _ = try predict(window: in20, first: false)
     }
 
+    /// Drops the primed per-voice states; the next line of each voice primes again.
+    func dropCaches() { queue.sync { primed.removeAll(); primedOrder.removeAll() } }
+
     func resetStats() { drain(); wall = 0; waitWall = 0 }
 
     /// Runs `work` on the vocoder queue (overlap) or inline, in submission order; the first error is kept.
@@ -89,8 +96,17 @@ final class ANEVocoder {
     private func beginOnQueue(context: [Int64]?) {
         wav = []
         if let ctx = context, ctx.count / 16 >= Self.L {
-            if primed[ctx] == nil { primed[ctx] = prime(ctx) }
-            let p = primed[ctx]!
+            let p: (head: VocoderHead.State, hist: [Float])
+            if let hit = primed[ctx] {
+                p = hit
+                if let i = primedOrder.firstIndex(of: ctx) { primedOrder.remove(at: i) }
+            } else {
+                p = prime(ctx); primed[ctx] = p
+                while primed.count >= Self.maxPrimed + 1, let old = primedOrder.first {
+                    primedOrder.removeFirst(); primed[old] = nil
+                }
+            }
+            primedOrder.append(ctx)
             head.state = p.head; hist = p.hist; first = false
             return
         }
@@ -115,6 +131,9 @@ final class ANEVocoder {
     /// Adds one frame's 16 codes; a chunk is decoded as soon as its 12th frame exists.
     func push(frame: ArraySlice<Int64>) throws {
         if let e = takeErrorIfAny() { throw e }
+        guard frame.count == 16, frame.allSatisfy({ $0 >= 0 && $0 < QwenVoiceFiles.codebookSize }) else {
+            throw QwenANEError.invalid("vocoder frame has a code outside 0..<\(QwenVoiceFiles.codebookSize)")
+        }
         pending.append(contentsOf: frame)
         if pending.count == Self.C * 16 { submitPending() }
     }

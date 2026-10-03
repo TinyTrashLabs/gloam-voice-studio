@@ -153,13 +153,48 @@ final class ANETalkerEngine {
         for i in 0..<Self.H { xp[i] = Float16(v[i]) }
     }
 
+    /// True when every value is a finite number (no NaN / Inf).
+    static func allFinite(_ v: [Float]) -> Bool {
+        for x in v where !x.isFinite { return false }
+        return true
+    }
+
+    /// Zeroes both chunks' KV states. A NaN/Inf written into a cache row would survive into every
+    /// later line (masked rows are multiplied by 0, and 0 * NaN is NaN), so a bad line resets them.
+    func resetStates() {
+        for (c, s) in states.enumerated() { Self.zero(s, layers: (14 * c)..<(14 * c + 14)) }
+    }
+
+    /// Test seam: poison the talker logits with NaN right after the step that follows this frame index.
+    var injectNaNLogitsAtFrame: Int? = nil
+    /// Test seam: poison the code predictor's sub-codes with NaN at this frame index.
+    var injectNaNSubCodesAtFrame: Int? = nil
+
+    /// Frames the KV window leaves after `promptRows` prompt rows.
+    static func windowFrames(promptRows T: Int) -> Int { max(0, LMAX - T) }
+
     /// Generates frames until EOS, the cap, or `cancelled()`; `onFrame` gets each frame's 16 codes as they exist.
+    /// A non-finite talker or code-predictor output zeroes the KV states and throws `QwenANEError.nonFinite`;
+    /// any thrown error leaves the engine ready for the next line.
     func generate(prompt: Prompt, sampler: inout Sampler, eos: Int, maxNew: Int?,
+                  cancelled: () -> Bool, onFrame: (Int, ArraySlice<Int64>) throws -> Void) throws -> GenResult {
+        do {
+            return try generateUnguarded(prompt: prompt, sampler: &sampler, eos: eos, maxNew: maxNew,
+                                         cancelled: cancelled, onFrame: onFrame)
+        } catch {
+            resetStates()
+            throw error
+        }
+    }
+
+    private func generateUnguarded(prompt: Prompt, sampler: inout Sampler, eos: Int, maxNew: Int?,
                   cancelled: () -> Bool, onFrame: (Int, ArraySlice<Int64>) throws -> Void) throws -> GenResult {
         let H = Self.H, L = Self.LMAX
         let T = prompt.T
         guard T < L - 8 else { throw QwenANEError.invalid("prompt \(T) rows exceeds the ANE talker's \(L) KV slots") }
-        let cap = min(maxNew ?? effectiveMaxTokens(prompt.nTextTokens), L - T)
+        let requested = maxNew ?? effectiveMaxTokens(prompt.nTextTokens)
+        let window = Self.windowFrames(promptRows: T)
+        let cap = min(requested, window)
         let t0 = Date()
         try prefill(prompt)
         // decode mask: rows 0..T-2 visible, the rest hidden until written
@@ -168,6 +203,7 @@ final class ANETalkerEngine {
         setX(Array(prompt.embeds[((T - 1) * H)..<(T * H)]))
         var hidden = try step(T - 1, nil)
         let prefillWall = Date().timeIntervalSince(t0)
+        guard Self.allFinite(logits) else { throw QwenANEError.nonFinite("talker logits after prefill") }
 
         var pos = T
         var codes: [Int64] = []; codes.reserveCapacity(cap * 16)
@@ -179,36 +215,49 @@ final class ANETalkerEngine {
         forcedPicks = []
         let capF = forced.map { min(cap, $0.count) } ?? cap
         for f in 0..<capF {
-            if cancelled() { stop = .cancelled; break }
-            var g0 = logits.withUnsafeBufferPointer { sampler.sample($0.baseAddress!, history: hist) }
-            let ownG0 = g0
-            if let fc = forced { g0 = fc[f][0] }
-            var am = 0; var av = logits[0]
-            for i in 1..<3072 where logits[i] > av { av = logits[i]; am = i }   // raw argmax (eosGreedyStop)
-            if forced == nil && (g0 == eos || am == eos) { stop = .eos; break }
-            // code predictor: hidden + codec[g0] -> 15 sub-codes
-            let ep = Self.p16(e0), cr = host.codecRow(g0)
-            for i in 0..<H { ep[i] = Float16(cr[i]) }
-            let co = try cp.prediction(from: try MLDictionaryFeatureProvider(dictionary: [
-                "hidden": MLFeatureValue(multiArray: hidden), "e0": MLFeatureValue(multiArray: e0)]))
-            guard let ca = co.featureValue(for: "codes")?.multiArrayValue else { throw QwenANEError.invalid("cp codes missing") }
-            var cf = [Float](repeating: 0, count: 15)
-            Self.read(ca, into: &cf)
-            var subs = (0..<15).map { min(2047, max(0, Int(cf[$0].rounded()))) }
-            if let fc = forced { forcedPicks.append([ownG0] + subs); subs = Array(fc[f][1...]) }
-            // next talker input (fp32 sum, one fp16 rounding)
-            // same fp32 summation order as qonnx.Host.code_sum(g0, subs) + tts_pad
-            for i in 0..<H { e[i] = cr[i] }
-            for k in 0..<15 { let r = host.cpRow(k, subs[k]); for i in 0..<H { e[i] += r[i] } }
-            for i in 0..<H { e[i] += ttsPad[i] }
-            setX(e)
-            hidden = try step(pos, pos - 1)
-            codes.append(Int64(g0)); for k in 0..<15 { codes.append(Int64(subs[k])) }
-            hist.append(g0)
-            pos += 1; frames += 1
-            try onFrame(frames, codes[(codes.count - 16)...])
+            // one autoreleasepool per frame: Core ML outputs and feature providers are autoreleased
+            let done: Bool = try autoreleasepool {
+                if cancelled() { stop = .cancelled; return true }
+                var g0 = logits.withUnsafeBufferPointer { sampler.sample($0.baseAddress!, history: hist) }
+                let ownG0 = g0
+                if let fc = forced { g0 = fc[f][0] }
+                var am = 0; var av = logits[0]
+                for i in 1..<3072 where logits[i] > av { av = logits[i]; am = i }   // raw argmax (eosGreedyStop)
+                if forced == nil && (g0 == eos || am == eos) { stop = .eos; return true }
+                guard g0 >= 0, g0 < QwenVoiceFiles.codebookSize else { throw QwenANEError.nonFinite("first-codebook code \(g0) outside the vocoder's range") }
+                // code predictor: hidden + codec[g0] -> 15 sub-codes
+                let ep = Self.p16(e0), cr = host.codecRow(g0)
+                for i in 0..<H { ep[i] = Float16(cr[i]) }
+                let co = try cp.prediction(from: try MLDictionaryFeatureProvider(dictionary: [
+                    "hidden": MLFeatureValue(multiArray: hidden), "e0": MLFeatureValue(multiArray: e0)]))
+                guard let ca = co.featureValue(for: "codes")?.multiArrayValue else { throw QwenANEError.invalid("cp codes missing") }
+                var cf = [Float](repeating: 0, count: 15)
+                Self.read(ca, into: &cf)
+                if injectNaNSubCodesAtFrame == f { cf[3] = .nan }
+                guard Self.allFinite(cf) else { throw QwenANEError.nonFinite("code predictor output at frame \(f)") }
+                var subs = (0..<15).map { Int(min(Float(QwenVoiceFiles.codebookSize - 1), max(0, cf[$0])).rounded()) }
+                if let fc = forced { forcedPicks.append([ownG0] + subs); subs = Array(fc[f][1...]) }
+                guard subs.allSatisfy({ $0 >= 0 && $0 < QwenVoiceFiles.codebookSize }) else { throw QwenANEError.nonFinite("sub-code outside the vocoder's range") }
+                // next talker input (fp32 sum, one fp16 rounding)
+                // same fp32 summation order as qonnx.Host.code_sum(g0, subs) + tts_pad
+                for i in 0..<H { e[i] = cr[i] }
+                for k in 0..<15 { let r = host.cpRow(k, subs[k]); for i in 0..<H { e[i] += r[i] } }
+                for i in 0..<H { e[i] += ttsPad[i] }
+                setX(e)
+                hidden = try step(pos, pos - 1)
+                if injectNaNLogitsAtFrame == f { logits[5] = .nan }
+                guard Self.allFinite(logits) else { throw QwenANEError.nonFinite("talker logits at frame \(f)") }
+                codes.append(Int64(g0)); for k in 0..<15 { codes.append(Int64(subs[k])) }
+                hist.append(g0)
+                pos += 1; frames += 1
+                try onFrame(frames, codes[(codes.count - 16)...])
+                return false
+            }
+            if done { break }
         }
+        if stop == .maxTokens && forced == nil && cap < requested { stop = .contextFull }   // the KV window, not the token cap, ended it
         return GenResult(codes: codes, frames: frames, stop: stop, promptLen: T,
                          prefillWall: prefillWall, loopWall: Date().timeIntervalSince(t1))
     }
 }
+
