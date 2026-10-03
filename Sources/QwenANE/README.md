@@ -39,6 +39,29 @@ every frame; sleeping in it is how a host limits the duty cycle.
 Models must be compiled (`.mlmodelc`); compile a `.mlpackage` with `xcrun coremlcompiler compile`.
 `voices/` is optional: a host can build `QwenVoiceFiles` itself and cache them next to its own voices.
 
+### Voice prep models
+
+Preparing a voice on the device (`QwenVoicePrep`) needs two more compiled models, both fp32 and
+run on the CPU only (`.cpuOnly`; never CPU_AND_NE, it hung the ANE compiler):
+
+```
+<models>/coreml/  QwenSpeechEncoder.mlmodelc    (speech tokenizer, fixed 20 s input + valid length)
+                  QwenSpeakerEncoder.mlmodelc   (x-vector ECAPA-TDNN, mel input + valid length)
+```
+
+Source packages: `qwen-onnx-cpu/out/coreml_enc/`; compile with `xcrun coremlcompiler compile`.
+
+```swift
+// wav: mono 24 kHz PCM16, already through ReferenceStandard (or a GVoiceProductionKit PreparedReference)
+let voice = try QwenVoicePrep.prepared(referenceWAV: wav, transcript: text,
+                                       cacheDirectory: voiceDir, modelsDirectory: modelsURL)
+```
+
+It trims a cut-off tail (`ReferenceTail`), throws `referenceTooLong(seconds:)` past 20 s (the caller
+supplies a window), and caches `voice.json` / `ref_codes.npy` / `spk_embed.npy` keyed by source
+sha256 + transcript + prep version. The speaker mel is the upstream one (magnitude, Slaney, reflect
+pad 384), not the mlx-audio-swift fork's. Parity tests: `QWEN_ANE_MODELS=... swift test --filter QwenVoicePrepTests`.
+
 ## Notes
 
 - The sampler reproduces numpy's `default_rng(seed)` stream (PCG64 + SeedSequence), so a render with
