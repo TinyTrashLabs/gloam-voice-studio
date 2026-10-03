@@ -38,7 +38,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `speaker` | string | Preset speaker — required by `qwen3-custom` |
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
-| `cfg_scale` | number | Classifier-free guidance on `breeze-tts-2` (default 4, clamped to 1–8; 1 = off). Acts only when there is an `instruct` or `emotion` to follow. Ignored by other backends on this endpoint |
+| `cfg_scale` | number | Classifier-free guidance, clamped to 1–8. `breeze-tts-2`: default 4, 1 = off, and it acts only when there is an `instruct` or `emotion` to follow. `dia2` (single-voice requests): overrides its default guidance. Ignored by other backends |
 | `response_format` | string | Only `wav` |
 | `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
@@ -101,8 +101,10 @@ On a cloning backend (`qwen3-0.6b`, `qwen3-1.7b`, `chatterbox`,
 `chatterbox-turbo`, `fish-s2-pro`, `breeze-tts-2`, `lux-tts`, `pocket-tts`) the
 endpoint never synthesizes without a resolved reference — an unusable voice is a
 logged `400`, not a take in some invented voice. The one exception is a backend
-that also takes `instruct` (`breeze-tts-2`): a non-blank `instruct` with no
-voice is voice *design* — the caller described the speaker — and is allowed:
+that also designs from `instruct` (`breeze-tts-2`): a non-blank `instruct` with
+no `voice` is voice *design* — the caller described the speaker. It is allowed,
+and it designs even when a Settings default voice is set (the default is not
+cloned in its place); send `voice` as well to direct a clone instead:
 
 | Case | Result |
 | --- | --- |

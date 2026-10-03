@@ -38,8 +38,10 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   - **Clone** — pick a voice. It needs the voice's transcript, like the
     Qwen Base models; a voice without one shows the "can't speak this voice"
     warning until you add it.
-  - **Design** — clear the voice and write a Direction ("a warm, unhurried
-    late-night radio host"); every take is a fresh speaker matching it.
+  - **Design** — choose **No voice — design from Direction** at the top of
+    the voice picker and write a Direction ("a warm, unhurried late-night
+    radio host"); every take is a fresh speaker matching it. Generate stays
+    off until there is a Direction, so a take is never a random stranger.
   - **Direct** — pick a voice *and* write a Direction. The voice keeps its
     identity; the Direction steers tone, pace and emotion. It is the only
     model where a Direction is honored alongside a cloned voice.

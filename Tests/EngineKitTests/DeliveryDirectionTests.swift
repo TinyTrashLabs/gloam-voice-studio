@@ -50,4 +50,30 @@ final class DeliveryDirectionTests: XCTestCase {
         XCTAssertNil(DeliveryDirection.compose(direction: nil, expression: nil, emotion: .neutral))
         XCTAssertNil(DeliveryDirection.compose(direction: "  ", expression: "", emotion: .neutral))
     }
+
+    func testAPhraseDirectionIsClosedBeforeTheNextPart() {
+        // The Studio's own placeholder is a phrase, not a sentence.
+        XCTAssertEqual(
+            DeliveryDirection.compose(direction: "warm, unhurried late-night radio host",
+                                      expression: "whisper", emotion: .neutral),
+            "warm, unhurried late-night radio host. " + DeliveryDirection.expressions["whisper"]!)
+    }
+
+    func testALoneDirectionIsPassedExactlyAsWritten() {
+        XCTAssertEqual(DeliveryDirection.compose(direction: "warm radio host",
+                                                 expression: nil, emotion: .neutral),
+                       "warm radio host")
+    }
+
+    func testFreeTextExpressionNeverGetsADoublePeriod() {
+        XCTAssertEqual(DeliveryDirection.phrase(forExpression: "whisper softly."),
+                       "Delivery: whisper softly.")
+    }
+
+    func testSentenceClosingRespectsExistingPunctuationAndChinese() {
+        XCTAssertEqual(DeliveryDirection.sentence("Calm!"), "Calm!")
+        XCTAssertEqual(DeliveryDirection.sentence(#"Say "hi.""#), #"Say "hi.""#)
+        XCTAssertEqual(DeliveryDirection.sentence("一位温柔的女性"), "一位温柔的女性。")
+        XCTAssertEqual(DeliveryDirection.sentence("温柔。"), "温柔。")
+    }
 }

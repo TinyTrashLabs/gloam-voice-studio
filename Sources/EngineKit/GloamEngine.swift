@@ -434,11 +434,20 @@ public actor GloamEngine {
         let model = try await residentModel(for: backend)
         let start = Date()
         var sampleCount = 0
-        for try await samples in model.synthesizeStream(plan) {
-            try Task.checkCancellation()
-            guard !samples.isEmpty else { continue }
-            sampleCount += samples.count
-            continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
+        // A capped backend's long line streams piece by piece: the first
+        // sentence group plays while the rest render.
+        for (index, piece) in Self.passes(of: plan, backend: backend).enumerated() {
+            if index > 0 {
+                let gap = Self.passGap(sampleRate: model.sampleRate)
+                sampleCount += gap.count
+                continuation.yield(SynthesisChunk(samples: gap, sampleRate: model.sampleRate))
+            }
+            for try await samples in model.synthesizeStream(piece) {
+                try Task.checkCancellation()
+                guard !samples.isEmpty else { continue }
+                sampleCount += samples.count
+                continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
+            }
         }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth stream \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(sampleCount) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
@@ -480,7 +489,13 @@ public actor GloamEngine {
                 temperature: plan.temperature, topK: plan.topK, cfgScale: plan.cfgScale))
             raw = chunk.samples
         } else {
-            raw = try await model.synthesize(plan)
+            var joined: [Float] = []
+            for (index, piece) in Self.passes(of: plan, backend: backend).enumerated() {
+                try Task.checkCancellation()
+                if index > 0 { joined.append(contentsOf: Self.passGap(sampleRate: model.sampleRate)) }
+                joined.append(contentsOf: try await model.synthesize(piece))
+            }
+            raw = joined
         }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
@@ -506,6 +521,22 @@ public actor GloamEngine {
             samples: samples,
             sampleRate: model.sampleRate,
             wallSeconds: wall)
+    }
+
+    /// `plan` as the generation calls it needs: one, or — for a backend whose
+    /// per-call cap a long line would hit (`maxSecondsPerPass`) — one per
+    /// sentence group, each carrying the same voice, direction and knobs.
+    /// Pieces target two thirds of the cap, leaving room for a slow Direction.
+    static func passes(of plan: ProviderRequest, backend: BackendID) -> [ProviderRequest] {
+        guard let cap = backend.maxSecondsPerPass else { return [plan] }
+        let pieces = LongTextChunker.chunks(plan.text, maxSeconds: cap * 2 / 3)
+        guard pieces.count > 1 else { return [plan] }
+        return pieces.map { var piece = plan; piece.text = $0; return piece }
+    }
+
+    /// The breath between pieces of a split line: 150 ms of silence.
+    static func passGap(sampleRate: Int) -> [Float] {
+        [Float](repeating: 0, count: sampleRate * 15 / 100)
     }
 
     private func residentModel(for backend: BackendID) async throws -> any SpeechModel {

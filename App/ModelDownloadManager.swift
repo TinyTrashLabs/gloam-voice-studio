@@ -49,16 +49,17 @@ final class ModelDownloadManager {
         // sherpa-onnx int8 export weights only — the dylib is bundled inside
         // the app (Task 1), not downloaded here.
         .pocketTTS: 210_000_000,
-        // mlx-community/Breeze-TTS-2-mlx-8bit: 4,602,695,993 bytes (3.9 GB
-        // weights + the 682 MB Qwen3-TTS audio tokenizer + a 33 MB
-        // tokenizer.json). 4-bit is 3.04 GB, bf16 7.63 GB.
+        // Breeze's per-precision sizes are exact — see
+        // BackendID.measuredDownloadBytes; this is only the fallback.
         .breezeTTS2: 4_600_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
         let base = Self.approxBytes8bit[backend] ?? 3_000_000_000
         guard !backend.availableQuants.isEmpty else { return base }
-        return Int64(Double(base) * quant(for: backend).sizeMultiplier)
+        let quant = self.quant(for: backend)
+        if let measured = backend.measuredDownloadBytes(quant: quant) { return measured }
+        return Int64(Double(base) * quant.sizeMultiplier)
     }
 
     init(root: URL, uiTest: Bool) {
@@ -100,10 +101,8 @@ final class ModelDownloadManager {
     /// choices survive; a stored value the backend doesn't offer reads as the
     /// default rather than pointing at a folder nothing ever downloads.
     func quant(for backend: BackendID) -> QwenQuant {
-        let offered = backend.availableQuants
-        guard !offered.isEmpty else { return BackendID.defaultQuant }
-        let raw = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
-        return raw.flatMap(QwenQuant.init(rawValue:)).flatMap { offered.contains($0) ? $0 : nil }
+        backend.effectiveQuant(
+            stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))
             ?? BackendID.defaultQuant
     }
 
@@ -120,7 +119,8 @@ final class ModelDownloadManager {
         // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
         // reported the model ready somewhere the loader never looked, and the
         // load fell through to the HF repo id and failed with a 401.
-        let quantRaw = backend.availableQuants.isEmpty ? nil : quant(for: backend).rawValue
+        let quantRaw = backend.effectiveQuant(
+            stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))?.rawValue
         return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 

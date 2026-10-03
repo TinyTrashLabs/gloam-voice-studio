@@ -50,11 +50,13 @@ public enum DeliveryDirection {
         let trimmed = expression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let known = expressions[trimmed.lowercased()] { return known }
-        return "Delivery: \(trimmed)."
+        return sentence("Delivery: \(trimmed)")
     }
 
     /// The user's Direction first (it is the most specific), then the
-    /// expression, then the emotion. nil when there is nothing to say.
+    /// expression, then the emotion — each closed as its own sentence, so a
+    /// Direction written as a phrase ("warm, unhurried radio host") doesn't
+    /// run on into "Whispering, …". nil when there is nothing to say.
     public static func compose(direction: String?, expression: String?,
                                emotion: Emotion) -> String? {
         let parts = [direction,
@@ -62,6 +64,22 @@ public enum DeliveryDirection {
                      phrase(for: emotion)]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
+        guard !parts.isEmpty else { return nil }
+        // A lone Direction is passed exactly as written.
+        guard parts.count > 1 else { return parts[0] }
+        return parts.map(sentence).joined(separator: " ")
+    }
+
+    /// `text` ending in sentence punctuation: unchanged when it already does
+    /// (Latin or full-width, closing quotes allowed), otherwise with a "." —
+    /// or "。" after Chinese, so a Chinese Direction stays Chinese.
+    static func sentence(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let closers: Set<Character> = ["\"", "'", "”", "’", ")", "」"]
+        let core = trimmed.reversed().drop(while: { closers.contains($0) })
+        guard let last = core.first else { return trimmed }
+        if ".!?…。！？".contains(last) { return trimmed }
+        let isCJK = last.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
+        return trimmed + (isCJK ? "。" : ".")
     }
 }

@@ -291,7 +291,11 @@ public enum APIRouter {
             // backends, whose `voice` is not a library slug at all.
             var trimSlug: String? = nil
             let defaultVoice = deps.defaultVoice()
-            let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            // An `instruct` with no `voice`, on a backend that designs from a
+            // direction (Breeze), asks for a DESIGNED voice — reaching for the
+            // Settings default would silently clone someone instead.
+            let designs = backend.designsFromDirection && req.voice == nil && !blank(req.instruct)
+            let effectiveVoice = req.voice ?? (designs || defaultVoice.isEmpty ? nil : defaultVoice)
             // Baked engine rendition: a pack carrying assets for THIS backend
             // (e.g. Billie Frost's engines/supertonic/style.json) renders that
             // voice instead of a house preset. Variant rendition first, then
@@ -356,19 +360,24 @@ public enum APIRouter {
                         + " unconditioned, randomly invented speaker")
                     throw APIError(status: .badRequest, detail: "voice '\(voice)' not found")
                 }
-            } else if clones && !(controls.instruct != .none && !blank(req.instruct)) {
+            } else if clones && !designs {
                 // No `voice` and no configured default: a cloning backend would
-                // invent a speaker. Say so instead. A backend that also takes an
-                // `instruct` (Breeze) is the exception when one is sent: that is
-                // voice DESIGN — the caller described the speaker — not an
-                // unconditioned guess.
+                // invent a speaker. Say so instead. Design (`designs` above) is
+                // the exception: the caller described the speaker, so this is
+                // not an unconditioned guess.
                 logError("/v1/audio/speech: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
                     + " unconditioned, randomly invented speaker")
                 throw APIError(status: .badRequest,
                                detail: "\(backend.rawValue) requires a 'voice'")
             }
-            let knobEmotion = usedVariant ? Emotion.neutral
+            // `.directed` (Breeze) also treats a take named directly in `voice`
+            // ("cruz-excited") as already performing its emotion, so the
+            // emotion isn't directed on top of it. Other mechanisms keep
+            // their long-standing behaviour.
+            let namedTake = backend.emotionMechanism == .directed
+                && trimSlug.flatMap { try? deps.voices.meta($0) }?.variantOf != nil
+            let knobEmotion = usedVariant || namedTake ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
             // Dia2 conditions on a word-aligned prefix, not on `refAudioPath`, so
             // the single-voice route has to build one too — otherwise a request

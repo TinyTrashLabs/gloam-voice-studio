@@ -120,6 +120,20 @@ final class GloamEngineTests: XCTestCase {
         XCTAssertTrue(provider.loads.isEmpty, "the gate runs before any weights load")
     }
 
+    func testBreezeLongLineSynthesizesInPiecesJoinedByAGap() async throws {
+        let provider = FakeProvider()
+        let model = FakeModel(samples: [0.5])
+        provider.models[.breezeTTS2] = model
+        let engine = GloamEngine(provider: provider)
+        await engine.acknowledgeLicense(for: .breezeTTS2)
+        let text = String(repeating: "A long sentence goes right here. ", count: 120)
+        let result = try await engine.synthesize(
+            backend: .breezeTTS2, request: SynthesisRequest(text: text))
+        XCTAssertGreaterThan(model.received.count, 1)
+        let gap = GloamEngine.passGap(sampleRate: model.sampleRate).count
+        XCTAssertEqual(result.samples.count, model.received.count + gap * (model.received.count - 1))
+    }
+
     func testFishAckDoesNotUnlockBreeze() async {
         // Distinct licenses: one ack must never unlock the other.
         let engine = GloamEngine(provider: FakeProvider())

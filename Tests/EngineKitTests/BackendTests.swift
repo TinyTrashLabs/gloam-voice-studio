@@ -368,9 +368,9 @@ final class BackendTests: XCTestCase {
         XCTAssertNil(controls.knobs.numSteps)
     }
 
-    /// Mirrors BreezeTTSModel.defaultGenerationParameters / defaultCFGScale in
-    /// the fork. The app's Breeze sliders start (and Reset) here, so a drift
-    /// would silently change every Breeze take.
+    /// breezeSamplingDefaults is READ from BreezeTTSModel, so it can't drift;
+    /// this pins the values themselves, so a fork bump that changes Breeze's
+    /// defaults is noticed here rather than heard in the takes.
     func testBreezeSamplingDefaultsMatchTheModel() {
         let d = BackendID.breezeSamplingDefaults
         XCTAssertEqual(d.topP, 1.0)
@@ -444,6 +444,34 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(s.contains(.downloadable))
         XCTAssertFalse(s.contains(.dialogue))
         XCTAssertFalse(s.contains(.creation), "the Foundry is qwen3-design's")
+    }
+
+    func testOnlyBreezeDesignsFromADirectionOrHasAPerPassCap() {
+        XCTAssertTrue(BackendID.breezeTTS2.designsFromDirection)
+        XCTAssertEqual(BackendID.breezeTTS2.maxSecondsPerPass, 60)
+        for backend in BackendID.allCases where backend != .breezeTTS2 {
+            XCTAssertFalse(backend.designsFromDirection, backend.rawValue)
+            XCTAssertNil(backend.maxSecondsPerPass, backend.rawValue)
+        }
+    }
+
+    func testEffectiveQuantIsTheOneRuleForFolderAndDownload() {
+        XCTAssertNil(BackendID.fishS2Pro.effectiveQuant(stored: "4bit"), "no picker, no precision")
+        XCTAssertNil(BackendID.qwen06BMobile.effectiveQuant(stored: "4bit"))
+        XCTAssertEqual(BackendID.qwen17B.effectiveQuant(stored: nil), .q8)
+        XCTAssertEqual(BackendID.qwen17B.effectiveQuant(stored: "5bit"), .q5)
+        XCTAssertEqual(BackendID.breezeTTS2.effectiveQuant(stored: "4bit"), .q4)
+        // Breeze isn't published at 5-bit: fall back rather than point at a
+        // folder nothing ever downloads into.
+        XCTAssertEqual(BackendID.breezeTTS2.effectiveQuant(stored: "5bit"), .q8)
+        XCTAssertEqual(BackendID.breezeTTS2.effectiveQuant(stored: "garbage"), .q8)
+    }
+
+    func testBreezeDownloadSizesAreMeasuredPerPrecision() {
+        XCTAssertEqual(BackendID.breezeTTS2.measuredDownloadBytes(quant: .q4), 3_042_732_998)
+        XCTAssertEqual(BackendID.breezeTTS2.measuredDownloadBytes(quant: .q8), 4_602_695_993)
+        XCTAssertEqual(BackendID.breezeTTS2.measuredDownloadBytes(quant: .bf16), 7_625_567_994)
+        XCTAssertNil(BackendID.qwen17B.measuredDownloadBytes(quant: .q8), "Qwen keeps scaling")
     }
 }
 

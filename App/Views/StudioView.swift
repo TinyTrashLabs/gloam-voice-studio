@@ -517,12 +517,6 @@ struct StudioView: View {
     @ViewBuilder
     private func advancedKnobs(_ knobs: Knobs) -> some View {
         @Bindable var model = model
-        // Breeze keeps its own sampler state (AppModel.breeze*) so the Qwen
-        // sliders' defaults never leak into it, and vice versa.
-        let breeze = model.backend == .breezeTTS2
-        let topP = breeze ? $model.breezeTopP : $model.qwenTopP
-        let topK = breeze ? $model.breezeTopK : $model.qwenTopK
-        let repetition = breeze ? $model.breezeRepetitionPenalty : $model.qwenRepetitionPenalty
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
                 if let r = knobs.temperature {
@@ -530,7 +524,9 @@ struct StudioView: View {
                             desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
                 }
                 if let r = knobs.topP {
-                    knobRow("Top-p", topP, r,
+                    // bench* route to the current backend's own sampler state
+                    // (AppModel.samplerPaths) — Breeze's never mixes with Qwen's.
+                    knobRow("Top-p", $model.benchTopP, r,
                             desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
                 }
                 if let r = knobs.topK {
@@ -538,18 +534,18 @@ struct StudioView: View {
                         HStack {
                             Text("Top-k")
                             Slider(value: Binding(
-                                get: { Float(topK.wrappedValue) },
-                                set: { topK.wrappedValue = Int($0) }),
+                                get: { Float(model.benchTopK) },
+                                set: { model.benchTopK = Int($0) }),
                                 in: Float(r.lowerBound)...Float(r.upperBound))
                                 .frame(minWidth: 60, maxWidth: 160)
-                            Text("\(topK.wrappedValue)").font(.system(.caption, design: .monospaced))
+                            Text("\(model.benchTopK)").font(.system(.caption, design: .monospaced))
                         }
                         Text("How many options it considers each step. Lower = constrained; higher = varied.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 if let r = knobs.repetitionPenalty {
-                    knobRow("Repetition", repetition, r,
+                    knobRow("Repetition", $model.benchRepetitionPenalty, r,
                             desc: "Higher values reduce stutters and looping artifacts.")
                 }
                 if let r = knobs.exaggeration {
@@ -699,6 +695,9 @@ struct StudioView: View {
                         Text(voice.name)
                             .font(.system(.callout, design: .default))
                             .foregroundStyle(Brand.fg)
+                    } else if model.backend.designsFromDirection {
+                        Text("No voice · design from Direction")
+                            .foregroundStyle(Brand.fgDim)
                     } else {
                         Text("Choose a voice")
                             .foregroundStyle(Brand.fgDim)
@@ -767,7 +766,12 @@ struct StudioView: View {
         // take could come out in a voice nobody chose; it stops the button now.
         let blockedReason: String? = {
             guard let slug = model.selectedVoiceSlug else {
-                return "Pick a voice in the sidebar."
+                // A backend that designs from a Direction (Breeze) needs no
+                // voice — but it does need the Direction, or the take is an
+                // unasked-for random speaker.
+                guard model.backend.designsFromDirection else { return "Pick a voice in the sidebar." }
+                return model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Pick a voice, or write a Direction to design one." : nil
             }
             let _ = model.voicesVersion
             guard !model.voiceCapabilities(slug).supports(model.backend) else { return nil }
@@ -865,7 +869,8 @@ struct StudioView: View {
                     if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
                         if model.backend.instructDirectsClone {
                             Text("Directing the selected voice — its identity stays; your Direction "
-                                 + "shapes tone, pace and emotion. Clear the voice to design one instead.")
+                                 + "shapes tone, pace and emotion. Choose “No voice” in the voice "
+                                 + "picker to design one instead.")
                                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                         } else {
                             Text("A reference voice is selected — Direction is ignored (clone takes priority). "
@@ -912,6 +917,32 @@ struct StudioView: View {
     private func voicePickerList(_ voices: [VoiceMeta]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
+                if model.backend.designsFromDirection {
+                    // The only way to leave the voice out on purpose (the
+                    // sidebar has no "none" row): Breeze then designs one
+                    // from the Direction.
+                    Button {
+                        model.selectedVoiceSlug = nil
+                        voicePickerOpen = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "wand.and.stars")
+                                .frame(width: 22, height: 22)
+                                .foregroundStyle(Brand.accent)
+                            Text("No voice — design from Direction").foregroundStyle(Brand.fg)
+                            Spacer()
+                            if model.selectedVoiceSlug == nil {
+                                Image(systemName: "checkmark").foregroundStyle(Brand.accent)
+                            }
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 12)
+                    .accessibilityIdentifier("voice-picker-none")
+                    Divider()
+                }
                 if voices.isEmpty {
                     Text("No voices yet — add one in the sidebar.")
                         .font(.callout)

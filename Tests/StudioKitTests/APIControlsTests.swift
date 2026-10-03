@@ -783,6 +783,60 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.instruct, "a calm narrator")
     }
 
+    func testBreezeInstructWithoutVoiceDesignsEvenWithADefaultVoice() async throws {
+        // makeDeps sets a Settings default voice ("cruz"). An instruct-only
+        // request still asks for a designed voice, not a directed cruz.
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","instruct":"a calm narrator"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertNil(provider.model.last?.refAudioPath, "the default voice must not be cloned")
+        XCTAssertEqual(provider.model.last?.instruct, "a calm narrator")
+    }
+
+    func testBreezeDefaultVoiceStillUsedWithoutAnInstruct() async throws {
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertTrue(provider.model.last?.refAudioPath?.hasSuffix("cruz/ref.wav") == true)
+    }
+
+    func testBreezeNamedTakeIsNotDirectedWithItsEmotionAgain() async throws {
+        let provider = CapturingProvider()
+        let voices = try seededLibrary("breeze-take")
+        _ = try voices.saveAt(slug: "cruz-excited", name: "Cruz (Excited)",
+                              refWav: Data([0, 1, 2]), refText: "an excited take",
+                              variantOf: "cruz")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider), voices: voices,
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","voice":"cruz-excited","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.refText, "an excited take")
+        XCTAssertNil(provider.model.last?.instruct, "the take already performs 'excited'")
+    }
+
     func testBreezeWithNeitherVoiceNorInstructIs400() async throws {
         let provider = CapturingProvider()
         let dir = FileManager.default.temporaryDirectory

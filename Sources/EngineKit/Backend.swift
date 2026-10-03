@@ -122,6 +122,32 @@ extension BackendID {
     /// user picks another. 8-bit everywhere it is offered.
     public static let defaultQuant: QwenQuant = .q8
 
+    /// The precision actually in effect given what the user stored (the raw
+    /// value persisted under `qwenQuant.<backend>`): nil for a backend with no
+    /// Precision picker; the default when nothing — or a precision this
+    /// backend doesn't offer — was stored. The ONE rule both the download
+    /// manager and the app's load resolver use, so they can never point at
+    /// different folders.
+    public func effectiveQuant(stored raw: String?) -> QwenQuant? {
+        guard !availableQuants.isEmpty else { return nil }
+        let stored = raw.flatMap(QwenQuant.init(rawValue:))
+        return stored.flatMap { availableQuants.contains($0) ? $0 : nil } ?? Self.defaultQuant
+    }
+
+    /// Measured download size at a precision, when it doesn't scale with
+    /// `QwenQuant.sizeMultiplier`. Breeze's 682 MB audio tokenizer is
+    /// unquantized in every conversion, so scaling its 8-bit size by Qwen's
+    /// multipliers is ~10% short at 4-bit and ~20% long at bf16 — which the
+    /// disk preflight then trusts. Sizes are the mlx-community repo totals.
+    public func measuredDownloadBytes(quant: QwenQuant) -> Int64? {
+        switch (self, quant) {
+        case (.breezeTTS2, .q4): 3_042_732_998
+        case (.breezeTTS2, .q8): 4_602_695_993
+        case (.breezeTTS2, .bf16): 7_625_567_994
+        default: nil
+        }
+    }
+
     /// On-disk folder name. Qwen embeds the quant so precisions coexist; Dia2
     /// embeds both size and quant (e.g. "dia2@2b-8bit") since it ships two sizes.
     /// dia2's folder encodes size as well as precision (`dia2@2b-8bit`), so a
@@ -430,6 +456,16 @@ extension BackendID {
         }
     }
 
+    /// Whether the backend can invent a voice from a Direction alone: it takes
+    /// an instruct AND cloning is optional (Breeze). The Studio lets such a
+    /// backend generate with no voice selected once a Direction is written,
+    /// and the API treats an `instruct` with no `voice` as design rather than
+    /// reaching for the Settings default voice. (qwen3-design also designs,
+    /// but has no clone path — it never had a voice to leave out.)
+    public var designsFromDirection: Bool {
+        controls.instruct != .none && controls.voiceClone == .optional
+    }
+
     /// Inline sounds a backend documents but does not list in an
     /// `added_tokens.json` the tag catalog can read off disk. Empty = ask the
     /// model directory (Dia2) or offer the free-form list (Fish).
@@ -445,10 +481,21 @@ extension BackendID {
         }
     }
 
-    /// Breeze's own sampler defaults (BreezeTTSModel.defaultGenerationParameters
-    /// and its CFG default), for the Advanced sliders and their Reset.
-    public static let breezeSamplingDefaults =
-        (topP: Float(1.0), topK: 50, repetitionPenalty: Float(1.0), cfgScale: Float(4.0))
+    /// The most speech one generation call can produce before the model's
+    /// token cap ends it mid-sentence, or nil when that is not a practical
+    /// limit. GloamEngine splits longer text into sentence pieces under it
+    /// (`LongTextChunker`). Breeze: 750 codec frames at 12.5 frames/s. Qwen
+    /// shares the codec but allows 4096 frames (~5.5 min), which no line
+    /// reaches. Exhaustive so a new backend has to answer the question.
+    public var maxSecondsPerPass: Double? {
+        switch self {
+        case .breezeTTS2: 60
+        case .qwen06B, .qwen06BMobile, .qwen17B, .qwenDesign, .qwenCustom,
+             .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro, .supertonic,
+             .luxTTS, .pocketTTS, .dia2: nil
+        }
+    }
+
 }
 
 extension BackendID {

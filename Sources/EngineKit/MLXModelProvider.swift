@@ -4,6 +4,18 @@ import MLXAudioCore
 import MLXAudioTTS
 import MLXRandom
 
+extension BackendID {
+    /// Breeze's own sampler defaults, for the app's Advanced sliders and their
+    /// Reset. Read from the model class itself rather than copied, so the
+    /// sliders can't drift from what an untouched take would use.
+    public static var breezeSamplingDefaults:
+        (topP: Float, topK: Int, repetitionPenalty: Float, cfgScale: Float)
+    {
+        let p = BreezeTTSModel.defaultParameters
+        return (p.topP, p.topK, p.repetitionPenalty ?? 1, BreezeTTSModel.defaultCFGScale)
+    }
+}
+
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
 public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
@@ -237,30 +249,16 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 }
                 Memory.clearCache()
                 return streamed
-            } else if backend == .breezeTTS2 {
-                // Breeze stops at 60 s of speech per call (750 frames at
-                // 12.5/s); a longer line would end mid-sentence with no error.
-                // Render it in sentence-aligned pieces with the same voice and
-                // direction, joined by a short breath. Short lines are one piece.
-                var joined: [Float] = []
-                let gap = [Float](repeating: 0, count: model.sampleRate * 15 / 100)
-                for (index, piece) in LongTextChunker.chunks(request.text).enumerated() {
-                    if Task.isCancelled { throw CancellationError() }
-                    let part = try await model.generate(
-                        text: piece, voice: request.instruct, refAudio: refAudio,
-                        refText: request.refText, language: request.language,
-                        generationParameters: params)
-                    if index > 0 { joined.append(contentsOf: gap) }
-                    joined.append(contentsOf: part.asArray(Float.self))
-                    Memory.clearCache()
-                }
-                return joined
             } else {
-                // Base/VoiceDesign/Fish/Chatterbox. For Qwen, `voice:` carries the
+                // Base/VoiceDesign/Fish/Chatterbox/Breeze. For Qwen, `voice:` carries the
                 // instruct (honored only on the no-ref path — planner already enforced this).
+                // Breeze reads `voice:` as its instruction too, with or without a
+                // reference pair: design alone, or direction over a clone. (Its
+                // 60 s-per-call cap is handled a level up — GloamEngine splits
+                // long text by `BackendID.maxSecondsPerPass`.)
                 audio = try await model.generate(
                     text: request.text,
-                    voice: backend.isQwen ? request.instruct
+                    voice: backend.isQwen || backend == .breezeTTS2 ? request.instruct
                         // Supertonic: an absolute style-file path renders that
                         // baked voice (fork PR #7); a bare name stays a preset.
                         : backend == .supertonic ? (request.styleURL?.path ?? request.speaker)

@@ -338,14 +338,17 @@ final class AppModel {
 
     func didAck(_ backend: BackendID) -> Bool { ackedLicenses.contains(backend) }
 
-    /// Record the user's ack for one backend: persist it and tell the engine
-    /// (the engine refuses to synthesize an un-acked licensed backend).
+    /// Record the user's ack for one backend: persist it and tell BOTH engines
+    /// (each refuses to synthesize an un-acked licensed backend). Chat speaks
+    /// on `chatSpeechEngine`, which used to be left out — so a licensed chat
+    /// voice (fish, supertonic, breeze) failed every reply with "acknowledge
+    /// the license" even after the user had.
     func ackLicense(_ backend: BackendID) {
         ackedLicenses.insert(backend)
         UserDefaults.standard.set(ackedLicenses.map(\.rawValue).sorted(),
                                   forKey: "ackedLicenses")
-        let engine = engine
-        Task { await engine.acknowledgeLicense(for: backend) }
+        let engines = [engine, chatSpeechEngine]
+        Task { for e in engines { await e.acknowledgeLicense(for: backend) } }
     }
 
     // Engine residency (mirrored from the engine actor for the toolbar UI)
@@ -547,6 +550,36 @@ final class AppModel {
     var breezeTopK: Int = BackendID.breezeSamplingDefaults.topK
     var breezeRepetitionPenalty: Float = BackendID.breezeSamplingDefaults.repetitionPenalty
     var breezeCfgScale: Float = BackendID.breezeSamplingDefaults.cfgScale
+
+    /// Where `backend`'s Top-p / Top-k / Repetition sliders live. The ONE place
+    /// that decides it: the Advanced pane binds through these and the request
+    /// builder reads through them, so the values a take uses are always the
+    /// ones on screen.
+    struct SamplerPaths {
+        let topP: ReferenceWritableKeyPath<AppModel, Float>
+        let topK: ReferenceWritableKeyPath<AppModel, Int>
+        let repetitionPenalty: ReferenceWritableKeyPath<AppModel, Float>
+    }
+    func samplerPaths(for backend: BackendID) -> SamplerPaths {
+        backend == .breezeTTS2
+            ? SamplerPaths(topP: \.breezeTopP, topK: \.breezeTopK,
+                           repetitionPenalty: \.breezeRepetitionPenalty)
+            : SamplerPaths(topP: \.qwenTopP, topK: \.qwenTopK,
+                           repetitionPenalty: \.qwenRepetitionPenalty)
+    }
+    /// The Advanced pane's sliders, routed to the current backend's state.
+    var benchTopP: Float {
+        get { self[keyPath: samplerPaths(for: backend).topP] }
+        set { self[keyPath: samplerPaths(for: backend).topP] = newValue }
+    }
+    var benchTopK: Int {
+        get { self[keyPath: samplerPaths(for: backend).topK] }
+        set { self[keyPath: samplerPaths(for: backend).topK] = newValue }
+    }
+    var benchRepetitionPenalty: Float {
+        get { self[keyPath: samplerPaths(for: backend).repetitionPenalty] }
+        set { self[keyPath: samplerPaths(for: backend).repetitionPenalty] = newValue }
+    }
 
     // MARK: Voice Foundry (Create Voice) — qwen3-design mints a new voice you then
     // save as a reusable clone reference. Its state is separate from the Studio bench.
@@ -763,19 +796,13 @@ final class AppModel {
             // no slowdown. (A Settings-configurable cap is planned.)
             MLXModelProvider.configureMemory(cacheLimitBytes: 1 << 30)
             let modelRoot = StoragePaths.models
-            // Mirror ModelDownloadManager.directory(for:): backends with a
-            // Precision picker (Qwen, Breeze) live in quant-suffixed folders
-            // (e.g. qwen3-0.6b@8bit), others under rawValue. Same fallback as
-            // `quant(for:)`: a stored precision the backend doesn't offer reads
-            // as the default.
+            // Backends with a Precision picker (Qwen, Breeze) live in
+            // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
             let ttsResolver: @Sendable (BackendID) -> String? = { backend in
-                var quantRaw: String? = nil
-                if !backend.availableQuants.isEmpty {
-                    let stored = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
-                        .flatMap(QwenQuant.init(rawValue:))
-                    let offered = stored.flatMap { backend.availableQuants.contains($0) ? $0 : nil }
-                    quantRaw = (offered ?? BackendID.defaultQuant).rawValue
-                }
+                // Same rule as ModelDownloadManager.directory(for:) — shared,
+                // so the loader can't look in a folder the downloader didn't fill.
+                let quantRaw = backend.effectiveQuant(
+                    stored: UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)"))?.rawValue
                 let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
                 // Pocket is a sherpa-onnx layout, not an HF snapshot — no
                 // config.json; its own manifest check is the readiness marker.
@@ -821,9 +848,9 @@ final class AppModel {
         // Studio backend + chat voice would hold two full weight sets.
         ttsResidency = TTSResidencyPolicy(engines: [engine, chatSpeechEngine])
         if !ackedLicenses.isEmpty {
-            let engine = engine
+            let engines = [engine, chatSpeechEngine]   // see ackLicense
             let acks = ackedLicenses
-            Task { for b in acks { await engine.acknowledgeLicense(for: b) } }
+            Task { for e in engines { for b in acks { await e.acknowledgeLicense(for: b) } } }
         }
         // Every engine's built-in voices exist as ordinary packs, so the sidebar
         // and the synthesis path have one notion of identity between them.
@@ -1288,7 +1315,10 @@ final class AppModel {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
-                if backend.emotionMechanism == .directed && found.meta.slug != slug {
+                // An acted take — resolved from the emotion, or picked directly
+                // (the popover lists takes) — already performs its emotion.
+                if backend.emotionMechanism == .directed
+                    && (found.meta.slug != slug || found.meta.variantOf != nil) {
                     requestEmotion = .neutral
                 }
             } else if rendition == nil {
@@ -1333,6 +1363,7 @@ final class AppModel {
                         + "\(describeAny(error))")
             }
         }
+        let sampler = samplerPaths(for: backend)
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
             emotion: requestEmotion,
@@ -1349,14 +1380,10 @@ final class AppModel {
             speaker: controls.presetSpeakers.isEmpty ? nil : presetSpeaker,
             styleURL: styleURL,
             language: controls.language ? language : nil,
-            // Breeze has its own sampler state (see `breezeTopP`); everyone
-            // else with these knobs uses the Qwen sliders.
-            topP: controls.knobs.topP == nil ? nil
-                : backend == .breezeTTS2 ? breezeTopP : qwenTopP,
-            topK: controls.knobs.topK == nil ? nil
-                : backend == .breezeTTS2 ? breezeTopK : qwenTopK,
+            topP: controls.knobs.topP == nil ? nil : self[keyPath: sampler.topP],
+            topK: controls.knobs.topK == nil ? nil : self[keyPath: sampler.topK],
             repetitionPenalty: controls.knobs.repetitionPenalty == nil ? nil
-                : backend == .breezeTTS2 ? breezeRepetitionPenalty : qwenRepetitionPenalty,
+                : self[keyPath: sampler.repetitionPenalty],
             numStepsOverride: controls.knobs.numSteps != nil ? luxNumSteps : nil,
             guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
             tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
