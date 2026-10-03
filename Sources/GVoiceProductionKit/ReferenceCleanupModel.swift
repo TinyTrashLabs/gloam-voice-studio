@@ -93,10 +93,11 @@ public struct ReferenceCleanupMetrics: Codable, Sendable, Equatable {
 
 public struct ReferenceVerification: Codable, Sendable, Equatable {
     public var transcriber: String?; public var transcriberVersion: String?
-    public var speechOnly: Bool; public var noOverlappingSpeaker: Bool
+    /// nil = not verified (nothing in the native pipeline checks it); old reports stored a Bool here.
+    public var speechOnly: Bool?; public var noOverlappingSpeaker: Bool?
     public var musicRemoved: Bool?; public var warnings: [String]
-    public init(transcriber: String?, transcriberVersion: String?, speechOnly: Bool,
-                noOverlappingSpeaker: Bool, musicRemoved: Bool?, warnings: [String]) {
+    public init(transcriber: String?, transcriberVersion: String?, speechOnly: Bool?,
+                noOverlappingSpeaker: Bool?, musicRemoved: Bool?, warnings: [String]) {
         self.transcriber = transcriber; self.transcriberVersion = transcriberVersion
         self.speechOnly = speechOnly; self.noOverlappingSpeaker = noOverlappingSpeaker
         self.musicRemoved = musicRemoved; self.warnings = warnings

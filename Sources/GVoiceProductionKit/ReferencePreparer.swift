@@ -50,9 +50,11 @@ public struct ReferencePreparer: Sendable {
             clippedSampleCount: finalSamples.filter { abs($0) >= 1 }.count,
             sourceSHA256: Self.sha256(sourceData), referenceSHA256: Self.sha256(wav))
         let verification = ReferenceVerification(
-            transcriber: "manual", transcriberVersion: nil, speechOnly: true,
-            noOverlappingSpeaker: true,
-            musicRemoved: recipe.mode == .isolateVocals ? true : nil, warnings: [])
+            transcriber: nil, transcriberVersion: nil, speechOnly: nil,
+            noOverlappingSpeaker: nil,
+            musicRemoved: recipe.mode == .isolateVocals ? true : nil,
+            warnings: ["not verified: speech-only and single-speaker (no check runs on the cleaned audio)",
+                       "not verified: transcript was supplied by the caller and not checked against the audio"])
         let report = ReferenceCleanupReport(sourceIdentity: request.sourceIdentity,
                                             recipe: recipe, metrics: metrics,
                                             verification: verification)

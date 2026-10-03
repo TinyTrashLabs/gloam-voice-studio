@@ -45,4 +45,15 @@ final class ReferenceCleanupModelTests: XCTestCase {
         overlap.segments = []
         XCTAssertThrowsError(try overlap.validated(sourceDuration: 3))
     }
+
+    func testVerificationDecodesOldBoolReportsAndRoundTripsUnverified() throws {
+        let old = Data(#"{"transcriber":"manual","speechOnly":true,"noOverlappingSpeaker":true,"warnings":[]}"#.utf8)
+        let decoded = try JSONDecoder().decode(ReferenceVerification.self, from: old)
+        XCTAssertEqual(decoded.speechOnly, true)
+        let unverified = ReferenceVerification(transcriber: nil, transcriberVersion: nil, speechOnly: nil,
+                                               noOverlappingSpeaker: nil, musicRemoved: nil, warnings: ["not verified"])
+        let again = try JSONDecoder().decode(ReferenceVerification.self, from: JSONEncoder().encode(unverified))
+        XCTAssertEqual(again, unverified)
+        XCTAssertNil(again.speechOnly)
+    }
 }
