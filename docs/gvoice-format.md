@@ -44,6 +44,7 @@ backends vary in what they need:
 | `chatterbox` | **required** | none | — | `source/` audio |
 | `chatterbox-turbo` | **required** | none | — | `source/` audio |
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
+| `breeze-tts-2` | optional | optional | — | `source/` audio + transcript (an `instruct` may accompany it, or stand alone to design a voice) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
 | `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
 | `dia2` | optional | none | — | Word-aligned reference audio; may carry a dedicated `dia2` clip |
@@ -87,7 +88,7 @@ billie-frost.gvoice          (zip)
         └── voice.json       { "voiceId": "…" }
 ```
 
-`chatterbox`, `chatterbox-turbo`, `fish-s2-pro` and the Qwen Base models need
+`chatterbox`, `chatterbox-turbo`, `fish-s2-pro`, `breeze-tts-2` and the Qwen Base models need
 no `engines/` directory — they consume `source/` audio directly, so a reader
 serving them reads `source` and ignores `engines` entirely. A manifest MAY
 still list such an engine pointing back into `source/`; readers MUST tolerate

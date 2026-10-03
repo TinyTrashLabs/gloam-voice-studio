@@ -33,6 +33,55 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
 - `chatterbox` / `chatterbox-turbo` — expressive cloning; turbo is the fast one
 - `fish-s2-pro` — quality-first cloning (research/non-commercial license;
   acknowledge in Settings)
+- `breeze-tts-2` — BreezeBlue's Breeze TTS 2 (3B, English + Chinese, 24 kHz).
+  Three ways to drive it from the same Direct pane:
+  - **Clone** — pick a voice. It needs the voice's transcript, like the
+    Qwen Base models; a voice without one shows the "can't speak this voice"
+    warning until you add it.
+  - **Design** — choose **No voice — design from Direction** at the top of
+    the voice picker and write a Direction ("a warm, unhurried late-night
+    radio host"); every take is a fresh speaker matching it. Generate stays
+    off until there is a Direction, so a take is never a random stranger.
+    Design is a Studio-bench mode: chat and Script mode speak a call per
+    sentence or line, which would be a new person each time, so they ask for
+    a voice instead.
+  - **Direct** — pick a voice *and* write a Direction. The voice keeps its
+    identity; the Direction steers tone, pace and emotion. It is the only
+    model where a Direction is honored alongside a cloned voice.
+
+  **Emotion** works in all three modes. The Emotion chips (flat → hype) and
+  the **Expression** menu (whisper, angry, sad, laughing, …) are turned into
+  words and appended to your Direction, because Breeze's emotion control *is*
+  its instruction. If the voice has an acted take for the chosen emotion
+  (`<voice>-excited`), that take is cloned instead and the emotion isn't
+  added on top. Any emotion or expression adds a guided second pass, so it
+  renders more slowly than a plain clone.
+
+  Sounds come from the TAGS chips: `(laugh)` / `(sigh)` / `(cough)` /
+  `(clears throat)` for English (parenthesised — a `[bracketed]` English tag
+  is read aloud) and `[笑]` / `[叹气]` / `[咳嗽]` / `[清嗓子]` for Chinese.
+
+  Advanced has Temperature, Top-p, Top-k and Repetition — Breeze's own,
+  starting at its defaults (top-k 50, repetition 1.1) rather than the Qwen
+  sliders' — plus **Guidance (CFG)**, default 4: how strongly a take follows
+  the Direction, Emotion and Expression. Higher is more pronounced and less
+  natural; 1 turns it off (and the slower guided pass with it). It does
+  nothing on a plain clone with nothing to follow. **Identity strength**
+  (1 = off, up to 4) pulls a cloned take harder toward the reference voice —
+  for an accent or timbre that drifts — at the cost of an extra model pass
+  per frame; with a Direction it weighs the voice and the Direction
+  separately (upstream's dual guidance). **Fixed seed** makes takes
+  repeatable, so changing one slider changes only what that slider does.
+  Reset restores all of these. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
+  (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
+  RAM. Breeze stops at about 60 seconds of speech per pass, so a longer line
+  is rendered in sentence-sized pieces with the same voice and Direction and
+  joined with a short breath (streamed piece by piece where the caller
+  streams). A long *designed* line opens with a short piece and clones it for
+  the rest, so the whole line keeps one speaker. As a chat voice, Breeze
+  speaks with the Studio's Direction, the same as `qwen3-custom`. The weights and the audio you generate with them are under the
+  BreezeBlue Research and Non-Commercial License — acknowledge it in
+  Settings first.
 - `lux-tts` — fast cloning-only English, 48 kHz, the lightest of the set
   (~529 MB). Weights come from
   [`tinytrashlabs/LuxTTS-mlx`](https://huggingface.co/tinytrashlabs/LuxTTS-mlx),
@@ -64,8 +113,11 @@ read a fixed guided script in character (each emotion shows its own delivery
 note), and the recording is saved as `<voice>-<emotion>`. Recorded takes are
 the **only** way to get emotional range on `chatterbox-turbo` — it has no
 runtime emotion knob, so the reference clip itself carries the emotion.
-Baking stays the recommended path when a `fish-s2-pro` or `chatterbox`
-render is good enough.
+Baking stays the recommended path when a `fish-s2-pro`, `breeze-tts-2` or
+`chatterbox` render is good enough. The baker picker offers all three:
+`fish-s2-pro` acts each expression from its inline marker, `breeze-tts-2`
+directs a clone of the voice with the expression in words (needs the voice's
+transcript), and `chatterbox` only varies intensity.
 
 ## Chat
 

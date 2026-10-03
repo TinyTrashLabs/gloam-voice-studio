@@ -196,6 +196,21 @@ final class APIServerTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    func testSpeechBreezeWithoutAckIs403WithItsOwnNotice() async throws {
+        try await app().test(.router) { client in
+            let create = #"{"name":"Cruz","refAudio":"AAEC","refText":"hi"}"#
+            try await client.execute(uri: "/voices", method: .post,
+                                     body: ByteBuffer(string: create)) { _ in }
+            let speech = #"{"input":"hello","model":"breeze-tts-2","voice":"cruz"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: speech)) { response in
+                XCTAssertEqual(response.status, .forbidden)
+                XCTAssertEqual(try self.json(response.body)["detail"] as? String,
+                               breezeLicenseNotice)
+            }
+        }
+    }
+
     func testSpeechRejectsNonWavFormatAndEmptyInput() async throws {
         try await app().test(.router) { client in
             try await client.execute(

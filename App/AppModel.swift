@@ -338,14 +338,17 @@ final class AppModel {
 
     func didAck(_ backend: BackendID) -> Bool { ackedLicenses.contains(backend) }
 
-    /// Record the user's ack for one backend: persist it and tell the engine
-    /// (the engine refuses to synthesize an un-acked licensed backend).
+    /// Record the user's ack for one backend: persist it and tell BOTH engines
+    /// (each refuses to synthesize an un-acked licensed backend). Chat speaks
+    /// on `chatSpeechEngine`, which used to be left out — so a licensed chat
+    /// voice (fish, supertonic, breeze) failed every reply with "acknowledge
+    /// the license" even after the user had.
     func ackLicense(_ backend: BackendID) {
         ackedLicenses.insert(backend)
         UserDefaults.standard.set(ackedLicenses.map(\.rawValue).sorted(),
                                   forKey: "ackedLicenses")
-        let engine = engine
-        Task { await engine.acknowledgeLicense(for: backend) }
+        let engines = [engine, chatSpeechEngine]
+        Task { for e in engines { await e.acknowledgeLicense(for: backend) } }
     }
 
     // Engine residency (mirrored from the engine actor for the toolbar UI)
@@ -387,6 +390,11 @@ final class AppModel {
     }
     var text = ""
     var emotion: Emotion = .neutral
+    /// An acted expression for a `.directed` backend (Breeze), phrased into its
+    /// instruction alongside the Emotion pick — "whisper", "angry", …. nil =
+    /// none. Ignored by every other mechanism (Fish takes its markers as
+    /// inline [tags] in the text instead).
+    var expression: VoiceExpression?
     var speed: Float = 1.0
     var variants: [Variant] = []
     var isGenerating = false
@@ -498,6 +506,8 @@ final class AppModel {
     /// Empty means "use your own list"; non-empty means "these and nothing
     /// else", because a tag the model does not know gets read out loud.
     func nonverbalTags(for backend: BackendID) -> [String] {
+        // A documented vocabulary (Breeze) needs no tokenizer read.
+        if !backend.fixedNonverbalTags.isEmpty { return backend.fixedNonverbalTags }
         if let hit = tagCache[backend] { return hit }
         let tags = NonverbalTagCatalog.parenthesised(
             inModelDirectory: downloads.directory(for: backend))
@@ -531,6 +541,51 @@ final class AppModel {
     var luxGuidanceScale: Float = AppModel.knobDefaults.luxGuidanceScale
     var luxTShift: Float = AppModel.knobDefaults.luxTShift
     var luxReturnSmooth: Bool = AppModel.knobDefaults.luxReturnSmooth
+
+    // Breeze sampler knobs (Advanced disclosure). Its own state rather than the
+    // Qwen sliders': those default to top-k off / repetition 1.05, which would
+    // replace Breeze's own top-k 50 / repetition 1.1. Temperature stays shared
+    // (0.9 is Breeze's default too). CFG only acts on instructed takes.
+    var breezeTopP: Float = BackendID.breezeSamplingDefaults.topP
+    var breezeTopK: Int = BackendID.breezeSamplingDefaults.topK
+    var breezeRepetitionPenalty: Float = BackendID.breezeSamplingDefaults.repetitionPenalty
+    var breezeCfgScale: Float = BackendID.breezeSamplingDefaults.cfgScale
+    /// Identity strength: guidance toward the cloned voice (1 = off).
+    var breezeReferenceGuidance: Float = 1
+    /// Fixed seed: when locked, every Breeze take samples from `breezeSeed`, so
+    /// changing one setting changes only what that setting does.
+    var breezeSeedLocked = false
+    var breezeSeed: Int = Int.random(in: 1...999_999)
+
+    /// Where `backend`'s Top-p / Top-k / Repetition sliders live. The ONE place
+    /// that decides it: the Advanced pane binds through these and the request
+    /// builder reads through them, so the values a take uses are always the
+    /// ones on screen.
+    struct SamplerPaths {
+        let topP: ReferenceWritableKeyPath<AppModel, Float>
+        let topK: ReferenceWritableKeyPath<AppModel, Int>
+        let repetitionPenalty: ReferenceWritableKeyPath<AppModel, Float>
+    }
+    func samplerPaths(for backend: BackendID) -> SamplerPaths {
+        backend == .breezeTTS2
+            ? SamplerPaths(topP: \.breezeTopP, topK: \.breezeTopK,
+                           repetitionPenalty: \.breezeRepetitionPenalty)
+            : SamplerPaths(topP: \.qwenTopP, topK: \.qwenTopK,
+                           repetitionPenalty: \.qwenRepetitionPenalty)
+    }
+    /// The Advanced pane's sliders, routed to the current backend's state.
+    var benchTopP: Float {
+        get { self[keyPath: samplerPaths(for: backend).topP] }
+        set { self[keyPath: samplerPaths(for: backend).topP] = newValue }
+    }
+    var benchTopK: Int {
+        get { self[keyPath: samplerPaths(for: backend).topK] }
+        set { self[keyPath: samplerPaths(for: backend).topK] = newValue }
+    }
+    var benchRepetitionPenalty: Float {
+        get { self[keyPath: samplerPaths(for: backend).repetitionPenalty] }
+        set { self[keyPath: samplerPaths(for: backend).repetitionPenalty] = newValue }
+    }
 
     // MARK: Voice Foundry (Create Voice) — qwen3-design mints a new voice you then
     // save as a reusable clone reference. Its state is separate from the Studio bench.
@@ -747,12 +802,12 @@ final class AppModel {
             // no slowdown. (A Settings-configurable cap is planned.)
             MLXModelProvider.configureMemory(cacheLimitBytes: 1 << 30)
             let modelRoot = StoragePaths.models
-            // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
+            // Backends with a Precision picker (Qwen, Breeze) live in
             // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
             let ttsResolver: @Sendable (BackendID) -> String? = { backend in
-                let quantRaw = backend.isQwen
-                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
-                    : nil
+                // Same rule as ModelDownloadManager.directory(for:) — shared,
+                // so the loader can't look in a folder the downloader didn't fill.
+                let quantRaw = backend.effectiveQuant(in: .standard)?.rawValue
                 let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
                 // Pocket is a sherpa-onnx layout, not an HF snapshot — no
                 // config.json; its own manifest check is the readiness marker.
@@ -798,9 +853,9 @@ final class AppModel {
         // Studio backend + chat voice would hold two full weight sets.
         ttsResidency = TTSResidencyPolicy(engines: [engine, chatSpeechEngine])
         if !ackedLicenses.isEmpty {
-            let engine = engine
+            let engines = [engine, chatSpeechEngine]   // see ackLicense
             let acks = ackedLicenses
-            Task { for b in acks { await engine.acknowledgeLicense(for: b) } }
+            Task { for e in engines { for b in acks { await e.acknowledgeLicense(for: b) } } }
         }
         // Every engine's built-in voices exist as ordinary packs, so the sidebar
         // and the synthesis path have one notion of identity between them.
@@ -871,7 +926,8 @@ final class AppModel {
             do {
                 let result = try await synthesizeLine(
                     text: text, voiceSlug: selectedVoiceSlug,
-                    emotion: emotion, speed: speed)
+                    emotion: emotion, expression: expression?.rawValue,
+                    designing: true, speed: speed)
                 let pcm = PCM16.data(from: result.samples)
                 let seconds = Double(result.samples.count) / Double(result.sampleRate)
                 let wav = WAVEncoder.encode(pcm16: pcm, sampleRate: result.sampleRate)
@@ -1056,6 +1112,7 @@ final class AppModel {
         speed = 1
         instruct = ""
         language = "auto"
+        expression = nil
     }
 
     func resetDeliveryKnobs() {
@@ -1069,6 +1126,12 @@ final class AppModel {
         luxGuidanceScale = Self.knobDefaults.luxGuidanceScale
         luxTShift = Self.knobDefaults.luxTShift
         luxReturnSmooth = Self.knobDefaults.luxReturnSmooth
+        breezeTopP = BackendID.breezeSamplingDefaults.topP
+        breezeTopK = BackendID.breezeSamplingDefaults.topK
+        breezeRepetitionPenalty = BackendID.breezeSamplingDefaults.repetitionPenalty
+        breezeCfgScale = BackendID.breezeSamplingDefaults.cfgScale
+        breezeReferenceGuidance = 1
+        breezeSeedLocked = false
     }
 
     // MARK: model residency
@@ -1194,7 +1257,10 @@ final class AppModel {
     /// stream (identical to the normal path when no stream is active).
     /// `backendOverride`/`engineOverride` let chat render with its own voice
     /// engine on the second (parallel) GloamEngine.
+    /// `designing`: the caller is the Studio bench, the one place a backend
+    /// that designs from a Direction may run with no voice (see the guard).
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
+                        expression: String? = nil, designing: Bool = false,
                         speed: Float, recordHistory: Bool = true,
                         interleaved: Bool = false,
                         backendOverride: BackendID? = nil,
@@ -1230,6 +1296,21 @@ final class AppModel {
             // thing as "no voice picked" that still speaks.
             throw AppGenerationError(
                 message: "Pick a voice — \(backend.rawValue)'s presets are in the sidebar.")
+        } else if backend.designsFromDirection {
+            // Designing from a Direction (Breeze, no voice) invents a new
+            // speaker per call. That is the point on the Studio bench, where
+            // each take is auditioned; in chat (a call per sentence) or Script
+            // (a call per line) it would be a different person every time —
+            // and with no Direction it would be nobody anyone asked for.
+            guard designing else {
+                throw AppGenerationError(
+                    message: "Pick a voice for \(backend.rawValue) — designing from a Direction "
+                        + "makes a new speaker every time, so it's only offered on the Studio bench.")
+            }
+            guard !instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AppGenerationError(
+                    message: "Write a Direction to design a voice, or pick one to clone.")
+            }
         }
         var refPath: String?
         var refText: String?
@@ -1250,11 +1331,21 @@ final class AppModel {
         // the BASE voice — so resolve to the base clip, not an acted `-emotion`
         // variant (that path is for the variant-clip backends).
         let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
+        // `.directed` (Breeze) phrases the emotion into its instruction — unless
+        // an acted `-emotion` take was found, which already performs it. Same
+        // rule as the API's `usedVariant`: never direct a performance twice.
+        var requestEmotion = emotion
         if let slug = voiceSlug {
             if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
+                // An acted take — resolved from the emotion, or picked directly
+                // (the popover lists takes) — already performs its emotion.
+                if backend.emotionMechanism == .directed
+                    && (found.meta.slug != slug || found.meta.isTake) {
+                    requestEmotion = .neutral
+                }
             } else if rendition == nil {
                 // A rendition-only pack (no ref.wav) is fine when this backend
                 // has a style to render or a preset name to speak as; otherwise
@@ -1297,9 +1388,12 @@ final class AppModel {
                         + "\(describeAny(error))")
             }
         }
+        let sampler = samplerPaths(for: backend)
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
-            emotion: emotion, speed: speed,
+            emotion: requestEmotion,
+            emotionMarker: backend.emotionMechanism == .directed ? expression : nil,
+            speed: speed,
             temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
@@ -1311,13 +1405,19 @@ final class AppModel {
             speaker: controls.presetSpeakers.isEmpty ? nil : presetSpeaker,
             styleURL: styleURL,
             language: controls.language ? language : nil,
-            topP: controls.knobs.topP != nil ? qwenTopP : nil,
-            topK: controls.knobs.topK != nil ? qwenTopK : nil,
-            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil,
+            topP: controls.knobs.topP == nil ? nil : self[keyPath: sampler.topP],
+            topK: controls.knobs.topK == nil ? nil : self[keyPath: sampler.topK],
+            repetitionPenalty: controls.knobs.repetitionPenalty == nil ? nil
+                : self[keyPath: sampler.repetitionPenalty],
             numStepsOverride: controls.knobs.numSteps != nil ? luxNumSteps : nil,
             guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
             tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
             returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil,
+            // Breeze's CFG slider. Dia2 also declares the knob, but its slider
+            // lives in the Dialogue composer, so the bench leaves it alone.
+            cfgScaleOverride: backend == .breezeTTS2 ? breezeCfgScale : nil,
+            referenceGuidanceOverride: backend == .breezeTTS2 ? breezeReferenceGuidance : nil,
+            seed: backend == .breezeTTS2 && breezeSeedLocked ? UInt64(breezeSeed) : nil,
             dialoguePrefix: dialoguePrefix)
         // Must precede queuing work on `engine` (see TTSResidencyPolicy's
         // deadlock-safety contract).
@@ -1776,8 +1876,10 @@ final class AppModel {
 
     /// Bake acted expression variants of a saved voice by cloning its base clip
     /// through Fish with each emotion's inline `[marker]` — Fish's real emotion
-    /// mechanism (temperature/exaggeration produce near-identical takes). Saved as
-    /// `<slug>-<expression>` so any backend can clone the acted performance.
+    /// mechanism (temperature/exaggeration produce near-identical takes) — or
+    /// through Breeze, which directs the clone with the expression phrased as an
+    /// instruction. Saved as `<slug>-<expression>` so any backend can clone the
+    /// acted performance.
     func bakeExpressionVariants(baseSlug: String, expressions: [VoiceExpression],
                                 baker: BackendID) async {
         foundryError = nil
@@ -1793,6 +1895,11 @@ final class AppModel {
             foundryError = "Downloading \(baker.rawValue) to generate with — try again once it's ready."
             return
         }
+        if baker.needsRefText && meta.refText.isEmpty {
+            foundryError = "\(baker.rawValue) clones from the voice's transcript too — "
+                + "add one to “\(meta.name)” first."
+            return
+        }
         foundryBaking = true
         loadedBackend = baker   // reflect the baker as resident while it renders
         defer { foundryBaking = false }
@@ -1806,7 +1913,11 @@ final class AppModel {
                 // so the marker isn't swamped by the reference's own delivery.
                 // Chatterbox has no markers, so fall back to its exaggeration
                 // intensity — cruder, but works for users who can't run Fish.
-                let request: SynthesisRequest = baker == .fishS2Pro
+                // Breeze (.directed) takes the same named expression; the planner
+                // phrases it into a direction over the cloned base voice.
+                let takesExpression = baker.emotionMechanism == .inlineMarker
+                    || baker.emotionMechanism == .directed
+                let request: SynthesisRequest = takesExpression
                     ? SynthesisRequest(text: text, refAudioPath: refURL.path,
                                        refText: baseRefText, emotionMarker: expr.rawValue)
                     : SynthesisRequest(text: text, refAudioPath: refURL.path,
@@ -1843,8 +1954,8 @@ final class AppModel {
 
     private func describe(_ error: EngineError) -> String {
         switch error {
-        case .licenseAckRequired:
-            return "Acknowledge the Fish license in Settings → Models first."
+        case .licenseAckRequired(let backend):
+            return "Acknowledge the \(backend.rawValue) license in Settings → Models first."
         case .refAudioRequired:
             return "This model needs a reference voice."
         case .generationFailed(_, let message):
