@@ -44,6 +44,14 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
     identity; the Direction steers tone, pace and emotion. It is the only
     model where a Direction is honored alongside a cloned voice.
 
+  **Emotion** works in all three modes. The Emotion chips (flat → hype) and
+  the **Expression** menu (whisper, angry, sad, laughing, …) are turned into
+  words and appended to your Direction, because Breeze's emotion control *is*
+  its instruction. If the voice has an acted take for the chosen emotion
+  (`<voice>-excited`), that take is cloned instead and the emotion isn't
+  added on top. Any emotion or expression adds a guided second pass, so it
+  renders more slowly than a plain clone.
+
   Sounds come from the `(laugh)` / `(sigh)` / `(cough)` / `(clears throat)`
   chips (parenthesised — a `[bracketed]` English tag is read aloud). Only
   Temperature is under Advanced; the model keeps its own top-k and
@@ -83,8 +91,11 @@ read a fixed guided script in character (each emotion shows its own delivery
 note), and the recording is saved as `<voice>-<emotion>`. Recorded takes are
 the **only** way to get emotional range on `chatterbox-turbo` — it has no
 runtime emotion knob, so the reference clip itself carries the emotion.
-Baking stays the recommended path when a `fish-s2-pro` or `chatterbox`
-render is good enough.
+Baking stays the recommended path when a `fish-s2-pro`, `breeze-tts-2` or
+`chatterbox` render is good enough. The baker picker offers all three:
+`fish-s2-pro` acts each expression from its inline marker, `breeze-tts-2`
+directs a clone of the voice with the expression in words (needs the voice's
+transcript), and `chatterbox` only varies intensity.
 
 ## Chat
 

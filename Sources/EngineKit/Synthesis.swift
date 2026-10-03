@@ -7,9 +7,10 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var refAudioPath: String?
     public var refText: String?
     public var emotion: Emotion
-    /// Fish inline emotion marker (e.g. "whisper"): the planner renders it as a
-    /// leading `[marker]` for `.inlineMarker` backends. nil = none. Ignored by other
-    /// backends. Not injected if `text` already begins with a `[marker]`.
+    /// Named expression (e.g. "whisper"). Fish (`.inlineMarker`): rendered as a
+    /// leading `[marker]`, not injected if `text` already begins with one.
+    /// Breeze (`.directed`): phrased into the instruction (`DeliveryDirection`).
+    /// nil = none. Ignored by other backends.
     public var emotionMarker: String?
     /// Playback-speed multiplier (1.0 = unchanged). Applied as a time-domain
     /// resample after generation — extreme values shift pitch, same trade-off
@@ -235,7 +236,16 @@ enum RequestPlanner {
         let instructSurvivesClone = !(controls.voiceClone != .none && hasRef)
             || backend.instructDirectsClone
         let wantsInstruct = controls.instruct != .none && instructSurvivesClone
-        let instruct = wantsInstruct ? clean(request.instruct) : nil
+        // `.directed` (Breeze): the emotion picker and any expression are
+        // phrased into the instruction after the user's own Direction — that
+        // instruction IS the model's emotion control.
+        let instruct: String? = {
+            guard wantsInstruct else { return nil }
+            guard backend.emotionMechanism == .directed else { return clean(request.instruct) }
+            return DeliveryDirection.compose(direction: clean(request.instruct),
+                                             expression: clean(request.emotionMarker),
+                                             emotion: request.emotion)
+        }()
         if controls.instruct == .required && instruct == nil {
             throw EngineError.instructRequired(backend)
         }

@@ -725,6 +725,24 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.instruct, "slow, serious")
     }
 
+    func testBreezeEmotionReachesEngineAsDirection() async throws {
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            // No cruz-excited take exists, so the base voice is directed instead.
+            let body = #"{"input":"hello","model":"breeze-tts-2","voice":"cruz","emotion":"excited","instruct":"A radio host."}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.instruct,
+                       "A radio host. " + DeliveryDirection.phrase(for: .excited)!)
+        XCTAssertEqual(provider.model.last?.text, "hello")
+    }
+
     func testBreezeDesignWithInstructNeedsNoVoice() async throws {
         // No voice and no default — but an instruct describes the speaker, so
         // this is voice design, not the unconditioned guess the 400 guards.

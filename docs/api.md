@@ -31,7 +31,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `input` | string, required | Text to speak |
 | `model` | string | Backend id (`qwen3-1.7b`, `chatterbox-turbo`, `fish-s2-pro`, …); defaults to the app's Studio backend |
 | `voice` | string | Library voice slug. With `emotion`, an acted `<voice>-<emotion>` variant clip is used when it exists. Required on cloning backends — see below |
-| `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant |
+| `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant. On `breeze-tts-2` (no variant found) it is phrased into the instruction after `instruct` |
 | `exaggeration` | float 0–1 | Chatterbox emotion knob override |
 | `speed` | float | Playback-speed multiplier (time-domain; extremes shift pitch) |
 | `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice |

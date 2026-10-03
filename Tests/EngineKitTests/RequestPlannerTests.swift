@@ -321,4 +321,52 @@ final class RequestPlannerTests: XCTestCase {
         let p = try RequestPlanner.plan(backend: .breezeTTS2, request: SynthesisRequest(text: text))
         XCTAssertEqual(p.text, text)
     }
+
+    // MARK: - Breeze emotion (.directed)
+
+    func testBreezeEmotionPickerBecomesADirection() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      refText: "ref", emotion: .excited))
+        XCTAssertEqual(p.instruct, DeliveryDirection.phrase(for: .excited))
+        XCTAssertEqual(p.text, "hi", "emotion is never written into the spoken text")
+        XCTAssertNil(p.exaggeration)
+    }
+
+    func testBreezeComposesDirectionExpressionAndEmotion() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "ref",
+                                      emotion: .warm, emotionMarker: "whisper",
+                                      instruct: "An old sailor."))
+        XCTAssertEqual(p.instruct, DeliveryDirection.compose(
+            direction: "An old sailor.", expression: "whisper", emotion: .warm))
+        XCTAssertTrue(p.instruct?.hasPrefix("An old sailor.") == true)
+    }
+
+    func testBreezeNeutralWithNoDirectionSendsNoInstruct() throws {
+        // An empty instruction keeps Breeze off its CFG pass entirely.
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "ref"))
+        XCTAssertNil(p.instruct)
+    }
+
+    func testBreezeNeverInjectsAFishMarkerIntoText() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", emotionMarker: "whisper"))
+        XCTAssertEqual(p.text, "hi")
+        XCTAssertEqual(p.instruct, DeliveryDirection.phrase(forExpression: "whisper"))
+    }
+
+    func testEmotionDoesNotLeakIntoOtherBackendsInstruct() throws {
+        // Only .directed phrases emotion; qwen3-design keeps its instruct verbatim.
+        let p = try RequestPlanner.plan(
+            backend: .qwenDesign,
+            request: SynthesisRequest(text: "hi", emotion: .hype, emotionMarker: "whisper",
+                                      instruct: "old narrator"))
+        XCTAssertEqual(p.instruct, "old narrator")
+    }
 }

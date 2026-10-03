@@ -349,7 +349,7 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio, "designs a voice from a Direction alone")
         XCTAssertEqual(spec.minRAMBytes, 16_000_000_000)
-        XCTAssertEqual(BackendID.breezeTTS2.emotionMechanism, .textDriven)
+        XCTAssertEqual(BackendID.breezeTTS2.emotionMechanism, .directed)
     }
 
     func testBreezeControls() {

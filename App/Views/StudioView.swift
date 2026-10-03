@@ -406,7 +406,9 @@ struct StudioView: View {
     /// The delivery control for the current backend's emotion mechanism: a
     /// continuous model-native knob for `.liveKnob` (what the model actually takes),
     /// the acted-variant emotion picker for `.variantClipOnly`, the live inline
-    /// `[marker]` picker for `.inlineMarker` (Fish), nothing for `.textDriven`.
+    /// `[marker]` picker for `.inlineMarker` (Fish), the Emotion picker plus an
+    /// Expression menu for `.directed` (Breeze — both become words in its
+    /// instruction), nothing for `.textDriven`.
     @ViewBuilder
     private func deliveryControls(_ controls: ControlSurface) -> some View {
         @Bindable var model = model
@@ -439,6 +441,30 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
+        case .directed:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
+                emotionPicker
+                HStack(spacing: 6) {
+                    Text("Expression").font(.caption).foregroundStyle(Brand.fgDim)
+                    Picker("", selection: $model.expression) {
+                        Text("None").tag(VoiceExpression?.none)
+                        Divider()
+                        ForEach(VoiceExpression.allCases, id: \.self) { expr in
+                            Text(expr.label).tag(VoiceExpression?.some(expr))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 160)
+                    .accessibilityIdentifier("expression-picker")
+                    .help("An acted delivery — whisper, angry, laughing… — added to the Direction")
+                }
+                Text("Both become words in the model's direction, after anything you write "
+                     + "in Direction — they work on a cloned voice too. An acted “-emotion” take "
+                     + "of the voice is used instead when one exists.")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .dialogueTags:
             // Delivery comes from the model's own inline (laughs)-style vocabulary.
             // The chips that insert them arrive with Script mode; nothing to render yet.
@@ -607,8 +633,8 @@ struct StudioView: View {
             "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
         case .breezeTTS2:
             "Pick a voice to clone it, write a Direction to design one from scratch, or do both "
-            + "to steer a cloned voice's tone and pace. Sounds like (laugh) come from the chips above. "
-            + "English and Chinese."
+            + "to steer a cloned voice's tone and pace. Emotion and Expression below add to that "
+            + "Direction; sounds like (laugh) come from the chips above. English and Chinese."
         case .chatterbox:
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:

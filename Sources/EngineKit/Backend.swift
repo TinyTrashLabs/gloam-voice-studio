@@ -279,6 +279,14 @@ public enum EmotionMechanism: Sendable, Equatable {
     /// Delivery is steered by inline `(laughs)`-style tags drawn from the model's
     /// own vocabulary; the app offers them as chips rather than free text.
     case dialogueTags
+    /// Emotion is PHRASED into the model's natural-language direction (Breeze):
+    /// the Emotion picker and an expression ("whisper", "angry", …) each become
+    /// a sentence the planner appends to whatever Direction the user wrote —
+    /// see `DeliveryDirection`. Unlike `.textDriven`, the picker is live, and it
+    /// works alongside a cloned voice. Acted `-emotion` clips are still used
+    /// when they exist; the caller then sends `.neutral` so the clip's
+    /// performance isn't directed a second time.
+    case directed
 }
 
 /// Data-driven description of a backend's Direct-pane controls. The UI renders
@@ -440,7 +448,7 @@ extension BackendID {
         case .qwen06B, .qwen06BMobile, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
-        case .breezeTTS2: .textDriven                // the Direction steers clone and design alike
+        case .breezeTTS2: .directed                  // emotion is phrased into its instruction
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
         case .kokoro: .none

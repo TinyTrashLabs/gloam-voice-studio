@@ -387,6 +387,11 @@ final class AppModel {
     }
     var text = ""
     var emotion: Emotion = .neutral
+    /// An acted expression for a `.directed` backend (Breeze), phrased into its
+    /// instruction alongside the Emotion pick — "whisper", "angry", …. nil =
+    /// none. Ignored by every other mechanism (Fish takes its markers as
+    /// inline [tags] in the text instead).
+    var expression: VoiceExpression?
     var speed: Float = 1.0
     var variants: [Variant] = []
     var isGenerating = false
@@ -880,7 +885,7 @@ final class AppModel {
             do {
                 let result = try await synthesizeLine(
                     text: text, voiceSlug: selectedVoiceSlug,
-                    emotion: emotion, speed: speed)
+                    emotion: emotion, expression: expression?.rawValue, speed: speed)
                 let pcm = PCM16.data(from: result.samples)
                 let seconds = Double(result.samples.count) / Double(result.sampleRate)
                 let wav = WAVEncoder.encode(pcm16: pcm, sampleRate: result.sampleRate)
@@ -1065,6 +1070,7 @@ final class AppModel {
         speed = 1
         instruct = ""
         language = "auto"
+        expression = nil
     }
 
     func resetDeliveryKnobs() {
@@ -1204,6 +1210,7 @@ final class AppModel {
     /// `backendOverride`/`engineOverride` let chat render with its own voice
     /// engine on the second (parallel) GloamEngine.
     func synthesizeLine(text: String, voiceSlug: String?, emotion: Emotion,
+                        expression: String? = nil,
                         speed: Float, recordHistory: Bool = true,
                         interleaved: Bool = false,
                         backendOverride: BackendID? = nil,
@@ -1259,11 +1266,18 @@ final class AppModel {
         // the BASE voice — so resolve to the base clip, not an acted `-emotion`
         // variant (that path is for the variant-clip backends).
         let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
+        // `.directed` (Breeze) phrases the emotion into its instruction — unless
+        // an acted `-emotion` take was found, which already performs it. Same
+        // rule as the API's `usedVariant`: never direct a performance twice.
+        var requestEmotion = emotion
         if let slug = voiceSlug {
             if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
+                if backend.emotionMechanism == .directed && found.meta.slug != slug {
+                    requestEmotion = .neutral
+                }
             } else if rendition == nil {
                 // A rendition-only pack (no ref.wav) is fine when this backend
                 // has a style to render or a preset name to speak as; otherwise
@@ -1308,7 +1322,9 @@ final class AppModel {
         }
         let request = SynthesisRequest(
             text: text, refAudioPath: refPath, refText: refText,
-            emotion: emotion, speed: speed,
+            emotion: requestEmotion,
+            emotionMarker: backend.emotionMechanism == .directed ? expression : nil,
+            speed: speed,
             temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
@@ -1785,8 +1801,10 @@ final class AppModel {
 
     /// Bake acted expression variants of a saved voice by cloning its base clip
     /// through Fish with each emotion's inline `[marker]` — Fish's real emotion
-    /// mechanism (temperature/exaggeration produce near-identical takes). Saved as
-    /// `<slug>-<expression>` so any backend can clone the acted performance.
+    /// mechanism (temperature/exaggeration produce near-identical takes) — or
+    /// through Breeze, which directs the clone with the expression phrased as an
+    /// instruction. Saved as `<slug>-<expression>` so any backend can clone the
+    /// acted performance.
     func bakeExpressionVariants(baseSlug: String, expressions: [VoiceExpression],
                                 baker: BackendID) async {
         foundryError = nil
@@ -1802,6 +1820,11 @@ final class AppModel {
             foundryError = "Downloading \(baker.rawValue) to generate with — try again once it's ready."
             return
         }
+        if baker.needsRefText && meta.refText.isEmpty {
+            foundryError = "\(baker.rawValue) clones from the voice's transcript too — "
+                + "add one to “\(meta.name)” first."
+            return
+        }
         foundryBaking = true
         loadedBackend = baker   // reflect the baker as resident while it renders
         defer { foundryBaking = false }
@@ -1815,7 +1838,11 @@ final class AppModel {
                 // so the marker isn't swamped by the reference's own delivery.
                 // Chatterbox has no markers, so fall back to its exaggeration
                 // intensity — cruder, but works for users who can't run Fish.
-                let request: SynthesisRequest = baker == .fishS2Pro
+                // Breeze (.directed) takes the same named expression; the planner
+                // phrases it into a direction over the cloned base voice.
+                let takesExpression = baker.emotionMechanism == .inlineMarker
+                    || baker.emotionMechanism == .directed
+                let request: SynthesisRequest = takesExpression
                     ? SynthesisRequest(text: text, refAudioPath: refURL.path,
                                        refText: baseRefText, emotionMarker: expr.rawValue)
                     : SynthesisRequest(text: text, refAudioPath: refURL.path,
