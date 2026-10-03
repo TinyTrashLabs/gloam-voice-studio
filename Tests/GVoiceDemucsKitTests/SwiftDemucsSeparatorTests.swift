@@ -1,4 +1,5 @@
 import XCTest
+@testable import GVoiceDemucsKit
 @testable import GVoiceProductionKit
 
 final class SwiftDemucsSeparatorTests: XCTestCase {

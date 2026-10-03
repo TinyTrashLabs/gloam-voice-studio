@@ -1,11 +1,6 @@
 import Foundation
+import GVoiceProductionKit
 import SwiftDemucs
-
-public protocol VoiceStemSeparating: Sendable {
-    var backendIdentifier: String { get }
-    var modelIdentifier: String { get }
-    func isolateVocals(_ input: ReferenceAudioBuffer) async throws -> ReferenceAudioBuffer
-}
 
 public final class SwiftDemucsSeparator: VoiceStemSeparating, @unchecked Sendable {
     public let backendIdentifier = "swift-demucs-mlx"
