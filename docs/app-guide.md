@@ -52,10 +52,17 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   added on top. Any emotion or expression adds a guided second pass, so it
   renders more slowly than a plain clone.
 
-  Sounds come from the `(laugh)` / `(sigh)` / `(cough)` / `(clears throat)`
-  chips (parenthesised — a `[bracketed]` English tag is read aloud). Only
-  Temperature is under Advanced; the model keeps its own top-k and
-  repetition settings. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
+  Sounds come from the TAGS chips: `(laugh)` / `(sigh)` / `(cough)` /
+  `(clears throat)` for English (parenthesised — a `[bracketed]` English tag
+  is read aloud) and `[笑]` / `[叹气]` / `[咳嗽]` / `[清嗓子]` for Chinese.
+
+  Advanced has Temperature, Top-p, Top-k and Repetition — Breeze's own,
+  starting at its defaults (top-k 50, repetition 1.0) rather than the Qwen
+  sliders' — plus **Guidance (CFG)**, default 4: how strongly a take follows
+  the Direction, Emotion and Expression. Higher is more pronounced and less
+  natural; 1 turns it off (and the slower guided pass with it). It does
+  nothing on a plain clone with nothing to follow. Reset restores all of
+  these. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
   (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
   RAM. Breeze stops at about 60 seconds of speech per pass, so a longer line
   is rendered in sentence-sized pieces with the same voice and Direction and

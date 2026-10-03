@@ -539,6 +539,15 @@ final class AppModel {
     var luxTShift: Float = AppModel.knobDefaults.luxTShift
     var luxReturnSmooth: Bool = AppModel.knobDefaults.luxReturnSmooth
 
+    // Breeze sampler knobs (Advanced disclosure). Its own state rather than the
+    // Qwen sliders': those default to top-k off / repetition 1.05, which would
+    // replace Breeze's own top-k 50 / repetition 1.0. Temperature stays shared
+    // (0.9 is Breeze's default too). CFG only acts on instructed takes.
+    var breezeTopP: Float = BackendID.breezeSamplingDefaults.topP
+    var breezeTopK: Int = BackendID.breezeSamplingDefaults.topK
+    var breezeRepetitionPenalty: Float = BackendID.breezeSamplingDefaults.repetitionPenalty
+    var breezeCfgScale: Float = BackendID.breezeSamplingDefaults.cfgScale
+
     // MARK: Voice Foundry (Create Voice) — qwen3-design mints a new voice you then
     // save as a reusable clone reference. Its state is separate from the Studio bench.
     static let defaultAuditionLine =
@@ -1084,6 +1093,10 @@ final class AppModel {
         luxGuidanceScale = Self.knobDefaults.luxGuidanceScale
         luxTShift = Self.knobDefaults.luxTShift
         luxReturnSmooth = Self.knobDefaults.luxReturnSmooth
+        breezeTopP = BackendID.breezeSamplingDefaults.topP
+        breezeTopK = BackendID.breezeSamplingDefaults.topK
+        breezeRepetitionPenalty = BackendID.breezeSamplingDefaults.repetitionPenalty
+        breezeCfgScale = BackendID.breezeSamplingDefaults.cfgScale
     }
 
     // MARK: model residency
@@ -1336,13 +1349,21 @@ final class AppModel {
             speaker: controls.presetSpeakers.isEmpty ? nil : presetSpeaker,
             styleURL: styleURL,
             language: controls.language ? language : nil,
-            topP: controls.knobs.topP != nil ? qwenTopP : nil,
-            topK: controls.knobs.topK != nil ? qwenTopK : nil,
-            repetitionPenalty: controls.knobs.repetitionPenalty != nil ? qwenRepetitionPenalty : nil,
+            // Breeze has its own sampler state (see `breezeTopP`); everyone
+            // else with these knobs uses the Qwen sliders.
+            topP: controls.knobs.topP == nil ? nil
+                : backend == .breezeTTS2 ? breezeTopP : qwenTopP,
+            topK: controls.knobs.topK == nil ? nil
+                : backend == .breezeTTS2 ? breezeTopK : qwenTopK,
+            repetitionPenalty: controls.knobs.repetitionPenalty == nil ? nil
+                : backend == .breezeTTS2 ? breezeRepetitionPenalty : qwenRepetitionPenalty,
             numStepsOverride: controls.knobs.numSteps != nil ? luxNumSteps : nil,
             guidanceScaleOverride: controls.knobs.guidanceScale != nil ? luxGuidanceScale : nil,
             tShiftOverride: controls.knobs.tShift != nil ? luxTShift : nil,
             returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil,
+            // Breeze's CFG slider. Dia2 also declares the knob, but its slider
+            // lives in the Dialogue composer, so the bench leaves it alone.
+            cfgScaleOverride: backend == .breezeTTS2 ? breezeCfgScale : nil,
             dialoguePrefix: dialoguePrefix)
         // Must precede queuing work on `engine` (see TTSResidencyPolicy's
         // deadlock-safety contract).

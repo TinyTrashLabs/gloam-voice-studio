@@ -472,11 +472,12 @@ public actor GloamEngine {
             let chunk = try await dialogue.synthesizeDialogue(ProviderDialogueRequest(
                 script: script,
                 prefixes: [request.dialoguePrefix],
-                // Temperature and topK come from the Studio bench's knobs. CFG
-                // scale does not: `Knobs.cfgScale` has no bench control (the
-                // Dialogue composer owns that slider), so the model default
-                // stands rather than a silently-zero override.
-                temperature: plan.temperature, topK: plan.topK))
+                // Temperature and topK come from the request's knobs. CFG scale
+                // does too when a caller sets one; the app's bench only sends
+                // its CFG slider for Breeze (the Dialogue composer owns Dia2's),
+                // so nil here keeps the model default rather than a
+                // silently-zero override.
+                temperature: plan.temperature, topK: plan.topK, cfgScale: plan.cfgScale))
             raw = chunk.samples
         } else {
             raw = try await model.synthesize(plan)

@@ -313,7 +313,7 @@ final class BackendTests: XCTestCase {
 
     /// cfgScale is additive: every other backend must still report nil for it.
     func testCfgScaleIsNilForEveryOtherBackend() {
-        for backend in BackendID.allCases where backend != .dia2 {
+        for backend in BackendID.allCases where backend != .dia2 && backend != .breezeTTS2 {
             XCTAssertNil(backend.controls.knobs.cfgScale, "\(backend.rawValue) gained a cfgScale knob")
         }
     }
@@ -358,13 +358,30 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(controls.instruct, .optional)
         XCTAssertFalse(controls.language, "the prompt has no language slot")
         XCTAssertTrue(controls.presetSpeakers.isEmpty)
+        // Every sampler the Swift port reads, plus its CFG scale.
         XCTAssertNotNil(controls.knobs.temperature)
-        // The shared Advanced sliders default to Qwen's values; Breeze keeps
-        // its own top-k / top-p / repetition defaults by not exposing them.
-        XCTAssertNil(controls.knobs.topP)
-        XCTAssertNil(controls.knobs.topK)
-        XCTAssertNil(controls.knobs.repetitionPenalty)
-        XCTAssertNil(controls.knobs.cfgScale, "CFG is fixed inside the Swift port")
+        XCTAssertNotNil(controls.knobs.topP)
+        XCTAssertNotNil(controls.knobs.topK)
+        XCTAssertNotNil(controls.knobs.repetitionPenalty)
+        XCTAssertEqual(controls.knobs.cfgScale, 1.0...8.0, "1 = guidance off")
+        XCTAssertNil(controls.knobs.exaggeration)
+        XCTAssertNil(controls.knobs.numSteps)
+    }
+
+    /// Mirrors BreezeTTSModel.defaultGenerationParameters / defaultCFGScale in
+    /// the fork. The app's Breeze sliders start (and Reset) here, so a drift
+    /// would silently change every Breeze take.
+    func testBreezeSamplingDefaultsMatchTheModel() {
+        let d = BackendID.breezeSamplingDefaults
+        XCTAssertEqual(d.topP, 1.0)
+        XCTAssertEqual(d.topK, 50)
+        XCTAssertEqual(d.repetitionPenalty, 1.0)
+        XCTAssertEqual(d.cfgScale, 4.0)
+        let knobs = BackendID.breezeTTS2.controls.knobs
+        XCTAssertTrue(knobs.topP!.contains(d.topP))
+        XCTAssertTrue(knobs.topK!.contains(d.topK))
+        XCTAssertTrue(knobs.repetitionPenalty!.contains(d.repetitionPenalty))
+        XCTAssertTrue(knobs.cfgScale!.contains(d.cfgScale))
     }
 
     func testOnlyBreezeDirectsAClone() {
@@ -374,14 +391,20 @@ final class BackendTests: XCTestCase {
         }
     }
 
-    func testBreezeTagsAreParenthesisedAndOnlyBreezeHasAFixedList() {
+    func testBreezeTagsUseEachLanguagesBracketsAndOnlyBreezeHasAFixedList() {
         let tags = BackendID.breezeTTS2.fixedNonverbalTags
-        XCTAssertFalse(tags.isEmpty)
         XCTAssertTrue(tags.contains("(laugh)"))
+        XCTAssertTrue(tags.contains("[笑]"))
         for tag in tags {
-            XCTAssertTrue(tag.hasPrefix("(") && tag.hasSuffix(")"),
-                          "\(tag): a [bracketed] English tag is read aloud by Breeze")
+            let isChinese = tag.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
+            if isChinese {
+                XCTAssertTrue(tag.hasPrefix("[") && tag.hasSuffix("]"), tag)
+            } else {
+                XCTAssertTrue(tag.hasPrefix("(") && tag.hasSuffix(")"),
+                              "\(tag): a [bracketed] English tag is read aloud by Breeze")
+            }
         }
+        XCTAssertEqual(Set(tags).count, tags.count)
         for backend in BackendID.allCases where backend != .breezeTTS2 {
             XCTAssertTrue(backend.fixedNonverbalTags.isEmpty, backend.rawValue)
         }

@@ -340,14 +340,18 @@ extension BackendID {
             // read from the text itself — the model's prompt has no language
             // slot, and the Swift port ignores the generic `language` argument.
             //
-            // Only temperature is surfaced. The Advanced sliders are shared
-            // with Qwen and default to ITS values (top-k off, repetition 1.05);
-            // handing Breeze those would quietly replace its own top-k 50 /
-            // repetition 1.0. The shared temperature default (0.9) already
-            // matches Breeze's. CFG is fixed at 4 inside the Swift port.
+            // Every sampler the Swift port reads. Top-p/top-k/repetition and
+            // CFG are bound to Breeze's OWN app state (AppModel.breeze*), not
+            // the Qwen sliders' — those default to top-k off / repetition
+            // 1.05, which would quietly replace Breeze's top-k 50 /
+            // repetition 1.0. Temperature is shared: its 0.9 default is
+            // Breeze's too. CFG only acts on instructed takes (design,
+            // direction, emotion); 1 turns it off.
             ControlSurface(voiceClone: .optional, instruct: .optional,
                            language: false,
-                           knobs: Knobs(temperature: 0.5...1.2))
+                           knobs: Knobs(temperature: 0.5...1.2, topP: 0.5...1.0,
+                                        topK: 1...100, repetitionPenalty: 1.0...1.5,
+                                        cfgScale: 1.0...8.0))
         case .chatterbox:
             ControlSurface(voiceClone: .required, instruct: .none,
                            language: false,
@@ -430,15 +434,21 @@ extension BackendID {
     /// `added_tokens.json` the tag catalog can read off disk. Empty = ask the
     /// model directory (Dia2) or offer the free-form list (Fish).
     ///
-    /// Breeze: the English events from its model card. Parenthesised, NOT
-    /// Fish's `[square]` form — a bracketed English tag is read aloud. (Its
-    /// Chinese events use `[笑]`-style brackets; the chips target English.)
+    /// Breeze: the events from its model card, in the bracket style each
+    /// language uses — English in parentheses (a `[bracketed]` English tag is
+    /// read aloud), Chinese in square brackets.
     public var fixedNonverbalTags: [String] {
         switch self {
-        case .breezeTTS2: ["(laugh)", "(sigh)", "(cough)", "(clears throat)"]
+        case .breezeTTS2: ["(laugh)", "(sigh)", "(cough)", "(clears throat)",
+                           "[笑]", "[叹气]", "[咳嗽]", "[清嗓子]"]
         default: []
         }
     }
+
+    /// Breeze's own sampler defaults (BreezeTTSModel.defaultGenerationParameters
+    /// and its CFG default), for the Advanced sliders and their Reset.
+    public static let breezeSamplingDefaults =
+        (topP: Float(1.0), topK: 50, repetitionPenalty: Float(1.0), cfgScale: Float(4.0))
 }
 
 extension BackendID {

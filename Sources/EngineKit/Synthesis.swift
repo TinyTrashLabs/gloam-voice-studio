@@ -48,6 +48,9 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var tShiftOverride: Float?
     /// LuxTTS dual-path 48k output toggle override (nil = model default true).
     public var returnSmoothOverride: Bool?
+    /// Breeze classifier-free guidance scale for instructed takes (nil = model
+    /// default 4; 1 = off). Honored where `Knobs.cfgScale` is offered.
+    public var cfgScaleOverride: Float?
     /// Dia2 only: the selected voice's word-aligned conditioning prefix.
     ///
     /// Dia2 does not clone from `refAudioPath` — it conditions on a prefix whose
@@ -70,6 +73,7 @@ public struct SynthesisRequest: Sendable, Equatable {
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
+                cfgScaleOverride: Float? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
                 fx: FXPreset? = nil) {
         self.dialoguePrefix = dialoguePrefix
@@ -95,6 +99,7 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.guidanceScaleOverride = guidanceScaleOverride
         self.tShiftOverride = tShiftOverride
         self.returnSmoothOverride = returnSmoothOverride
+        self.cfgScaleOverride = cfgScaleOverride
     }
 }
 
@@ -135,6 +140,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var tShift: Float?
     /// LuxTTS only: dual-path 48k output toggle (nil = model default true).
     public var returnSmooth: Bool?
+    /// Breeze only: classifier-free guidance scale (nil = model default 4).
+    public var cfgScale: Float?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
@@ -142,7 +149,7 @@ public struct ProviderRequest: Sendable, Equatable {
                 language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
-                tShift: Float? = nil, returnSmooth: Bool? = nil) {
+                tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil) {
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
@@ -150,6 +157,7 @@ public struct ProviderRequest: Sendable, Equatable {
         self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
         self.speed = speed; self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.returnSmooth = returnSmooth
+        self.cfgScale = cfgScale
     }
 }
 
@@ -316,7 +324,12 @@ enum RequestPlanner {
             guidanceScale: knobs.guidanceScale != nil ? request.guidanceScaleOverride : nil,
             tShift: knobs.tShift != nil ? request.tShiftOverride : nil,
             returnSmooth: knobs.returnSmooth != nil
-                ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil
+                ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil,
+            // Clamped to the offered range: a 0 or negative scale from an API
+            // caller would steer AWAY from the instruction.
+            cfgScale: knobs.cfgScale.flatMap { range in
+                request.cfgScaleOverride.map { min(max($0, range.lowerBound), range.upperBound) }
+            }
         )
     }
 }

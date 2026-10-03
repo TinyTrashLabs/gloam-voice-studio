@@ -179,6 +179,11 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 chatterbox.emotionAdvOverride = request.exaggeration
                 chatterbox.cfgWeightOverride = request.cfgWeight
             }
+            if let breeze = model as? BreezeTTSModel {
+                // Set on every call (nil included) so one take's guidance
+                // never carries into the next.
+                breeze.cfgScaleOverride = request.cfgScale
+            }
             var params = model.defaultGenerationParameters
             if let temperature = request.temperature { params.temperature = temperature }
             if let topP = request.topP { params.topP = topP }

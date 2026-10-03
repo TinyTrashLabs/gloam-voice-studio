@@ -69,13 +69,14 @@ let package = Package(
         // statics that default off, so the Mac app is unchanged.
         // a206f70 (2026-09-26) adds the 8-bit fused step,
         // frame pipelining and the async-decode silence-stop fix.
-        // f10312f (2026-10-03, feat/breeze-tts) is a206f70 plus Breeze TTS 2
+        // 6797196 (2026-10-03, feat/breeze-tts) is a206f70 plus Breeze TTS 2
         // (upstream Blaizzy/mlx-audio-swift#255, model_type "breeze") — the
-        // `breeze-tts-2` backend. One commit, no other model touched. Repin to
-        // the merge commit once that branch lands on the fork's main.
+        // `breeze-tts-2` backend — and an adjustable Breeze CFG scale
+        // (BreezeTTSModel.cfgScaleOverride). No other model touched. Repin to
+        // the merge commit once that branch lands.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "f10312f92299c6898dcda654c6fe7b91f64ace8f"),
+            revision: "6797196de5c3a3c361c74dd0628c7be33864ff28"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

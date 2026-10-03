@@ -511,12 +511,18 @@ struct StudioView: View {
         k.temperature != nil || k.topP != nil || k.topK != nil
             || k.repetitionPenalty != nil || k.exaggeration != nil || k.cfgWeight != nil
             || k.numSteps != nil || k.guidanceScale != nil || k.tShift != nil
-            || k.speed != nil || k.returnSmooth != nil
+            || k.speed != nil || k.returnSmooth != nil || k.cfgScale != nil
     }
 
     @ViewBuilder
     private func advancedKnobs(_ knobs: Knobs) -> some View {
         @Bindable var model = model
+        // Breeze keeps its own sampler state (AppModel.breeze*) so the Qwen
+        // sliders' defaults never leak into it, and vice versa.
+        let breeze = model.backend == .breezeTTS2
+        let topP = breeze ? $model.breezeTopP : $model.qwenTopP
+        let topK = breeze ? $model.breezeTopK : $model.qwenTopK
+        let repetition = breeze ? $model.breezeRepetitionPenalty : $model.qwenRepetitionPenalty
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 12) {
                 if let r = knobs.temperature {
@@ -524,7 +530,7 @@ struct StudioView: View {
                             desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
                 }
                 if let r = knobs.topP {
-                    knobRow("Top-p", $model.qwenTopP, r,
+                    knobRow("Top-p", topP, r,
                             desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
                 }
                 if let r = knobs.topK {
@@ -532,18 +538,18 @@ struct StudioView: View {
                         HStack {
                             Text("Top-k")
                             Slider(value: Binding(
-                                get: { Float(model.qwenTopK) },
-                                set: { model.qwenTopK = Int($0) }),
+                                get: { Float(topK.wrappedValue) },
+                                set: { topK.wrappedValue = Int($0) }),
                                 in: Float(r.lowerBound)...Float(r.upperBound))
                                 .frame(minWidth: 60, maxWidth: 160)
-                            Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
+                            Text("\(topK.wrappedValue)").font(.system(.caption, design: .monospaced))
                         }
                         Text("How many options it considers each step. Lower = constrained; higher = varied.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 if let r = knobs.repetitionPenalty {
-                    knobRow("Repetition", $model.qwenRepetitionPenalty, r,
+                    knobRow("Repetition", repetition, r,
                             desc: "Higher values reduce stutters and looping artifacts.")
                 }
                 if let r = knobs.exaggeration {
@@ -554,6 +560,12 @@ struct StudioView: View {
                     knobRow("CFG weight", $model.cfgWeight, r,
                             desc: "Chatterbox guidance strength. Lower it (~0.3) as Exaggeration rises "
                                 + "so pacing doesn't rush.")
+                }
+                if let r = knobs.cfgScale {
+                    knobRow("Guidance (CFG)", $model.breezeCfgScale, r,
+                            desc: "How strongly the take follows your Direction, Emotion and "
+                                + "Expression. Higher = more pronounced, less natural; 1 = off. "
+                                + "No effect on a plain clone with nothing to follow.")
                 }
                 if let r = knobs.numSteps {
                     VStack(alignment: .leading, spacing: 2) {

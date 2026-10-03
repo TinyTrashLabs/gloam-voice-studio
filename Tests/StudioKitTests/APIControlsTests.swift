@@ -743,6 +743,24 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.text, "hello")
     }
 
+    func testBreezeSamplersAndCFGReachEngine() async throws {
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","voice":"cruz","instruct":"calm","top_k":30,"top_p":0.9,"repetition_penalty":1.1,"cfg_scale":5.5}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.model.last?.topK, 30)
+        XCTAssertEqual(provider.model.last?.topP, 0.9)
+        XCTAssertEqual(provider.model.last?.repetitionPenalty, 1.1)
+        XCTAssertEqual(provider.model.last?.cfgScale, 5.5)
+    }
+
     func testBreezeDesignWithInstructNeedsNoVoice() async throws {
         // No voice and no default — but an instruct describes the speaker, so
         // this is voice design, not the unconditioned guess the 400 guards.

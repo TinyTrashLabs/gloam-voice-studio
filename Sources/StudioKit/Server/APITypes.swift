@@ -215,6 +215,10 @@ struct SpeechRequest: Codable {
     let top_p: Float?
     let top_k: Int?
     let repetition_penalty: Float?
+    /// Classifier-free guidance scale where the backend offers one (Breeze:
+    /// default 4, 1 = off; acts only when there is an instruct/emotion to
+    /// follow). Ignored elsewhere.
+    let cfg_scale: Float?
     let response_format: String?
     /// Character-voice effects. Either a built-in name ("demon", "glitch",
     /// "whisper") or an inline preset object. Absent = unprocessed audio, so

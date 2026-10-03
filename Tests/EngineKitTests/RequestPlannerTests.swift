@@ -304,16 +304,38 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(p.instruct)
     }
 
-    func testBreezeForwardsTemperatureButNotQwenSamplingOrLanguage() throws {
+    func testBreezeForwardsEverySamplerButNotLanguage() throws {
         let p = try RequestPlanner.plan(
             backend: .breezeTTS2,
             request: SynthesisRequest(text: "hi", temperatureOverride: 0.7, language: "english",
-                                      topP: 0.8, topK: 0, repetitionPenalty: 1.05))
+                                      topP: 0.8, topK: 40, repetitionPenalty: 1.1,
+                                      cfgScaleOverride: 6))
         XCTAssertEqual(p.temperature, 0.7)
-        XCTAssertNil(p.topP)
-        XCTAssertNil(p.topK, "Qwen's top-k 0 would switch off Breeze's top-k 50")
-        XCTAssertNil(p.repetitionPenalty)
+        XCTAssertEqual(p.topP, 0.8)
+        XCTAssertEqual(p.topK, 40)
+        XCTAssertEqual(p.repetitionPenalty, 1.1)
+        XCTAssertEqual(p.cfgScale, 6)
         XCTAssertNil(p.language)
+    }
+
+    func testBreezeCFGIsClampedToTheOfferedRange() throws {
+        // A 0 or negative scale would steer AWAY from the instruction.
+        let low = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", cfgScaleOverride: -2))
+        XCTAssertEqual(low.cfgScale, 1)
+        let high = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", cfgScaleOverride: 50))
+        XCTAssertEqual(high.cfgScale, 8)
+        let unset = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+        XCTAssertNil(unset.cfgScale, "nil keeps the model default")
+    }
+
+    func testCFGNeverReachesABackendWithoutTheKnob() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwenDesign,
+            request: SynthesisRequest(text: "hi", instruct: "x", cfgScaleOverride: 6))
+        XCTAssertNil(p.cfgScale)
     }
 
     func testBreezeTagsPassThroughUntouched() throws {

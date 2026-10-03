@@ -426,6 +426,7 @@ public enum APIRouter {
                                     styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k,
                                     repetitionPenalty: req.repetition_penalty,
+                                    cfgScaleOverride: req.cfg_scale,
                                     dialoguePrefix: speechPrefix,
                                     fx: fxPreset))
                         }

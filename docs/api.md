@@ -37,7 +37,8 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice |
 | `speaker` | string | Preset speaker — required by `qwen3-custom` |
 | `language` | string | Qwen language hint |
-| `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them (`breeze-tts-2`: `temperature` only) |
+| `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
+| `cfg_scale` | number | Classifier-free guidance on `breeze-tts-2` (default 4, clamped to 1–8; 1 = off). Acts only when there is an `instruct` or `emotion` to follow. Ignored by other backends on this endpoint |
 | `response_format` | string | Only `wav` |
 | `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
