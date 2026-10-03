@@ -26,10 +26,13 @@ public struct QwenTimings: Sendable {
     public var prompt: Double
     /// Talker prefill plus the first decode step.
     public var prefill: Double
-    /// Talker + code predictor loop, vocoder time excluded.
+    /// Talker + code predictor loop (`generate` wall; with the vocoder overlapped it contains no vocoder wait).
     public var loop: Double
-    /// Vocoder wall time inside the line (head + upsamplers; reference priming on a voice's first line).
+    /// Vocoder busy time: head + upsamplers (+ reference priming on a voice's first line), wherever it ran.
+    /// When `overlapVocoder` is on this runs beside `loop`, so it is not added to the wall time.
     public var vocoder: Double
+    /// Time `finish()` blocked on the vocoder queue after the last frame (0 inline).
+    public var vocoderWait: Double
     /// Whole `render` call.
     public var total: Double
 }
@@ -49,6 +52,15 @@ public struct QwenRender: Sendable {
     public var audioSeconds: Double { Double(samples.count) / Double(sampleRate) }
 }
 
+@available(iOS 18.0, macOS 15.0, *)
+extension QwenANEEngine {
+    public struct Options: Sendable {
+        /// Decode vocoder chunks on a serial queue beside the talker loop (same samples, less wall time).
+        public var overlapVocoder = true
+        public init(overlapVocoder: Bool = true) { self.overlapVocoder = overlapVocoder }
+    }
+}
+
 /// Text to speech with Qwen3-TTS 0.6B on the Neural Engine: talker + code predictor and the
 /// vocoder upsampler run as Core ML models, the rest (text projection, vocoder head) on the CPU.
 /// No MLX, no ONNX Runtime. See the README next to this file for the model directory layout.
@@ -65,6 +77,8 @@ public final class QwenANEEngine: @unchecked Sendable {
     private let lock = NSLock()
     /// The directory the engine was loaded from; `loadVoice(named:)` reads `voices/<name>` under it.
     public let modelsDirectory: URL
+    /// Read at the start of each `render`; set between renders.
+    public var options = Options()
 
     /// Loads host tables, the vocoder head and the compiled Core ML models (`.mlmodelc`).
     /// The vocoder loads first: the Core ML models before anything that maps big files.
@@ -104,19 +118,26 @@ public final class QwenANEEngine: @unchecked Sendable {
         let prompt = buildICLPrompt(host: host, voice: voice, text: text)
         let promptS = Date().timeIntervalSince(t0)
         pace()
-        vocoder.resetStats(); vocoder.begin(context: voice.referenceFrames)
         let voc = vocoder
-        let g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: maxFrames,
+        voc.overlap = options.overlapVocoder
+        let overlapped = voc.overlap
+        voc.resetStats(); voc.begin(context: voice.referenceFrames)
+        let g: GenResult
+        do {
+            g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: maxFrames,
                                     cancelled: cancelled, onFrame: { _, codes in try voc.push(frame: codes); pace() })
+        } catch { voc.drain(); throw error }
         var n = g.frames
         func result(_ wav: [Float], _ stop: QwenStopReason, _ codes: [Int64]) -> QwenRender {
             QwenRender(samples: wav, sampleRate: sampleRate, frames: n, codes: codes, stopReason: stop,
-                       timings: QwenTimings(prompt: promptS, prefill: g.prefillWall, loop: max(0, g.loopWall - voc.wall),
-                                            vocoder: voc.wall, total: Date().timeIntervalSince(t0)))
+                       timings: QwenTimings(prompt: promptS, prefill: g.prefillWall,
+                                            loop: overlapped ? g.loopWall : max(0, g.loopWall - voc.wall),
+                                            vocoder: voc.wall, vocoderWait: voc.waitWall, total: Date().timeIntervalSince(t0)))
         }
-        guard n > 0, g.stop != .cancelled else { n = 0; return result([], g.stop, []) }
+        guard n > 0, g.stop != .cancelled else { voc.drain(); n = 0; return result([], g.stop, []) }
         pace()
-        var wav = try voc.finish()                  // flushes the partial last chunk
+        var wav: [Float]
+        do { wav = try voc.finish() } catch { voc.drain(); throw error }   // flushes the partial last chunk, waits for the queue
         pace()
         var stop = g.stop
         var codes = g.codes

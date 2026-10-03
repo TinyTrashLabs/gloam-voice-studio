@@ -20,12 +20,19 @@ final class ANEVocoder {
     private let upF12: MLModel, upF20: MLModel, upMall: MLModel
     private let in12: MLMultiArray, in20: MLMultiArray
     private var hist = [Float](repeating: 0, count: 1024 * ANEVocoder.L)    // (1024 x 8) channel-major
-    private var pending: [Int64] = []
+    private var pending: [Int64] = []          // caller thread only (frames not yet submitted as a chunk)
     private var first = true
     private var wav: [Float] = []
     private var primed: [[Int64]: (head: VocoderHead.State, hist: [Float])] = [:]   // per voice reference
-    /// Wall seconds spent inside the vocoder since `resetStats`.
+    /// Wall seconds spent decoding (head + upsamplers) since `resetStats`; read after `finish()`/`drain()`.
     private(set) var wall = 0.0
+    /// When true, chunks decode on `queue` while the caller keeps generating. Every touch of the head,
+    /// `hist`, `first`, `wav`, `primed` and `wall` happens on that queue (or inline when false).
+    var overlap = true
+    private let queue = DispatchQueue(label: "qwen.ane.vocoder", qos: .userInitiated)
+    private let errLock = NSLock()
+    private var firstError: Error?
+    private(set) var waitWall = 0.0
 
     init(modelsDirectory: URL) throws {
         head = try VocoderHead(dir: modelsDirectory.appendingPathComponent("vochead").path)
@@ -50,11 +57,36 @@ final class ANEVocoder {
         _ = try predict(window: in20, first: false)
     }
 
-    func resetStats() { wall = 0 }
+    func resetStats() { drain(); wall = 0; waitWall = 0 }
 
-    /// Starts a line. `context` is the voice's reference codes, frame-major (T x 16).
+    /// Runs `work` on the vocoder queue (overlap) or inline, in submission order; the first error is kept.
+    private func submit(_ work: @escaping () throws -> Void) {
+        let run = { [self] in
+            errLock.lock(); let failed = firstError != nil; errLock.unlock()
+            if failed { return }
+            do { try work() } catch { errLock.lock(); firstError = error; errLock.unlock() }
+        }
+        if overlap { queue.async(execute: run) } else { run() }
+    }
+
+    /// Blocks until everything submitted so far has run.
+    func drain() { if overlap { queue.sync {} } }
+
+    private func takeError() -> Error? {
+        errLock.lock(); defer { errLock.unlock() }
+        let e = firstError; firstError = nil; return e
+    }
+
+    /// Starts a line. `context` is the voice's reference codes, frame-major (T x 16). With `overlap`
+    /// the (possibly slow, first-line) priming runs on the vocoder queue, ahead of the first chunk.
     func begin(context: [Int64]?) {
+        drain(); _ = takeError()
         pending = []; pending.reserveCapacity(Self.C * 16)
+        waitWall = 0
+        submit { [self] in beginOnQueue(context: context) }
+    }
+
+    private func beginOnQueue(context: [Int64]?) {
         wav = []
         if let ctx = context, ctx.count / 16 >= Self.L {
             if primed[ctx] == nil { primed[ctx] = prime(ctx) }
@@ -82,15 +114,32 @@ final class ANEVocoder {
 
     /// Adds one frame's 16 codes; a chunk is decoded as soon as its 12th frame exists.
     func push(frame: ArraySlice<Int64>) throws {
+        if let e = takeErrorIfAny() { throw e }
         pending.append(contentsOf: frame)
-        if pending.count == Self.C * 16 { try chunk(); pending.removeAll(keepingCapacity: true) }
+        if pending.count == Self.C * 16 { submitPending() }
+    }
+
+    private func takeErrorIfAny() -> Error? {
+        errLock.lock(); defer { errLock.unlock() }
+        return firstError
+    }
+
+    private func submitPending() {
+        let codes = pending
+        pending.removeAll(keepingCapacity: true)
+        submit { [self] in try chunk(codes) }
     }
 
     /// Flushes the partial last chunk and returns the whole line (frames * 1920 samples).
+    /// Waits for the queue to drain (`waitWall` is how long that took) and rethrows the first decode error.
     func finish() throws -> [Float] {
-        if !pending.isEmpty { try chunk(); pending.removeAll(keepingCapacity: true) }
-        let out = wav
-        wav = []
+        if !pending.isEmpty { submitPending() }
+        let w0 = ProcessInfo.processInfo.systemUptime
+        drain()
+        waitWall = ProcessInfo.processInfo.systemUptime - w0
+        if let e = takeError() { throw e }
+        var out: [Float] = []
+        queue.sync { out = wav; wav = [] }      // hands the buffer over on the owning queue
         return out
     }
 
@@ -103,10 +152,10 @@ final class ANEVocoder {
 
     // MARK: one chunk
 
-    private func chunk() throws {
+    private func chunk(_ codes: [Int64]) throws {
         let w0 = ProcessInfo.processInfo.systemUptime
-        let n = pending.count / 16, C = Self.C, L = Self.L
-        let h = pending.withUnsafeBufferPointer { head.process(codes: $0.baseAddress!, frames: n) }    // n x 1024
+        let n = codes.count / 16, C = Self.C, L = Self.L
+        let h = codes.withUnsafeBufferPointer { head.process(codes: $0.baseAddress!, frames: n) }    // n x 1024
         let W = first ? C : L + C
         let win = first ? in12 : in20
         let ctx = first ? 0 : L

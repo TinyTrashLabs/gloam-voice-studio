@@ -97,15 +97,68 @@ final class QwenANETests: XCTestCase {
         while prefix < min(got.count, ref.count), got[prefix] == ref[prefix] { prefix += 1 }
         let same = zip(got, ref).filter { $0 == $1 }.count
         print("QwenANE free-run: \(same)/\(ref.count) frames identical, first \(prefix) frames match, frames \(r.frames) (python \(ref.count)), stop \(r.stopReason)")
-        print(String(format: "QwenANE timing: audio %.2fs total %.2fs (rtf %.2f) prompt %.2f prefill %.2f loop %.2f vocoder %.2f",
+        print(String(format: "QwenANE timing: audio %.2fs total %.2fs (rtf %.2f) prompt %.2f prefill %.2f loop %.2f vocoder %.2f wait %.2f",
                      r.audioSeconds, r.timings.total, r.timings.total / r.audioSeconds,
-                     r.timings.prompt, r.timings.prefill, r.timings.loop, r.timings.vocoder))
+                     r.timings.prompt, r.timings.prefill, r.timings.loop, r.timings.vocoder, r.timings.vocoderWait))
         XCTAssertGreaterThanOrEqual(prefix, 2)
         XCTAssertEqual(r.samples.count, r.frames * 1920)
         XCTAssertEqual(r.stopReason, .eos)
         XCTAssertGreaterThan(paced, r.frames)
         let again = try engine.render(text: Self.jeffText, voice: voice, seed: 7)
         XCTAssertEqual(again.codes, r.codes)
+    }
+
+    /// The overlapped vocoder must return exactly the samples of the inline path, for a primed
+    /// voice, a cold start (no context), and a whole render.
+    @available(iOS 18.0, macOS 15.0, *)
+    func testOverlappedVocoderIsBitIdenticalToInline() throws {
+        let dir = try modelsDirectory()
+        let codes = try loadInt16("jeff_codes")
+        let frames = codes.values.count / 16
+        let voc = try ANEVocoder(modelsDirectory: dir)
+        let voice = try QwenVoiceFiles(directory: dir.appendingPathComponent("voices/jeff"))
+        let c = codes.values.map { Int64($0) }
+        for ctx in [voice.referenceFrames, nil] {
+            voc.overlap = false
+            let inline = try voc.decode(codes: c, frames: frames, context: ctx)
+            voc.overlap = true
+            let over = try voc.decode(codes: c, frames: frames, context: ctx)
+            XCTAssertEqual(inline.count, frames * 1920)
+            XCTAssertTrue(inline == over, "overlapped decode differs from inline (context \(ctx != nil))")
+            // a partial last chunk (frames not a multiple of 12)
+            let n = frames - 5
+            voc.overlap = false
+            let a = try voc.decode(codes: c, frames: n, context: ctx)
+            voc.overlap = true
+            let b = try voc.decode(codes: c, frames: n, context: ctx)
+            XCTAssertTrue(a == b)
+        }
+        let engine = try QwenANEEngine(modelsDirectory: dir)
+        let v = try engine.loadVoice(named: "jeff")
+        engine.options.overlapVocoder = false
+        let r0 = try engine.render(text: Self.jeffText, voice: v, seed: 7)
+        engine.options.overlapVocoder = true
+        let r1 = try engine.render(text: Self.jeffText, voice: v, seed: 7)
+        XCTAssertEqual(r0.codes, r1.codes)
+        XCTAssertTrue(r0.samples == r1.samples, "render samples differ between inline and overlapped")
+    }
+
+    /// Prints per-stage timings for a short and a long line, inline vs overlapped, 2 runs each.
+    @available(iOS 18.0, macOS 15.0, *)
+    func testOverlapTimings() throws {
+        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        let voice = try engine.loadVoice(named: "jeff")
+        let long = Self.jeffText + " Stay with us. We have an hour of warm bass, soft keys, and a few voices you might not have heard in a while. The night is long, the dial is low, and nobody is in any kind of hurry. So settle in, and let the music find you."
+        for (name, text) in [("short", Self.jeffText), ("long", long)] {
+            for overlap in [false, true, false, true] {
+                engine.options.overlapVocoder = overlap
+                let r = try engine.render(text: text, voice: voice, seed: 7)
+                let t = r.timings
+                print(String(format: "QwenANE overlap=%@ %@: audio %.2fs wall %.2fs rtf %.2f | prompt %.2f prefill %.2f loop %.2f vocoder %.2f wait %.2f",
+                             overlap ? "on " : "off", name, r.audioSeconds, t.total, t.total / r.audioSeconds,
+                             t.prompt, t.prefill, t.loop, t.vocoder, t.vocoderWait))
+            }
+        }
     }
 
     @available(iOS 18.0, macOS 15.0, *)
