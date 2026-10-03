@@ -284,6 +284,7 @@ struct ContentView: View {
         case .qwenCustom: "qwen3-custom · direct a preset voice"
         case .luxTTS: "lux-tts · clone a voice"
         case .pocketTTS: "pocket-tts · clone a voice"
+        case .breezeTTS2: "breeze-tts-2 · clone, design, or direct a voice"
         default: b.rawValue
         }
     }

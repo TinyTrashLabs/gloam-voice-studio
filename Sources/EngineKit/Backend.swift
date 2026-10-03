@@ -17,6 +17,11 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case qwenCustom = "qwen3-custom"
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
+    /// BreezeBlue's Breeze TTS 2 (3B, English + Chinese). Clones from a
+    /// reference pair, designs a voice from a Direction alone, and — the only
+    /// backend that does both at once — lets a Direction steer a cloned voice
+    /// ("voice direction"). See `instructDirectsClone`.
+    case breezeTTS2 = "breeze-tts-2"
     // Demoted below turbo/Fish for historical reasons (it used to double the
     // line — fixed 2026-07-02 in the vendored mlx-audio-swift fork: CFG
     // uncond-stream position embeddings, missing [SPACE] tokenization, and
@@ -82,18 +87,40 @@ extension BackendID {
     /// Non-Qwen: the static `spec.modelRepo` (quant ignored).
     public func modelRepo(quant: QwenQuant?) -> String {
         if let base = qwenRepoBase { return base + (quant ?? .q8).rawValue }
+        if self == .breezeTTS2 { return Self.breezeRepo(quant: quant) }
         return spec.modelRepo
+    }
+
+    /// mlx-community's Breeze conversions. The bf16 one is the bare repo name
+    /// (no suffix), unlike Qwen's `-bf16`. A precision mlx-community does not
+    /// publish (5/6-bit) falls back to the 8-bit default rather than to a repo
+    /// that 404s.
+    public static func breezeRepo(quant: QwenQuant?) -> String {
+        let base = "mlx-community/Breeze-TTS-2-mlx"
+        switch quant ?? defaultQuant {
+        case .bf16: return base
+        case .q4: return base + "-4bit"
+        default: return base + "-8bit"
+        }
     }
 
     /// Precisions this backend can be downloaded at. Empty = it ships at one
     /// fixed precision, so callers must hide the Precision picker entirely
     /// (see `SettingsView.backendRow`) and `diskFolder` drops the `@quant`.
+    /// Non-empty is also what makes the download manager persist a choice and
+    /// quant-suffix the folder, so this is the one place that decides it.
     public var availableQuants: [QwenQuant] {
         switch self {
         case .qwen06BMobile: []            // one published bake, no choice to offer
+        // mlx-community publishes exactly these three conversions.
+        case .breezeTTS2: [.q4, .q8, .bf16]
         default: isQwen ? QwenQuant.allCases : []
         }
     }
+
+    /// The precision a backend with `availableQuants` downloads at until the
+    /// user picks another. 8-bit everywhere it is offered.
+    public static let defaultQuant: QwenQuant = .q8
 
     /// On-disk folder name. Qwen embeds the quant so precisions coexist; Dia2
     /// embeds both size and quant (e.g. "dia2@2b-8bit") since it ships two sizes.
@@ -104,8 +131,8 @@ extension BackendID {
         switch self {
         case .dia2: "dia2@\(quantRaw ?? "2b-8bit")"
         default:
-            isQwen && !availableQuants.isEmpty
-                ? "\(rawValue)@\(quantRaw ?? QwenQuant.q8.rawValue)"
+            !availableQuants.isEmpty
+                ? "\(rawValue)@\(quantRaw ?? Self.defaultQuant.rawValue)"
                 : rawValue
         }
     }
@@ -300,6 +327,19 @@ extension BackendID {
             ControlSurface(voiceClone: .optional, instruct: .none,
                            language: false,
                            knobs: Knobs(temperature: 0.3...1.2))
+        case .breezeTTS2:
+            // Clone, design (Direction with no voice), or both. Language is
+            // read from the text itself — the model's prompt has no language
+            // slot, and the Swift port ignores the generic `language` argument.
+            //
+            // Only temperature is surfaced. The Advanced sliders are shared
+            // with Qwen and default to ITS values (top-k off, repetition 1.05);
+            // handing Breeze those would quietly replace its own top-k 50 /
+            // repetition 1.0. The shared temperature default (0.9) already
+            // matches Breeze's. CFG is fixed at 4 inside the Swift port.
+            ControlSurface(voiceClone: .optional, instruct: .optional,
+                           language: false,
+                           knobs: Knobs(temperature: 0.5...1.2))
         case .chatterbox:
             ControlSurface(voiceClone: .required, instruct: .none,
                            language: false,
@@ -354,8 +394,41 @@ extension BackendID {
     public var needsRefText: Bool {
         switch self {
         case .qwen06B, .qwen06BMobile, .qwen17B, .luxTTS: true
+        // Breeze prompts with "[S0]<transcript>" ahead of the reference codes,
+        // and the Swift port throws outright on a reference with no transcript.
+        case .breezeTTS2: true
         case .dia2: false   // optional reference clip is prefix conditioning, not a transcript pair
         default: false
+        }
+    }
+}
+
+extension BackendID {
+    /// Whether a Direction (`instruct`) is honored ALONGSIDE a reference voice.
+    ///
+    /// Every other instruct-capable backend either has no clone path at all
+    /// (qwen3-design/custom) or drops the instruct the moment a reference is
+    /// present, so the planner strips it there to stay honest. Breeze's
+    /// "voice direction" is exactly that pairing — keep the cloned identity,
+    /// steer tone/pace/emotion with words — so it must survive the planner.
+    public var instructDirectsClone: Bool {
+        switch self {
+        case .breezeTTS2: true
+        default: false
+        }
+    }
+
+    /// Inline sounds a backend documents but does not list in an
+    /// `added_tokens.json` the tag catalog can read off disk. Empty = ask the
+    /// model directory (Dia2) or offer the free-form list (Fish).
+    ///
+    /// Breeze: the English events from its model card. Parenthesised, NOT
+    /// Fish's `[square]` form — a bracketed English tag is read aloud. (Its
+    /// Chinese events use `[笑]`-style brackets; the chips target English.)
+    public var fixedNonverbalTags: [String] {
+        switch self {
+        case .breezeTTS2: ["(laugh)", "(sigh)", "(cough)", "(clears throat)"]
+        default: []
         }
     }
 }
@@ -367,6 +440,7 @@ extension BackendID {
         case .qwen06B, .qwen06BMobile, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
+        case .breezeTTS2: .textDriven                // the Direction steers clone and design alike
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
         case .kokoro: .none
@@ -434,6 +508,19 @@ extension BackendID {
         case .fishS2Pro:
             BackendSpec(modelRepo: "mlx-community/fish-audio-s2-pro-bf16",
                         defaultSampleRate: 44100, honorsTags: true,
+                        needsLicenseAck: true, needsRefAudio: false,
+                        minRAMBytes: 16_000_000_000)
+        case .breezeTTS2:
+            // BreezeBlue Research and Non-Commercial License — require an ack
+            // like Fish. Tags are its English `(laugh)` vocabulary (see
+            // `fixedNonverbalTags`). The repo here is the 8-bit default; the
+            // precision picker resolves the others via `breezeRepo(quant:)`.
+            // RAM floor: 4.6 GB of 8-bit weights plus a 3B backbone's two KV
+            // caches (CFG runs a conditional and an unconditional pass) leave
+            // an 8 GB Mac nothing for the app or a chat model — same floor as
+            // Fish.
+            BackendSpec(modelRepo: "mlx-community/Breeze-TTS-2-mlx-8bit",
+                        defaultSampleRate: 24000, honorsTags: true,
                         needsLicenseAck: true, needsRefAudio: false,
                         minRAMBytes: 16_000_000_000)
         case .kokoro:
@@ -528,6 +615,11 @@ extension BackendID {
     public var surfaces: BackendSurfaces {
         switch self {
         case .qwen06B, .qwen06BMobile, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox:
+            [.studio, .chatVoice, .apiServer, .downloadable]
+        case .breezeTTS2:
+            // Not `.creation`: the Voice Foundry is built around qwen3-design
+            // specifically. Breeze designs from a Direction in the Studio
+            // instead (no voice selected), and over the API with `instruct`.
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .qwenDesign:
             // Creation-only: it needs a typed Direction per line, so it can

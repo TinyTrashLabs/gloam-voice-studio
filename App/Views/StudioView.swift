@@ -605,6 +605,10 @@ struct StudioView: View {
             + "the identity stays fixed; your Direction shapes the delivery."
         case .fishS2Pro:
             "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
+        case .breezeTTS2:
+            "Pick a voice to clone it, write a Direction to design one from scratch, or do both "
+            + "to steer a cloned voice's tone and pace. Sounds like (laugh) come from the chips above. "
+            + "English and Chinese."
         case .chatterbox:
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:
@@ -693,11 +697,13 @@ struct StudioView: View {
 
     /// TAGS, its own section between WRITE and the Generate bar.
     ///
-    /// Still live after Dia2 left this screen, for exactly one engine: Fish
-    /// (`fish-s2-pro`) is the other backend with `honorsTags`, and it takes the
-    /// curated free-form `[tag]` vocabulary TagChipsView carries by default —
-    /// which is what the `.inlineMarker` copy under EMOTION points the user at.
-    /// Dia2's own `(parenthesised)` sounds now live in the Dialogue composer.
+    /// Still live after Dia2 left this screen, for two engines. Fish
+    /// (`fish-s2-pro`) takes the curated free-form `[tag]` vocabulary
+    /// TagChipsView carries by default — which is what the `.inlineMarker` copy
+    /// under EMOTION points the user at. Breeze (`breeze-tts-2`) takes its own
+    /// short `(laugh)`-style list (`BackendID.fixedNonverbalTags`), so it gets
+    /// those chips and no free-form field. Dia2's own `(parenthesised)` sounds
+    /// now live in the Dialogue composer.
     @ViewBuilder
     var tagSection: some View {
         if model.backend.spec.honorsTags {
@@ -819,9 +825,15 @@ struct StudioView: View {
                             .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
                     }
                     if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
-                        Text("A reference voice is selected — Direction is ignored (clone takes priority). "
-                             + "Clear the voice to design by description.")
-                            .font(.caption2).foregroundStyle(.orange)
+                        if model.backend.instructDirectsClone {
+                            Text("Directing the selected voice — its identity stays; your Direction "
+                                 + "shapes tone, pace and emotion. Clear the voice to design one instead.")
+                                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                        } else {
+                            Text("A reference voice is selected — Direction is ignored (clone takes priority). "
+                                 + "Clear the voice to design by description.")
+                                .font(.caption2).foregroundStyle(.orange)
+                        }
                     }
                 }
             }

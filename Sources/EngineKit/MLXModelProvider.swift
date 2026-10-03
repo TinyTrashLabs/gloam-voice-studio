@@ -233,11 +233,13 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 Memory.clearCache()
                 return streamed
             } else {
-                // Base/VoiceDesign/Fish/Chatterbox. For Qwen, `voice:` carries the
+                // Base/VoiceDesign/Fish/Chatterbox/Breeze. For Qwen, `voice:` carries the
                 // instruct (honored only on the no-ref path — planner already enforced this).
+                // Breeze reads `voice:` as its instruction too, with or without a
+                // reference pair: design alone, or direction over a clone.
                 audio = try await model.generate(
                     text: request.text,
-                    voice: backend.isQwen ? request.instruct
+                    voice: backend.isQwen || backend == .breezeTTS2 ? request.instruct
                         // Supertonic: an absolute style-file path renders that
                         // baked voice (fork PR #7); a bare name stays a preset.
                         : backend == .supertonic ? (request.styleURL?.path ?? request.speaker)

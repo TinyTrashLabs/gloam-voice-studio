@@ -356,9 +356,12 @@ public enum APIRouter {
                         + " unconditioned, randomly invented speaker")
                     throw APIError(status: .badRequest, detail: "voice '\(voice)' not found")
                 }
-            } else if clones {
+            } else if clones && !(controls.instruct != .none && !blank(req.instruct)) {
                 // No `voice` and no configured default: a cloning backend would
-                // invent a speaker. Say so instead.
+                // invent a speaker. Say so instead. A backend that also takes an
+                // `instruct` (Breeze) is the exception when one is sent: that is
+                // voice DESIGN — the caller described the speaker — not an
+                // unconditioned guess.
                 logError("/v1/audio/speech: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
                     + " unconditioned, randomly invented speaker")

@@ -275,4 +275,50 @@ final class RequestPlannerTests: XCTestCase {
             XCTAssertEqual(error as? EngineError, .speakerRequired(.qwenCustom))
         }
     }
+
+    // MARK: - Breeze TTS 2
+
+    func testBreezeKeepsDirectionAlongsideAClone() throws {
+        // "Voice direction": the reference fixes identity, the instruct steers
+        // delivery. Every other clone backend drops instruct here.
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      refText: "ref words", instruct: "  slow and serious  "))
+        XCTAssertEqual(p.refAudioPath, "/tmp/r.wav")
+        XCTAssertEqual(p.refText, "ref words")
+        XCTAssertEqual(p.instruct, "slow and serious")
+    }
+
+    func testBreezeDesignsFromDirectionWithoutAVoice() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", instruct: "a warm young narrator"))
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertEqual(p.instruct, "a warm young narrator")
+    }
+
+    func testBreezeNeedsNeitherVoiceNorDirection() throws {
+        let p = try RequestPlanner.plan(backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertNil(p.instruct)
+    }
+
+    func testBreezeForwardsTemperatureButNotQwenSamplingOrLanguage() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", temperatureOverride: 0.7, language: "english",
+                                      topP: 0.8, topK: 0, repetitionPenalty: 1.05))
+        XCTAssertEqual(p.temperature, 0.7)
+        XCTAssertNil(p.topP)
+        XCTAssertNil(p.topK, "Qwen's top-k 0 would switch off Breeze's top-k 50")
+        XCTAssertNil(p.repetitionPenalty)
+        XCTAssertNil(p.language)
+    }
+
+    func testBreezeTagsPassThroughUntouched() throws {
+        let text = "(laugh) You won't believe this. (sigh)"
+        let p = try RequestPlanner.plan(backend: .breezeTTS2, request: SynthesisRequest(text: text))
+        XCTAssertEqual(p.text, text)
+    }
 }

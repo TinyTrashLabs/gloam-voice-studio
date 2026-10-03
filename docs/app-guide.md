@@ -33,6 +33,25 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
 - `chatterbox` / `chatterbox-turbo` — expressive cloning; turbo is the fast one
 - `fish-s2-pro` — quality-first cloning (research/non-commercial license;
   acknowledge in Settings)
+- `breeze-tts-2` — BreezeBlue's Breeze TTS 2 (3B, English + Chinese, 24 kHz).
+  Three ways to drive it from the same Direct pane:
+  - **Clone** — pick a voice. It needs the voice's transcript, like the
+    Qwen Base models; a voice without one shows the "can't speak this voice"
+    warning until you add it.
+  - **Design** — clear the voice and write a Direction ("a warm, unhurried
+    late-night radio host"); every take is a fresh speaker matching it.
+  - **Direct** — pick a voice *and* write a Direction. The voice keeps its
+    identity; the Direction steers tone, pace and emotion. It is the only
+    model where a Direction is honored alongside a cloned voice.
+
+  Sounds come from the `(laugh)` / `(sigh)` / `(cough)` / `(clears throat)`
+  chips (parenthesised — a `[bracketed]` English tag is read aloud). Only
+  Temperature is under Advanced; the model keeps its own top-k and
+  repetition settings. Settings → Models offers 4-bit (≈3.0 GB), 8-bit
+  (≈4.6 GB, default) and bf16 (≈7.6 GB) from mlx-community; it needs 16 GB of
+  RAM. The weights and the audio you generate with them are under the
+  BreezeBlue Research and Non-Commercial License — acknowledge it in
+  Settings first.
 - `lux-tts` — fast cloning-only English, 48 kHz, the lightest of the set
   (~529 MB). Weights come from
   [`tinytrashlabs/LuxTTS-mlx`](https://huggingface.co/tinytrashlabs/LuxTTS-mlx),

@@ -368,7 +368,7 @@ func usage() -> Never {
     let llmIDs = LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")
     let lines: [String] = [
         "usage: spike --backend <qwen3-0.6b|qwen3-1.7b|qwen3-design|qwen3-custom|",
-        "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> ",
+        "chatterbox|chatterbox-turbo|fish-s2-pro|breeze-tts-2> --text <text> ",
         "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] ",
         "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] ",
         "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n",

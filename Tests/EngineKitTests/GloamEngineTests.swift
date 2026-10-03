@@ -107,6 +107,32 @@ final class GloamEngineTests: XCTestCase {
         XCTAssertEqual(provider.loads, [.fishS2Pro])
     }
 
+    func testBreezeWithoutAckThrows() async {
+        let provider = FakeProvider()
+        let engine = GloamEngine(provider: provider)
+        do {
+            _ = try await engine.synthesize(
+                backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+            XCTFail("expected licenseAckRequired")
+        } catch {
+            XCTAssertEqual(error as? EngineError, .licenseAckRequired(.breezeTTS2))
+        }
+        XCTAssertTrue(provider.loads.isEmpty, "the gate runs before any weights load")
+    }
+
+    func testFishAckDoesNotUnlockBreeze() async {
+        // Distinct licenses: one ack must never unlock the other.
+        let engine = GloamEngine(provider: FakeProvider())
+        await engine.acknowledgeLicense(for: .fishS2Pro)
+        do {
+            _ = try await engine.synthesize(
+                backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+            XCTFail("expected licenseAckRequired")
+        } catch {
+            XCTAssertEqual(error as? EngineError, .licenseAckRequired(.breezeTTS2))
+        }
+    }
+
     func testValidationRunsBeforeModelLoad() async {
         // chatterbox with no ref must fail WITHOUT loading 2 GB of weights.
         let provider = FakeProvider()

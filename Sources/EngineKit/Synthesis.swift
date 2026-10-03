@@ -108,7 +108,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var exaggeration: Float?
     /// Chatterbox (regular) only: CFG guidance weight (nil = model default 0.5).
     public var cfgWeight: Float?
-    /// Qwen natural-language direction.
+    /// Natural-language direction (Qwen Design/Custom; Breeze, where it may
+    /// also accompany a reference voice — see `BackendID.instructDirectsClone`).
     public var instruct: String?
     /// Qwen CustomVoice preset speaker.
     public var speaker: String?
@@ -228,8 +229,12 @@ enum RequestPlanner {
 
         // Instruct: honored only when the backend allows it AND (on clone-capable
         // backends) no reference voice is selected — the library ignores instruct on
-        // the clone path, so the plan drops it to stay honest.
-        let wantsInstruct = controls.instruct != .none && !(controls.voiceClone != .none && hasRef)
+        // the clone path, so the plan drops it to stay honest. The exception is a
+        // backend whose clone path takes the instruct too (Breeze's "voice
+        // direction"), where dropping it would discard the user's Direction.
+        let instructSurvivesClone = !(controls.voiceClone != .none && hasRef)
+            || backend.instructDirectsClone
+        let wantsInstruct = controls.instruct != .none && instructSurvivesClone
         let instruct = wantsInstruct ? clean(request.instruct) : nil
         if controls.instruct == .required && instruct == nil {
             throw EngineError.instructRequired(backend)

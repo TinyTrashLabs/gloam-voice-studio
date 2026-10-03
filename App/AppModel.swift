@@ -498,6 +498,8 @@ final class AppModel {
     /// Empty means "use your own list"; non-empty means "these and nothing
     /// else", because a tag the model does not know gets read out loud.
     func nonverbalTags(for backend: BackendID) -> [String] {
+        // A documented vocabulary (Breeze) needs no tokenizer read.
+        if !backend.fixedNonverbalTags.isEmpty { return backend.fixedNonverbalTags }
         if let hit = tagCache[backend] { return hit }
         let tags = NonverbalTagCatalog.parenthesised(
             inModelDirectory: downloads.directory(for: backend))
@@ -747,12 +749,19 @@ final class AppModel {
             // no slowdown. (A Settings-configurable cap is planned.)
             MLXModelProvider.configureMemory(cacheLimitBytes: 1 << 30)
             let modelRoot = StoragePaths.models
-            // Mirror ModelDownloadManager.directory(for:): Qwen weights live in
-            // quant-suffixed folders (e.g. qwen3-0.6b@8bit), others under rawValue.
+            // Mirror ModelDownloadManager.directory(for:): backends with a
+            // Precision picker (Qwen, Breeze) live in quant-suffixed folders
+            // (e.g. qwen3-0.6b@8bit), others under rawValue. Same fallback as
+            // `quant(for:)`: a stored precision the backend doesn't offer reads
+            // as the default.
             let ttsResolver: @Sendable (BackendID) -> String? = { backend in
-                let quantRaw = backend.isQwen
-                    ? (UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)") ?? "8bit")
-                    : nil
+                var quantRaw: String? = nil
+                if !backend.availableQuants.isEmpty {
+                    let stored = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
+                        .flatMap(QwenQuant.init(rawValue:))
+                    let offered = stored.flatMap { backend.availableQuants.contains($0) ? $0 : nil }
+                    quantRaw = (offered ?? BackendID.defaultQuant).rawValue
+                }
                 let dir = modelRoot.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
                 // Pocket is a sherpa-onnx layout, not an HF snapshot — no
                 // config.json; its own manifest check is the readiness marker.
@@ -1843,8 +1852,8 @@ final class AppModel {
 
     private func describe(_ error: EngineError) -> String {
         switch error {
-        case .licenseAckRequired:
-            return "Acknowledge the Fish license in Settings → Models first."
+        case .licenseAckRequired(let backend):
+            return "Acknowledge the \(backend.rawValue) license in Settings → Models first."
         case .refAudioRequired:
             return "This model needs a reference voice."
         case .generationFailed(_, let message):

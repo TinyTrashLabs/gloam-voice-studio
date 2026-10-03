@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 13)
+        XCTAssertEqual(BackendID.allCases.count, 14)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 13)
+        XCTAssertEqual(BackendID.allCases.count, 14)
     }
 
     func testQwenFamilyFlag() {
@@ -31,6 +31,7 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(BackendID.qwen06B.needsRefText)
         XCTAssertTrue(BackendID.qwen17B.needsRefText)
         XCTAssertTrue(BackendID.luxTTS.needsRefText)
+        XCTAssertTrue(BackendID.breezeTTS2.needsRefText)
         XCTAssertFalse(BackendID.chatterbox.needsRefText)
         XCTAssertFalse(BackendID.chatterboxTurbo.needsRefText)
         XCTAssertFalse(BackendID.pocketTTS.needsRefText)
@@ -188,7 +189,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 13)
+        XCTAssertEqual(BackendID.allCases.count, 14)
     }
 
     func testKokoroSpec() {
@@ -329,6 +330,97 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.needsRefAudio, "unconditioned generation is valid")
         XCTAssertEqual(spec.defaultSampleRate, 24000)
         XCTAssertGreaterThanOrEqual(spec.minRAMBytes, 16_000_000_000)
+    }
+
+    // MARK: - Breeze TTS 2
+
+    func testBreezeRawValueAndFamily() {
+        XCTAssertEqual(BackendID.breezeTTS2.rawValue, "breeze-tts-2")
+        XCTAssertEqual(BackendID.migrating(rawValue: "breeze-tts-2"), .breezeTTS2)
+        XCTAssertFalse(BackendID.breezeTTS2.isQwen)
+    }
+
+    func testBreezeSpec() {
+        let spec = BackendID.breezeTTS2.spec
+        XCTAssertEqual(spec.modelRepo, "mlx-community/Breeze-TTS-2-mlx-8bit")
+        XCTAssertEqual(spec.defaultSampleRate, 24000)
+        XCTAssertTrue(spec.honorsTags, "(laugh)-style events are part of its text")
+        // BreezeBlue Research and Non-Commercial License — explicit ack like Fish.
+        XCTAssertTrue(spec.needsLicenseAck)
+        XCTAssertFalse(spec.needsRefAudio, "designs a voice from a Direction alone")
+        XCTAssertEqual(spec.minRAMBytes, 16_000_000_000)
+        XCTAssertEqual(BackendID.breezeTTS2.emotionMechanism, .textDriven)
+    }
+
+    func testBreezeControls() {
+        let controls = BackendID.breezeTTS2.controls
+        XCTAssertEqual(controls.voiceClone, .optional)
+        XCTAssertEqual(controls.instruct, .optional)
+        XCTAssertFalse(controls.language, "the prompt has no language slot")
+        XCTAssertTrue(controls.presetSpeakers.isEmpty)
+        XCTAssertNotNil(controls.knobs.temperature)
+        // The shared Advanced sliders default to Qwen's values; Breeze keeps
+        // its own top-k / top-p / repetition defaults by not exposing them.
+        XCTAssertNil(controls.knobs.topP)
+        XCTAssertNil(controls.knobs.topK)
+        XCTAssertNil(controls.knobs.repetitionPenalty)
+        XCTAssertNil(controls.knobs.cfgScale, "CFG is fixed inside the Swift port")
+    }
+
+    func testOnlyBreezeDirectsAClone() {
+        XCTAssertTrue(BackendID.breezeTTS2.instructDirectsClone)
+        for backend in BackendID.allCases where backend != .breezeTTS2 {
+            XCTAssertFalse(backend.instructDirectsClone, backend.rawValue)
+        }
+    }
+
+    func testBreezeTagsAreParenthesisedAndOnlyBreezeHasAFixedList() {
+        let tags = BackendID.breezeTTS2.fixedNonverbalTags
+        XCTAssertFalse(tags.isEmpty)
+        XCTAssertTrue(tags.contains("(laugh)"))
+        for tag in tags {
+            XCTAssertTrue(tag.hasPrefix("(") && tag.hasSuffix(")"),
+                          "\(tag): a [bracketed] English tag is read aloud by Breeze")
+        }
+        for backend in BackendID.allCases where backend != .breezeTTS2 {
+            XCTAssertTrue(backend.fixedNonverbalTags.isEmpty, backend.rawValue)
+        }
+    }
+
+    func testBreezeOffersTheThreePublishedPrecisions() {
+        XCTAssertEqual(BackendID.breezeTTS2.availableQuants, [.q4, .q8, .bf16])
+        XCTAssertEqual(BackendID.breezeTTS2.modelRepo(quant: .q8),
+                       "mlx-community/Breeze-TTS-2-mlx-8bit")
+        XCTAssertEqual(BackendID.breezeTTS2.modelRepo(quant: .q4),
+                       "mlx-community/Breeze-TTS-2-mlx-4bit")
+        XCTAssertEqual(BackendID.breezeTTS2.modelRepo(quant: .bf16),
+                       "mlx-community/Breeze-TTS-2-mlx", "bf16 is the bare repo")
+        XCTAssertEqual(BackendID.breezeTTS2.modelRepo(quant: nil),
+                       BackendID.breezeTTS2.spec.modelRepo)
+        // Not published — never a repo that 404s.
+        XCTAssertEqual(BackendID.breezeTTS2.modelRepo(quant: .q6),
+                       "mlx-community/Breeze-TTS-2-mlx-8bit")
+    }
+
+    func testBreezeDiskFolderIsQuantSuffixedSoPrecisionsCoexist() {
+        XCTAssertEqual(BackendID.breezeTTS2.diskFolder(quantRaw: "4bit"), "breeze-tts-2@4bit")
+        XCTAssertEqual(BackendID.breezeTTS2.diskFolder(quantRaw: nil), "breeze-tts-2@8bit")
+        // Generalising the @quant rule from "Qwen" to "has a picker" must not
+        // move any existing backend's folder.
+        XCTAssertEqual(BackendID.qwen17B.diskFolder(quantRaw: "4bit"), "qwen3-1.7b@4bit")
+        XCTAssertEqual(BackendID.qwen06BMobile.diskFolder(quantRaw: "8bit"), "qwen3-0.6b-mobile")
+        XCTAssertEqual(BackendID.fishS2Pro.diskFolder(quantRaw: "8bit"), "fish-s2-pro")
+        XCTAssertEqual(BackendID.luxTTS.diskFolder(quantRaw: nil), "lux-tts")
+    }
+
+    func testBreezeSurfaces() {
+        let s = BackendID.breezeTTS2.surfaces
+        XCTAssertTrue(s.contains(.studio))
+        XCTAssertTrue(s.contains(.chatVoice))
+        XCTAssertTrue(s.contains(.apiServer))
+        XCTAssertTrue(s.contains(.downloadable))
+        XCTAssertFalse(s.contains(.dialogue))
+        XCTAssertFalse(s.contains(.creation), "the Foundry is qwen3-design's")
     }
 }
 

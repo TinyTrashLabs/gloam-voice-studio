@@ -704,4 +704,119 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(voices.list().map(\.slug), ["nova"])
         XCTAssertEqual(voices.locate("nova-excited"), .variant(base: "nova", key: "excited"))
     }
+
+    // MARK: - Breeze TTS 2
+
+    func testBreezeDirectionReachesEngineAlongsideTheClone() async throws {
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","voice":"cruz","instruct":"slow, serious"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertEqual(provider.lastBackend, .breezeTTS2)
+        XCTAssertTrue(provider.model.last?.refAudioPath?.hasSuffix("cruz/ref.wav") == true)
+        XCTAssertEqual(provider.model.last?.refText, "cruz ref")
+        XCTAssertEqual(provider.model.last?.instruct, "slow, serious")
+    }
+
+    func testBreezeDesignWithInstructNeedsNoVoice() async throws {
+        // No voice and no default — but an instruct describes the speaker, so
+        // this is voice design, not the unconditioned guess the 400 guards.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breeze-design-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","instruct":"a calm narrator"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+        XCTAssertNil(provider.model.last?.refAudioPath)
+        XCTAssertEqual(provider.model.last?.instruct, "a calm narrator")
+    }
+
+    func testBreezeWithNeitherVoiceNorInstructIs400() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breeze-bare-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","instruct":"   "}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+                let detail = try JSONSerialization.jsonObject(with: Data(buffer: resp.body))
+                    as! [String: Any]
+                XCTAssertEqual(detail["detail"] as? String, "breeze-tts-2 requires a 'voice'")
+            }
+        }
+        XCTAssertNil(provider.model.last, "the engine must not be reached at all")
+    }
+
+    func testBreezeVoiceWithoutTranscriptIs400() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("breeze-blank-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Mute", refWav: Data([0, 1, 2]), refText: "")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"breeze-tts-2","voice":"mute"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+            }
+        }
+        XCTAssertNil(provider.model.last)
+    }
+
+    func testQwenBaseInstructStillDoesNotExcuseAMissingVoice() async throws {
+        // The design exemption is for backends that TAKE an instruct. Qwen Base
+        // ignores one, so an instruct there must not unlock an unconditioned take.
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("base-instruct-\(UUID())")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: VoiceLibrary(directory: dir),
+                                   defaultBackend: .qwen17B)
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            let body = #"{"input":"hello","model":"qwen3-1.7b","instruct":"warm"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: body)) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+            }
+        }
+        XCTAssertNil(provider.model.last)
+    }
+
+    func testEachGatedBackendGetsItsOwnLicenseNotice() {
+        XCTAssertEqual(licenseNotice(for: .fishS2Pro), fishLicenseNotice)
+        XCTAssertEqual(licenseNotice(for: .supertonic), supertonicLicenseNotice)
+        XCTAssertEqual(licenseNotice(for: .breezeTTS2), breezeLicenseNotice)
+        XCTAssertTrue(licenseTitle(for: .breezeTTS2).contains("Non-Commercial"))
+        // Pairwise distinct: a gated backend must never borrow another's text.
+        let gated = BackendID.allCases.filter(\.spec.needsLicenseAck)
+        XCTAssertEqual(Set(gated.map(licenseNotice(for:))).count, gated.count)
+        XCTAssertEqual(Set(gated.map(licenseTitle(for:))).count, gated.count)
+    }
 }

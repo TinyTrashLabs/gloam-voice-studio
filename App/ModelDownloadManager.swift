@@ -49,11 +49,15 @@ final class ModelDownloadManager {
         // sherpa-onnx int8 export weights only — the dylib is bundled inside
         // the app (Task 1), not downloaded here.
         .pocketTTS: 210_000_000,
+        // mlx-community/Breeze-TTS-2-mlx-8bit: 4,602,695,993 bytes (3.9 GB
+        // weights + the 682 MB Qwen3-TTS audio tokenizer + a 33 MB
+        // tokenizer.json). 4-bit is 3.04 GB, bf16 7.63 GB.
+        .breezeTTS2: 4_600_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
         let base = Self.approxBytes8bit[backend] ?? 3_000_000_000
-        guard backend.isQwen else { return base }
+        guard !backend.availableQuants.isEmpty else { return base }
         return Int64(Double(base) * quant(for: backend).sizeMultiplier)
     }
 
@@ -90,15 +94,21 @@ final class ModelDownloadManager {
         uiTest ? .ready : (states[backend] ?? .notDownloaded)
     }
 
-    /// Per-Qwen selected precision (persisted). Non-Qwen ignore this.
+    /// Selected precision (persisted) for a backend with a Precision picker
+    /// (`availableQuants` non-empty — Qwen, Breeze). Others ignore this. The
+    /// defaults key keeps its historical `qwenQuant.` prefix so existing
+    /// choices survive; a stored value the backend doesn't offer reads as the
+    /// default rather than pointing at a folder nothing ever downloads.
     func quant(for backend: BackendID) -> QwenQuant {
-        guard backend.isQwen else { return .q8 }
+        let offered = backend.availableQuants
+        guard !offered.isEmpty else { return BackendID.defaultQuant }
         let raw = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
-        return raw.flatMap(QwenQuant.init(rawValue:)) ?? .q8
+        return raw.flatMap(QwenQuant.init(rawValue:)).flatMap { offered.contains($0) ? $0 : nil }
+            ?? BackendID.defaultQuant
     }
 
     func setQuant(_ quant: QwenQuant, for backend: BackendID) {
-        guard backend.isQwen else { return }
+        guard backend.availableQuants.contains(quant) else { return }
         UserDefaults.standard.set(quant.rawValue, forKey: "qwenQuant.\(backend.rawValue)")
         refresh()   // selected dir may differ → recompute state
     }
@@ -110,7 +120,7 @@ final class ModelDownloadManager {
         // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
         // reported the model ready somewhere the loader never looked, and the
         // load fell through to the HF repo id and failed with a 401.
-        let quantRaw = backend.isQwen ? quant(for: backend).rawValue : nil
+        let quantRaw = backend.availableQuants.isEmpty ? nil : quant(for: backend).rawValue
         return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 
