@@ -13,6 +13,7 @@ import Foundation
 /// way upstream's ICL decode does. Without it the vocoder starts cold and the first word comes out
 /// wrong: a first word pitched an octave high, heard as a voice crack. The primed state is cached
 /// per voice, so only the first line of a voice pays for it.
+@available(iOS 18.0, macOS 15.0, *)
 final class ANEVocoder {
     static let C = 12, L = 8
     private let head: VocoderHead
@@ -29,11 +30,18 @@ final class ANEVocoder {
     init(modelsDirectory: URL) throws {
         head = try VocoderHead(dir: modelsDirectory.appendingPathComponent("vochead").path)
         let dir = modelsDirectory.appendingPathComponent("coreml")
-        func load(_ n: String, _ units: MLComputeUnits) throws -> MLModel {
+        func load(_ n: String, _ units: MLComputeUnits, function: String? = nil) throws -> MLModel {
             let c = MLModelConfiguration(); c.computeUnits = units
+            if let function { c.functionName = function }
             return try MLModel(contentsOf: dir.appendingPathComponent("\(n).mlmodelc"), configuration: c)
         }
-        upF12 = try load("upF_12", .cpuOnly); upF20 = try load("upF_20", .cpuOnly)
+        // One multifunction upF.mlmodelc ("w12", "w20": same weights, two window widths); the older
+        // layout shipped the weights twice as upF_12 / upF_20.
+        if FileManager.default.fileExists(atPath: dir.appendingPathComponent("upF.mlmodelc").path) {
+            upF12 = try load("upF", .cpuOnly, function: "w12"); upF20 = try load("upF", .cpuOnly, function: "w20")
+        } else {
+            upF12 = try load("upF_12", .cpuOnly); upF20 = try load("upF_20", .cpuOnly)
+        }
         upMall = try load("upMall", .cpuAndNeuralEngine)
         in12 = try MLMultiArray(shape: [1, 1024, 12], dataType: .float32)
         in20 = try MLMultiArray(shape: [1, 1024, 20], dataType: .float32)

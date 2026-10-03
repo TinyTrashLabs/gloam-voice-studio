@@ -3,22 +3,32 @@ import Accelerate
 
 /// Streaming vocoder head: codes -> RVQ dequantize -> pre_conv -> 8-layer causal transformer
 /// (KV cache) -> hidden (T x 1024). A Swift port of tools/voc_torch.Head with Accelerate;
-/// weights are fp32 .npy files from scripts/export_vocoder_head.py (memory mapped).
+/// weights are .npy files (fp16 as shipped, fp32 also accepted; memory mapped). fp16 matrices are widened into a
+/// scratch buffer per matmul, so the resident cost stays at the mapped (clean) pages.
 /// Exact in streaming: the conv keeps its last 2 input frames, attention keeps all past K/V.
 final class VocoderHead {
     static let nLayers = 8, nHeads = 16, headDim = 64, dModel = 512, dInner = 1024, dFF = 1024, dHidden = 1024
 
+    /// A weight matrix as stored: fp32 used in place, fp16 widened on use.
+    private struct Mat {
+        let npy: NPY
+        var count: Int { npy.count }
+    }
     private struct Layer {
-        let inLN, postLN, q, k, v, o, gate, up, down, sa, sm: UnsafePointer<Float>
+        let inLN, postLN: UnsafePointer<Float>
+        let q, k, v, o, gate, up, down: Mat
+        let sa, sm: UnsafePointer<Float>
     }
 
     private var keep: [NPY] = []
-    private let embed: [UnsafePointer<Float>]            // 16 x (2048 x 256)
-    private let wFirst, wRest: UnsafePointer<Float>      // (512 x 256) each
-    private let preW, preB: UnsafePointer<Float>         // (1024 x 1536), (1024)
-    private let inW, inB: UnsafePointer<Float>           // (512 x 1024), (512)
+    private let embed: [Mat]                             // 16 x (2048 x 256)
+    private let wFirst, wRest: Mat                       // (512 x 256) each
+    private let preW: Mat, preB: UnsafePointer<Float>    // (1024 x 1536), (1024)
+    private let inW: Mat, inB: UnsafePointer<Float>      // (512 x 1024), (512)
     private let normW: UnsafePointer<Float>
-    private let outW, outB: UnsafePointer<Float>         // (1024 x 512), (1024)
+    private let outW: Mat, outB: UnsafePointer<Float>    // (1024 x 512), (1024)
+    private var owned: [UnsafeMutablePointer<Float>] = []   // widened copies of the small vectors
+    private let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 1024 * 1536)   // widest matrix (pre_conv)
     private let layers: [Layer]
     private var invFreq = [Float](repeating: 0, count: 32)
 
@@ -29,31 +39,40 @@ final class VocoderHead {
 
     init(dir: String) throws {
         var keepers: [NPY] = []
-        func load(_ n: String) throws -> UnsafePointer<Float> {
-            let a = try NPY(path: dir + "/" + n + ".npy"); keepers.append(a); return a.f32
+        var ownedLocal: [UnsafeMutablePointer<Float>] = []
+        func mat(_ n: String) throws -> Mat {
+            let a = try NPY(path: dir + "/" + n + ".npy"); keepers.append(a); return Mat(npy: a)
         }
-        var em: [UnsafePointer<Float>] = []
-        em.append(try load("quantizer.rvq_first.vq.layers.0._codebook.embed"))
-        for i in 0..<15 { em.append(try load("quantizer.rvq_rest.vq.layers.\(i)._codebook.embed")) }
+        /// Small vectors (biases, norms, scales): used directly when fp32, widened once when fp16.
+        func load(_ n: String) throws -> UnsafePointer<Float> {
+            let a = try NPY(path: dir + "/" + n + ".npy"); keepers.append(a)
+            if !a.isHalf { return a.f32 }
+            let p = UnsafeMutablePointer<Float>.allocate(capacity: a.count)
+            widenHalf(a.f16, p, a.count); ownedLocal.append(p); return UnsafePointer(p)
+        }
+        var em: [Mat] = []
+        em.append(try mat("quantizer.rvq_first.vq.layers.0._codebook.embed"))
+        for i in 0..<15 { em.append(try mat("quantizer.rvq_rest.vq.layers.\(i)._codebook.embed")) }
         embed = em
-        wFirst = try load("quantizer.rvq_first.output_proj.weight")
-        wRest = try load("quantizer.rvq_rest.output_proj.weight")
-        preW = try load("pre_conv.conv.weight"); preB = try load("pre_conv.conv.bias")
-        inW = try load("pre_transformer.input_proj.weight"); inB = try load("pre_transformer.input_proj.bias")
+        wFirst = try mat("quantizer.rvq_first.output_proj.weight")
+        wRest = try mat("quantizer.rvq_rest.output_proj.weight")
+        preW = try mat("pre_conv.conv.weight"); preB = try load("pre_conv.conv.bias")
+        inW = try mat("pre_transformer.input_proj.weight"); inB = try load("pre_transformer.input_proj.bias")
         normW = try load("pre_transformer.norm.weight")
-        outW = try load("pre_transformer.output_proj.weight"); outB = try load("pre_transformer.output_proj.bias")
+        outW = try mat("pre_transformer.output_proj.weight"); outB = try load("pre_transformer.output_proj.bias")
         var ls: [Layer] = []
         for i in 0..<Self.nLayers {
             let p = "pre_transformer.layers.\(i)."
             ls.append(Layer(inLN: try load(p + "input_layernorm.weight"), postLN: try load(p + "post_attention_layernorm.weight"),
-                            q: try load(p + "self_attn.q_proj.weight"), k: try load(p + "self_attn.k_proj.weight"),
-                            v: try load(p + "self_attn.v_proj.weight"), o: try load(p + "self_attn.o_proj.weight"),
-                            gate: try load(p + "mlp.gate_proj.weight"), up: try load(p + "mlp.up_proj.weight"),
-                            down: try load(p + "mlp.down_proj.weight"),
+                            q: try mat(p + "self_attn.q_proj.weight"), k: try mat(p + "self_attn.k_proj.weight"),
+                            v: try mat(p + "self_attn.v_proj.weight"), o: try mat(p + "self_attn.o_proj.weight"),
+                            gate: try mat(p + "mlp.gate_proj.weight"), up: try mat(p + "mlp.up_proj.weight"),
+                            down: try mat(p + "mlp.down_proj.weight"),
                             sa: try load(p + "self_attn_layer_scale.scale"), sm: try load(p + "mlp_layer_scale.scale")))
         }
         layers = ls
         keep = keepers
+        owned = ownedLocal
         for i in 0..<32 { invFreq[i] = 1.0 / powf(10000.0, Float(2 * i) / 64.0) }
         reset()
     }
@@ -72,10 +91,17 @@ final class VocoderHead {
         off = 0
     }
 
+    deinit {
+        scratch.deallocate()
+        for p in owned { p.deallocate() }
+    }
+
     // y (M x N) = x (M x K) * W^T, W is (N x K) row-major; beta=1 accumulates into y
     @inline(__always)
-    private func gemm(_ x: UnsafePointer<Float>, _ w: UnsafePointer<Float>, _ y: UnsafeMutablePointer<Float>,
+    private func gemm(_ x: UnsafePointer<Float>, _ wm: Mat, _ y: UnsafeMutablePointer<Float>,
                       m: Int, n: Int, k: Int, beta: Float = 0, ldx: Int? = nil) {
+        let w: UnsafePointer<Float>
+        if wm.npy.isHalf { widenHalf(wm.npy.f16, scratch, n * k); w = UnsafePointer(scratch) } else { w = wm.npy.f32 }
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(m), Int32(n), Int32(k), 1, x, Int32(ldx ?? k), w, Int32(k), beta, y, Int32(n))
     }
 
@@ -96,10 +122,11 @@ final class VocoderHead {
         var e1 = [Float](repeating: 0, count: T * 256), er = [Float](repeating: 0, count: T * 256)
         for t in 0..<T {
             let c = codes + t * 16
-            memcpy(&e1[t * 256], embed[0] + Int(c[0]) * 256, 256 * 4)
+            embed[0].npy.copyFloats(from: Int(c[0]) * 256, count: 256, to: &e1[t * 256])
             var acc = [Float](repeating: 0, count: 256)
+            var row = [Float](repeating: 0, count: 256)
             for i in 0..<15 {
-                let row = embed[i + 1] + Int(c[i + 1]) * 256
+                embed[i + 1].npy.copyFloats(from: Int(c[i + 1]) * 256, count: 256, to: &row)
                 vDSP_vadd(acc, 1, row, 1, &acc, 1, 256)
             }
             for j in 0..<256 { er[t * 256 + j] = acc[j] }

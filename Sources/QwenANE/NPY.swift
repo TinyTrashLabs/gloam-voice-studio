@@ -1,4 +1,5 @@
 import Foundation
+import Accelerate
 
 /// Read-only memory-mapped .npy (C order). Mapped pages are clean file pages, so
 /// the 150 MB text-embedding table costs nothing until rows are touched.
@@ -47,8 +48,23 @@ final class NPY {
     var count: Int { shape.reduce(1, *) }
     var f32: UnsafePointer<Float> { precondition(descr == "<f4"); return data.assumingMemoryBound(to: Float.self) }
     var u32: UnsafePointer<UInt32> { precondition(descr == "<u4"); return data.assumingMemoryBound(to: UInt32.self) }
+    var f16: UnsafePointer<Float16> { precondition(descr == "<f2"); return data.assumingMemoryBound(to: Float16.self) }
+    var isHalf: Bool { descr == "<f2" }
+    /// Element `i` as fp32, whether the file stores fp32 or fp16.
+    @inline(__always) func float(at i: Int) -> Float { isHalf ? Float(f16[i]) : f32[i] }
+    /// Copies `n` elements starting at `start` into `dst` as fp32 (fp16 files are widened).
+    func copyFloats(from start: Int, count n: Int, to dst: UnsafeMutablePointer<Float>) {
+        if isHalf { widenHalf(f16 + start, dst, n) } else { memcpy(dst, f32 + start, n * 4) }
+    }
     var i32: UnsafePointer<Int32> { precondition(descr == "<i4"); return data.assumingMemoryBound(to: Int32.self) }
     var i64: UnsafePointer<Int64> { precondition(descr == "<i8"); return data.assumingMemoryBound(to: Int64.self) }
 
     deinit { munmap(mapBase, mapLen) }
+}
+
+/// fp16 -> fp32 (vImage; fast in debug builds too).
+func widenHalf(_ src: UnsafePointer<Float16>, _ dst: UnsafeMutablePointer<Float>, _ n: Int) {
+    var s = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: src), height: 1, width: vImagePixelCount(n), rowBytes: n * 2)
+    var d = vImage_Buffer(data: UnsafeMutableRawPointer(dst), height: 1, width: vImagePixelCount(n), rowBytes: n * 4)
+    vImageConvert_Planar16FtoPlanarF(&s, &d, 0)
 }

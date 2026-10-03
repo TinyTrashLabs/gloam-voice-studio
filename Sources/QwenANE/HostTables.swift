@@ -45,10 +45,10 @@ final class HostTables {
         let n = ids.count
         let D = 2048, groupSize = 64, groups = D / groupSize, wordsPerRow = D / 8
         var x = [Float](repeating: 0, count: n * D)
-        let q = teQ.u32, s = teS.f32, b = teB.f32
+        let q = teQ.u32, s = teS, b = teB
         for (r, id) in ids.enumerated() {
             for g in 0..<groups {
-                let sc = s[id * groups + g], bi = b[id * groups + g]
+                let sc = s.float(at: id * groups + g), bi = b.float(at: id * groups + g)
                 for j in 0..<groupSize {
                     let k = g * groupSize + j
                     let nib = (q[id * wordsPerRow + k / 8] >> UInt32(4 * (k % 8))) & 0xF
@@ -65,9 +65,18 @@ final class HostTables {
         return y
     }
 
-    func codecRow(_ id: Int) -> UnsafePointer<Float> { codec.f32 + id * 1024 }
-    /// cp table for sub-codebook k (0..14), code c.
-    func cpRow(_ k: Int, _ c: Int) -> UnsafePointer<Float> { cp.f32 + (k * 2048 + c) * 1024 }
+    /// Talker codec embedding row (fp32; the table may be stored fp16).
+    func codecRow(_ id: Int) -> [Float] {
+        var r = [Float](repeating: 0, count: 1024)
+        codec.copyFloats(from: id * 1024, count: 1024, to: &r)
+        return r
+    }
+    /// cp table for sub-codebook k (0..14), code c (fp32; the table may be stored fp16).
+    func cpRow(_ k: Int, _ c: Int) -> [Float] {
+        var r = [Float](repeating: 0, count: 1024)
+        cp.copyFloats(from: (k * 2048 + c) * 1024, count: 1024, to: &r)
+        return r
+    }
 }
 
 struct Prompt {
@@ -113,9 +122,9 @@ func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String) -> Pr
     for r in 0..<(Tref + 1) { for j in 0..<H { codecIcl[r * H + j] += ttsPad[j] } }
     // prefix: think rows, speaker, pad, bos
     var prefix: [Float] = []
-    for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += Array(UnsafeBufferPointer(start: host.codecRow(id), count: H)) }
+    for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += host.codecRow(id) }
     prefix += voice.spkEmbedding
-    for id in [c.codecPad, c.codecBos] { prefix += Array(UnsafeBufferPointer(start: host.codecRow(id), count: H)) }
+    for id in [c.codecPad, c.codecBos] { prefix += host.codecRow(id) }
     let pRows = prefix.count / H                       // 6
     let role = host.textProj(Array(tgtIds[0..<3]))     // 3 x H
     let padCount = pRows - 2

@@ -23,10 +23,16 @@ every frame; sleeping in it is how a host limits the duty cycle.
 <models>/
   host/      config.json, tokenizer.json, text_embedding_{q,scales,biases}.npy,
              text_proj_linear_fc{1,2}_{w,b}.npy, talker_codec_embedding.npy, cp_codec_embedding.npy
-  vochead/   the vocoder head weights, one fp32 .npy per tensor (quantizer.*, pre_conv.*, pre_transformer.*)
-  coreml/    talker0.mlmodelc, talker1.mlmodelc   (multifunction: "decode" and "prefill")
+             (text_embedding_scales/biases are fp16, bit-exact; the codec embeddings stay fp32 because
+             fp16 flips near-tie sub-codes; fp32 .npy files are accepted wherever fp16 is)
+  vochead/   the vocoder head weights, one fp16 .npy per tensor (quantizer.*, pre_conv.*, pre_transformer.*);
+             fp16 is bit-exact for these, fp32 files also load. Matrices are widened per matmul.
+  coreml/    talker0.mlmodelc, talker1.mlmodelc   (layers 0-13 and 14-27, NOT duplicates; each is
+                                                   multifunction: "decode" and "prefill")
              cp_ane.mlmodelc
-             upF_12.mlmodelc, upF_20.mlmodelc, upMall.mlmodelc
+             upF.mlmodelc   (multifunction "w12" / "w20": one set of weights, two window widths;
+                             the older upF_12 + upF_20 pair still loads)
+             upMall.mlmodelc
   voices/<name>/   voice.json (ref_text), ref_codes.npy (int32 1x16xT), spk_embed.npy (float32)
 ```
 
