@@ -39,7 +39,7 @@ Readers that honour the window (the app, `unpack-gvoice.py`) never hand
 LuxTTS the long master.
 It also carries `engines/breeze-tts-2/voice.json`: "Speaks English with an
 Argentine accent." at CFG 2. Without it, Breeze renders him faintly British.
-That setting was picked by ear from a blind set of accent-only takes.
+That setting was picked by ear from a set of accent-only takes.
 
 **Provenance caveat:** `engines/supertonic/style.json` was baked from an
 earlier, longer take of the same voice (`supertonic-mlx-spike/refs/`), not
