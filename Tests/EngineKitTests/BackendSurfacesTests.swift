@@ -14,7 +14,7 @@ final class BackendSurfacesTests: XCTestCase {
     /// The bug that motivated this: dia2 shipped downloadable nowhere, while
     /// the Dialogue screen told people to get it in Settings → Models.
     func testAnythingSelectableIsAlsoInstallable() {
-        for backend in BackendID.allCases where !backend.surfaces.isDisjoint(
+        for backend in BackendID.allCases where !backend.installsManually && !backend.surfaces.isDisjoint(
             with: [.studio, .dialogue, .creation, .chatVoice, .apiServer]
         ) {
             XCTAssertTrue(backend.surfaces.contains(.downloadable),

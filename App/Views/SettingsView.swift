@@ -228,11 +228,9 @@ struct BackendsSettings: View {
 
     private func sizeLabel(_ backend: BackendID) -> String {
         let bytes = model.downloads.approxBytes(for: backend)
-        let license: String = if backend.spec.needsLicenseAck {
-            backend == .supertonic
-                ? " · Open RAIL-M use restrictions"
-                : " · research/personal license"
-        } else { "" }
+        let license: String = backend.spec.needsLicenseAck
+            ? " · " + licenseSummary(for: backend)
+            : ""
         return "≈ " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
             + license
     }
@@ -240,16 +238,15 @@ struct BackendsSettings: View {
 
 /// License-acknowledgement sheet for whichever backend is pending in
 /// `licensePromptBackend` — Fish shows its research/personal-use notice,
-/// SuperTonic its Open RAIL-M use restrictions (via `licenseNotice(for:)`).
+/// SuperTonic its Open RAIL-M use restrictions, Breeze its non-commercial
+/// terms (via `licenseTitle(for:)` / `licenseNotice(for:)`).
 struct LicenseSheet: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let backend = model.licensePromptBackend ?? model.backend
         VStack(alignment: .leading, spacing: 14) {
-            Text(backend == .supertonic
-                 ? "SuperTonic — BigScience Open RAIL-M License"
-                 : "Fish Audio Research License")
+            Text(licenseTitle(for: backend))
                 .font(.title3.bold())
             Text(licenseNotice(for: backend))
             Text("The weights are downloaded from HuggingFace under your own acceptance; the app never redistributes them.")

@@ -19,7 +19,6 @@
 // the iOS Qwen engine when it loads a reference (voices saved before this).
 
 import Foundation
-import GVoiceKit
 
 public enum ReferenceTail {
     /// A 20 ms block at or under this is quiet. Below the -45 dB speech floor,

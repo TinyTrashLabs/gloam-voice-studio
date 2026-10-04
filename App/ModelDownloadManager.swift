@@ -49,12 +49,17 @@ final class ModelDownloadManager {
         // sherpa-onnx int8 export weights only — the dylib is bundled inside
         // the app (Task 1), not downloaded here.
         .pocketTTS: 210_000_000,
+        // Breeze's per-precision sizes are exact — see
+        // BackendID.measuredDownloadBytes; this is only the fallback.
+        .breezeTTS2: 4_600_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
         let base = Self.approxBytes8bit[backend] ?? 3_000_000_000
-        guard backend.isQwen else { return base }
-        return Int64(Double(base) * quant(for: backend).sizeMultiplier)
+        guard !backend.availableQuants.isEmpty else { return base }
+        let quant = self.quant(for: backend)
+        if let measured = backend.measuredDownloadBytes(quant: quant) { return measured }
+        return Int64(Double(base) * quant.sizeMultiplier)
     }
 
     init(root: URL, uiTest: Bool) {
@@ -90,16 +95,18 @@ final class ModelDownloadManager {
         uiTest ? .ready : (states[backend] ?? .notDownloaded)
     }
 
-    /// Per-Qwen selected precision (persisted). Non-Qwen ignore this.
+    /// Selected precision (persisted) for a backend with a Precision picker
+    /// (`availableQuants` non-empty — Qwen, Breeze). Others ignore this. The
+    /// defaults key keeps its historical `qwenQuant.` prefix so existing
+    /// choices survive; a stored value the backend doesn't offer reads as the
+    /// default rather than pointing at a folder nothing ever downloads.
     func quant(for backend: BackendID) -> QwenQuant {
-        guard backend.isQwen else { return .q8 }
-        let raw = UserDefaults.standard.string(forKey: "qwenQuant.\(backend.rawValue)")
-        return raw.flatMap(QwenQuant.init(rawValue:)) ?? .q8
+        backend.effectiveQuant(in: .standard) ?? BackendID.defaultQuant
     }
 
     func setQuant(_ quant: QwenQuant, for backend: BackendID) {
-        guard backend.isQwen else { return }
-        UserDefaults.standard.set(quant.rawValue, forKey: "qwenQuant.\(backend.rawValue)")
+        guard backend.availableQuants.contains(quant) else { return }
+        UserDefaults.standard.set(quant.rawValue, forKey: backend.quantDefaultsKey)
         refresh()   // selected dir may differ → recompute state
     }
 
@@ -110,7 +117,7 @@ final class ModelDownloadManager {
         // resolver — which passes nil — looked in `dia2@2b-8bit`. The UI then
         // reported the model ready somewhere the loader never looked, and the
         // load fell through to the HF repo id and failed with a 401.
-        let quantRaw = backend.isQwen ? quant(for: backend).rawValue : nil
+        let quantRaw = backend.effectiveQuant(in: .standard)?.rawValue
         return root.appendingPathComponent(backend.diskFolder(quantRaw: quantRaw))
     }
 
@@ -244,11 +251,18 @@ final class ModelDownloadManager {
             throw DownloadError(message: "Invalid repo id: \(repo)")
         }
         let (listData, _) = try await URLSession.shared.data(from: treeURL)
-        let files = try JSONDecoder().decode([Entry].self, from: listData)
+        let entries = try JSONDecoder().decode([Entry].self, from: listData)
+            .filter { $0.type == "file" }
+        // Every path this repo actually contains — the prune at the end keeps
+        // these, INCLUDING the .pt copies filtered out just below. A file we
+        // deliberately skip downloading is still part of this repo, and
+        // deleting one would be a second surprise on top of the first.
+        let repoPaths = Set(entries.map(\.path))
+        let files = entries
             // MLX only ever reads .safetensors — Kokoro's repo carries 54 redundant
             // .pt (PyTorch) copies of the same voicepacks that would otherwise
             // roughly double its download for nothing.
-            .filter { $0.type == "file" && !$0.path.hasSuffix(".pt") }
+            .filter { !$0.path.hasSuffix(".pt") }
         guard !files.isEmpty else {
             throw DownloadError(message: "No files found in \(repo)")
         }
@@ -324,6 +338,65 @@ final class ModelDownloadManager {
             // Forced: a finished file is a real milestone, and the last one
             // must land on 1.0 rather than stopping just short.
             await report(Double(done) / Double(total), force: true)
+        }
+        Self.pruneFilesNotIn(repoPaths, under: dir)
+    }
+
+    /// Deletes everything in `dir` that the repo we just fetched does not
+    /// contain, then any subdirectory left empty.
+    ///
+    /// The downloader writes files; until now it never removed any. Re-pointing
+    /// a backend at a different repo therefore MERGED the two: on 2026-09-14
+    /// re-pointing `.luxTTS` from `YatharthS/LuxTTS` to `tinytrashlabs/LuxTTS-mlx`
+    /// left ~596MB of dead ONNX graphs sitting next to the real weights, and the
+    /// same thing in reverse (an older build downloading the old repo over the
+    /// new one) overwrote `lux_model.safetensors` with the only copies that
+    /// existed anywhere. Stale files are at best a gigabyte of garbage per user
+    /// and at worst a corrupt model directory.
+    ///
+    /// ONLY on success. Pruning after a failed or cancelled download would wipe
+    /// the working model a user already had, which is far worse than the leak
+    /// this fixes. `downloadRepoSnapshot` throws on both, so this line is never
+    /// reached in either case.
+    nonisolated private static func pruneFilesNotIn(
+        _ repoPaths: Set<String>, under dir: URL
+    ) {
+        let fm = FileManager.default
+        // Hand-placed, never in any repo: sherpa's dylib is normally bundled in
+        // the app, but a dev build without it reads this copy, and PocketTTS
+        // reports the whole model missing the moment it goes.
+        let keepNames: Set<String> = [PocketTTS.libraryFile]
+        // `enumerator(atPath:)` yields paths RELATIVE to `dir`, which is what
+        // `repoPaths` holds. Deriving them from absolute URLs instead looks
+        // equivalent and is not: on macOS the enumerator hands back
+        // `/private/var/...` for a `/var/...` root, the prefix match fails, and
+        // every file in a subdirectory (qwen3's `speech_tokenizer/`) stops
+        // matching its repo path and gets deleted.
+        guard let walk = fm.enumerator(atPath: dir.path) else { return }
+
+        var dirs: [String] = []
+        for case let relative as String in walk {
+            var isDir: ObjCBool = false
+            let url = dir.appendingPathComponent(relative)
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+            guard !isDir.boolValue else {
+                dirs.append(relative)
+                continue
+            }
+            guard !repoPaths.contains(relative),
+                  !keepNames.contains(url.lastPathComponent) else { continue }
+            try? fm.removeItem(at: url)
+        }
+        // Deepest first, so a directory emptied by removing its children is
+        // itself removed on the same pass. `contentsOfDirectory` is non-empty
+        // for a directory that still holds anything, so this only takes the
+        // ones the prune actually emptied.
+        for relative in dirs.sorted(by: { $0.components(separatedBy: "/").count
+                                          > $1.components(separatedBy: "/").count }) {
+            let url = dir.appendingPathComponent(relative)
+            if let left = try? fm.contentsOfDirectory(atPath: url.path), left.isEmpty {
+                try? fm.removeItem(at: url)
+            }
         }
     }
 

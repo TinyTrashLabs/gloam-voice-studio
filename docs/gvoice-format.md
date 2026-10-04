@@ -37,13 +37,14 @@ backends vary in what they need:
 
 | Backend | `voiceClone` | `instruct` | Preset speakers | What a pack must carry |
 | --- | --- | --- | --- | --- |
-| `qwen3-0.6b` | optional | none | — | `source/` audio + transcript |
+| `qwen3-0.6b` | optional | none | — | `source/` audio + transcript (optionally its prepared voice, `engines/qwen3-0.6b/`) |
 | `qwen3-1.7b` | optional | none | — | `source/` audio + transcript |
 | `qwen3-design` | **none** | **required** | — | an `instruct` string — the description *is* the voice |
 | `qwen3-custom` | **none** | optional | 9 (`qwenPresetSpeakers`) | a `speaker` id + optional `instruct` |
 | `chatterbox` | **required** | none | — | `source/` audio |
 | `chatterbox-turbo` | **required** | none | — | `source/` audio |
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
+| `breeze-tts-2` | optional | optional | — | `source/` audio + transcript (an `instruct` may accompany it, or stand alone to design a voice) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
 | `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
 | `dia2` | optional | none | — | Word-aligned reference audio; may carry a dedicated `dia2` clip |
@@ -73,12 +74,18 @@ billie-frost.gvoice          (zip)
     ├── lux-tts/
     │   ├── ref.wav          the reference window LuxTTS conditions on
     │   └── voice.json       { "audio": …, "text": …, "derivedFrom": { … } }
+    ├── qwen3-0.6b/          optional — Qwen3-TTS's prepared voice (a cache of source/)
+    │   ├── ref_codes.npy    int32 (1, 16, T) speech-tokenizer codes
+    │   ├── spk_embed.npy    float32 (1024,) x-vector speaker embedding
+    │   └── voice.json       { "refCodes": …, "spkEmbedding": …, "text": …, "derivedFrom": { … } }
     ├── supertonic/
     │   ├── style.json
     │   ├── style-hype.json
     │   └── voice.json       { "speaker": "M1" }   (preset, instead of a style)
     ├── qwen3-design/
     │   └── voice.json       { "instruct": "a warm, gravelly late-night host" }
+    ├── breeze-tts-2/
+    │   └── voice.json       { "instruct": "Speaks English with an Argentine accent.", "cfgScale": 2 }
     ├── qwen3-custom/
     │   └── voice.json       { "speaker": "Dylan", "instruct": "…" }
     ├── kokoro/
@@ -87,9 +94,11 @@ billie-frost.gvoice          (zip)
         └── voice.json       { "voiceId": "…" }
 ```
 
-`chatterbox`, `chatterbox-turbo`, `fish-s2-pro` and the Qwen Base models need
-no `engines/` directory — they consume `source/` audio directly, so a reader
-serving them reads `source` and ignores `engines` entirely. A manifest MAY
+`chatterbox`, `chatterbox-turbo`, `fish-s2-pro`, `breeze-tts-2` and the Qwen Base models need
+no `engines/` directory to render — they consume `source/` audio directly, so a reader
+serving them reads `source` and ignores `engines` entirely. (`qwen3-0.6b` MAY
+additionally carry its prepared voice, and `breeze-tts-2` the voice's Direction,
+both below; `source/` stays the master.) A manifest MAY
 still list such an engine pointing back into `source/`; readers MUST tolerate
 that but writers need not emit it.
 
@@ -145,6 +154,108 @@ Transcript text lives inline in the manifest (`source.<key>.text`), not as a
 sibling file — there is no `transcript.txt` member. (An earlier draft of this
 doc showed one; it was never implemented and this is the correction.)
 
+### The `qwen3-0.6b` prepared voice
+
+Qwen3-TTS clones from a reference clip, but the model never sees the clip:
+it sees the clip's speech-tokenizer **codes** and an x-vector **speaker
+embedding**. Producing both takes two encoder passes over the reference —
+about 5 s on a phone, once per voice per device. Both are deterministic
+functions of the reference audio, so a pack MAY carry them and let a device
+skip the work:
+
+```
+engines/qwen3-0.6b/
+├── ref_codes.npy     int32 (`<i4`), C order, shape (1, 16, T)
+├── spk_embed.npy     float32 (`<f4`), C order, shape (1024,)
+└── voice.json
+```
+
+```json
+{
+  "refCodes": "engines/qwen3-0.6b/ref_codes.npy",
+  "spkEmbedding": "engines/qwen3-0.6b/spk_embed.npy",
+  "text": "the exact transcript of the audio the codes encode",
+  "derivedFrom": {
+    "audio": "source/ref.wav",
+    "sha256": "9f2c…64 lowercase hex digits…",
+    "by": "QwenVoicePrep",
+    "prepVersion": 1,
+    "mel": "upstream"
+  }
+}
+```
+
+- **`ref_codes.npy`** is the 12 Hz speech tokenizer's output: 16 codebooks by
+  `T` frames (`T` is at most 250: the encoder takes at most 20 s). Every code
+  is in `0..<2048`. `.npy` format 1.0, little-endian, C order, no pickling.
+- **`spk_embed.npy`** is the 1024-float x-vector. Every value is finite.
+- **`text`** is REQUIRED: the exact transcript of the audio the codes encode.
+  For a window, that is the transcript of the WINDOW, as for `lux-tts`.
+- **`derivedFrom.audio`** is the pack-relative path of the audio file that was
+  encoded: `source/ref.wav` normally, or a window such as
+  `engines/lux-tts/ref.wav` when the master is longer than the encoder takes
+  (20 s). It MUST start with `source/` or `engines/`, with no `..` segment.
+  **`sha256`** is the SHA-256 of that file's bytes (not of decoded samples),
+  as 64 lowercase hex digits. **`startSeconds` / `endSeconds`** are present,
+  as a pair, when the file is a window cut from a longer master — as in the
+  `lux-tts` window's `derivedFrom`; they are provenance, not an input to
+  anything. **`by`** names the recipe (`QwenVoicePrep`, the Core ML encoders
+  in `Sources/QwenANE`) and **`prepVersion`** is that recipe's integer version,
+  bumped whenever a change (mel front end, tail rule, encoder) could alter the
+  output; `prepVersion` is only meaningful under its `by`. **`mel`** names the
+  mel front end (`upstream`: the reference implementation's log-mel).
+- The paths in `voice.json` MUST stay inside `engines/qwen3-0.6b/`, and a
+  reader MUST resolve them only there. For a non-`base` variant the file names
+  carry the variant suffix like every other member (`ref_codes-hype.npy`,
+  `voice-hype.json`) and `voice.json` names those. The manifest lists all three
+  members under `engines["qwen3-0.6b"][<variant>]` (Rule 1: a reader reads
+  every member listed).
+
+**Writers.** The folder is OPTIONAL, and a writer SHOULD emit it only when it
+can compute it (or already holds it from a prior prep) for the exact audio it
+puts in the pack. A writer that changes `source/ref.wav` (or the window) MUST
+refresh or drop the folder: a stale one costs a recipient a wasted check at
+best. Exporters MUST omit the folder whenever they omit `source/`: the codes
+and the embedding clone the voice exactly as the audio does, so they are
+governed by the same "shared outside the owner's own machines" rule.
+
+**Readers.** A reader MUST NOT trust the folder on its say-so. Before using it
+a reader MUST verify that:
+
+1. `derivedFrom.sha256` equals the SHA-256 of the audio file the reader would
+   otherwise prepare from — its CURRENT bytes, which can differ from the
+   pack's if the reader's library re-levels references on import;
+2. `derivedFrom.prepVersion` is a version the reader implements for that
+   `by`, and `derivedFrom.mel` is the front end it implements;
+3. `text` equals (after trimming whitespace) the transcript the reader will
+   condition with;
+4. both arrays have the exact dtype and shape above, a length matching their
+   header, and every code in range.
+
+If ANY check fails the reader MUST ignore the folder and prepare the voice
+itself (the folder is a cache of `source/`, never the voice itself). A reader that cannot verify (it has no audio to hash) MUST NOT use
+it. A reader that verifies the folder MAY seed its own prep cache from it. A
+folder that is malformed is skipped, not fatal (Rule 1).
+
+**Scope: 0.6B Base only.** The codes come from the 12 Hz tokenizer shared by the
+Qwen3-TTS 12 Hz models, but the speaker embedding is the 0.6B Base model's
+1024-float x-vector; the 1.7B Base's is a different size, so its voice is not
+interchangeable. The folder is therefore scoped to `qwen3-0.6b` and a
+`qwen3-1.7b` reader MUST NOT consume it (it would use a wrong-size embedding).
+A prepared 1.7B voice, if wanted, is a separate `engines/qwen3-1.7b/` folder
+under the same rules. Nothing here is verified for the 1.7B tokenizer path, so
+this document makes no claim that the codes alone are reusable there.
+
+**Not in the pack.** The decoder's KV warm-up state for a voice depends on the
+device and runtime and is rebuilt locally on first use; it is NOT part of this
+folder and MUST NOT be added to it.
+
+**Why no version bump.** This is a new engine id with an optional folder: per
+Versioning, "a new engine id … anything an old reader can safely ignore per
+Rule 1 — MUST ship without bumping `gvoice`". An old reader sees an unknown
+`engines` entry (or, for `qwen3-0.6b`, an engine it serves from `source/`
+alone), skips it, and still gets the whole voice. `gvoice` stays `2`.
+
 ### The `dia2` conditioning reference
 
 A pack MAY carry a dedicated `engines/dia2/ref.wav` and its word timings in
@@ -167,6 +278,45 @@ for a dedicated clip, since it may describe different material.
 Exporters MUST include both assets when present, and importers MUST preserve
 their association. Other engines continue to select their own assets or the
 master recording.
+
+### The `breeze-tts-2` Direction
+
+`breeze-tts-2` clones from `source/` like the engines above, and it is directed
+by a free-text instruction. Some voices need one to sound like themselves: a
+reference can carry an accent that Breeze only half hears (Benson's Argentine
+English came out faintly British until "Speaks English with an Argentine
+accent." at CFG 2 put it back). That instruction is a property of the voice,
+so a pack MAY carry it as `engines/breeze-tts-2/voice.json`:
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `instruct` | yes | The voice's default Direction. Blank means none. |
+| `cfgScale` | no | The CFG it was tuned at. Absent means Breeze's own default. |
+
+A reader SHOULD offer it as the starting Direction when this voice is picked
+for Breeze, and use it when a request names the voice but sends no instruction
+of its own. An instruction the user or caller gives always replaces it,
+`cfgScale` included. It is not a rendition: the voice still renders from
+`source/`, so a reader that ignores the file renders the voice undirected,
+which is a valid reading. Each variant MAY carry its own; a take without one
+uses its base voice's.
+
+It lives in the engine's directory, not in a manifest key, so readers that
+know nothing about Breeze keep it through import and re-export, per Rule 1.
+Engine members already travel per variant and survive stores that only keep
+what they are given. No `gvoice` bump was needed when it was added on
+2026-10-03.
+
+### Variant member names
+
+Inside a pack, a variant's engine files carry the variant key before the
+extension (`style-hype.json`, `voice-hype.json`) so they cannot collide with
+the base's in one `engines/<id>/` directory. That suffix is a packing detail:
+importers MUST install a take's file under its plain name (`voice.json`),
+because engines look their files up by name. A file without the suffix is
+installed as named. Before 2026-10-03 the Swift importer kept the suffix, so a
+take's `lux-tts` window was never found and the take rendered from its base's
+window.
 
 ### The avatar
 
@@ -260,7 +410,9 @@ bump.
 `enginePace` (added 2026-08-23) is the worked example: a new optional key that
 an old reader ignores, falling back to `pace`. No bump. `avatar` (added
 2026-09-08) is another: an old reader imports the voice without its picture,
-which was the only outcome before the key existed.
+which was the only outcome before the key existed. `engines/qwen3-0.6b/` (added
+2026-10-03) is a third: an old reader skips the folder and serves the voice from
+`source/`, as before.
 
 That split is what makes forward compatibility possible at all: readers
 reject `gvoice` values *above* what they implement (they don't understand the
@@ -384,4 +536,7 @@ An implementation conforms when it can:
 - round-trip `provenance` unchanged even though its shape is not understood;
 - round-trip an `avatar`, and import a pack whose `avatar` names a missing
   or non-PNG member without failing (Rule 1);
-- export with and without `source/`.
+- export with and without `source/`, dropping `engines/qwen3-0.6b/` with it;
+- ignore (and re-prepare) an `engines/qwen3-0.6b/` whose `derivedFrom.sha256`,
+  `prepVersion`, `mel` or `text` does not match what it would prepare from, or
+  whose arrays are malformed, without failing the pack.
