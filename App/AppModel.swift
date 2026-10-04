@@ -1169,6 +1169,16 @@ final class AppModel {
             try voices.setDirection(target, engine: backend.rawValue, nil)
         } catch {
             generationError = "Couldn't remove the voice's Direction: \(error.localizedDescription)"
+            return
+        }
+        // Untouched, the pane still holds what was just removed. Left there it
+        // would read as typed text: kept over the next voice's own default and
+        // sent with every chat reply.
+        if let applied = appliedVoiceDirection, instruct == applied.instruct {
+            instruct = ""
+            if backend == .breezeTTS2, breezeCfgScale == cfg(applied) {
+                breezeCfgScale = BackendID.breezeSamplingDefaults.cfgScale
+            }
         }
         appliedVoiceDirection = nil
         voicesVersion += 1
@@ -1363,6 +1373,17 @@ final class AppModel {
                 message: "Acknowledge the \(backend.rawValue) license in Settings → Models first.")
         }
         let controls = backend.controls
+        // The Direction pane, unless it only holds the Studio voice's own
+        // default: that belongs to THAT voice, so a chat reply or Script line
+        // in another voice gets its own voice's default (or none) instead of
+        // Benson's accent. Text the user typed applies to every caller.
+        let lineDirection: (instruct: String, cfg: Float) = {
+            guard directionIsVoiceDefault,
+                  voiceSlug != selectedVoiceSlug || backend != self.backend
+            else { return (instruct, breezeCfgScale) }
+            let own = voiceSlug.flatMap { voices.direction(for: $0, engine: backend.rawValue) }
+            return (own?.instruct ?? "", own.map(cfg) ?? BackendID.breezeSamplingDefaults.cfgScale)
+        }()
         // Never speak as somebody else. Without this the planner quietly drops
         // the reference audio for a non-cloning backend and falls through to a
         // house preset, so picking "Wizard" on supertonic used to produce a
@@ -1484,7 +1505,7 @@ final class AppModel {
             temperatureOverride: controls.knobs.temperature != nil ? temperatureOverride : nil,
             exaggerationOverride: controls.knobs.exaggeration != nil ? exaggerationOverride : nil,
             cfgWeight: controls.knobs.cfgWeight != nil ? cfgWeight : nil,
-            instruct: controls.instruct != .none ? instruct : nil,
+            instruct: controls.instruct != .none ? lineDirection.instruct : nil,
             // Straight from the pack. No `contains` check and no best-first
             // fallback: the gate above already established this backend can
             // speak this voice, so a mismatch here would be a bug worth hearing
@@ -1502,7 +1523,7 @@ final class AppModel {
             returnSmoothOverride: controls.knobs.returnSmooth != nil ? luxReturnSmooth : nil,
             // Breeze's CFG slider. Dia2 also declares the knob, but its slider
             // lives in the Dialogue composer, so the bench leaves it alone.
-            cfgScaleOverride: backend == .breezeTTS2 ? breezeCfgScale : nil,
+            cfgScaleOverride: backend == .breezeTTS2 ? lineDirection.cfg : nil,
             referenceGuidanceOverride: backend == .breezeTTS2 ? breezeReferenceGuidance : nil,
             seed: backend == .breezeTTS2 && breezeSeedLocked ? UInt64(breezeSeed) : nil,
             dialoguePrefix: dialoguePrefix)
@@ -1992,6 +2013,12 @@ final class AppModel {
         defer { foundryBaking = false }
         let text = Self.bakeCarrierLine
         let baseRefText = meta.refText.isEmpty ? nil : meta.refText
+        // Breeze bakes over the voice's own Direction, so an acted take keeps
+        // the fix it needs to sound like itself (Benson's accent). Other
+        // engines clone from the take afterwards, so whatever is missing here
+        // is missing for good.
+        let ownDirection = baker.emotionMechanism == .directed
+            ? voices.direction(for: baseSlug, engine: baker.rawValue) : nil
         for expr in expressions {
             do {
                 // Fish renders the emotion from a leading [marker] (a control, not
@@ -2006,7 +2033,9 @@ final class AppModel {
                     || baker.emotionMechanism == .directed
                 let request: SynthesisRequest = takesExpression
                     ? SynthesisRequest(text: text, refAudioPath: refURL.path,
-                                       refText: baseRefText, emotionMarker: expr.rawValue)
+                                       refText: baseRefText, emotionMarker: expr.rawValue,
+                                       instruct: ownDirection?.instruct,
+                                       cfgScaleOverride: ownDirection?.cfgScale.map(Float.init))
                     : SynthesisRequest(text: text, refAudioPath: refURL.path,
                                        refText: baseRefText,
                                        exaggerationOverride: expr.chatterboxExaggeration)

@@ -178,6 +178,10 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         }
         let (_, audio) = try loadAudioArray(
             from: URL(fileURLWithPath: path), sampleRate: model.sampleRate)
+        // A file that is gone frees its slot first: a long designed line's
+        // anchor clip (GloamEngine.passes) is deleted once the line is done,
+        // and would otherwise push a real voice out of the cache.
+        refCache.removeAll { !FileManager.default.fileExists(atPath: $0.path) }
         refCache.insert(CachedRef(path: path, mtime: mtime, audio: audio), at: 0)
         if refCache.count > 4 { refCache.removeLast() }   // a few voices, tiny arrays
         return audio

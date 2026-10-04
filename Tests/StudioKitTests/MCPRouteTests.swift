@@ -158,6 +158,25 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.instruct, DeliveryDirection.phrase(for: .excited))
     }
 
+    func testSpeakUsesTheVoicesOwnBreezeDirection() async throws {
+        let provider = CapturingProvider()
+        let voices = try seededLibrary("speak-breeze-direction")
+        try voices.setDirection("cruz", engine: "breeze-tts-2",
+                                VoiceDirection(instruct: "An Argentine accent.", cfgScale: 2))
+        let deps = APIDependencies(engine: GloamEngine(provider: provider), voices: voices,
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        try await Application(router: APIRouter.build(deps)).test(.router) { client in
+            _ = try await self.rpc(client, #"""
+            {"jsonrpc":"2.0","id":3,"method":"tools/call",
+             "params":{"name":"speak","arguments":{"text":"hi","voice":"cruz","emotion":"excited"}}}
+            """#)
+        }
+        XCTAssertEqual(provider.model.last?.instruct,
+                       "An Argentine accent. " + DeliveryDirection.phrase(for: .excited)!)
+        XCTAssertEqual(provider.model.last?.cfgScale, 2)
+    }
+
     func testUnknownVoiceIsToolError() async throws {
         try await makeApp(voices: try seededLibrary("unknown-voice")).test(.router) { client in
             let reply = try await self.rpc(client, #"""
