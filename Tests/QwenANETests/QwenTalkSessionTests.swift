@@ -5,6 +5,7 @@ import XCTest
 /// `QwenTalkSession`: one sampler stream per break, each part conditioned on the previous one, a derailed take
 /// drawn again. The render tests need QWEN_ANE_MODELS like the rest of this target:
 ///   QWEN_ANE_MODELS=/path/to/Models swift test --filter QwenTalkSessionTests
+@available(macOS 15.0, iOS 18.0, *)
 final class QwenTalkSessionTests: XCTestCase {
     private func engine() throws -> QwenANEEngine {
         guard let p = ProcessInfo.processInfo.environment["QWEN_ANE_MODELS"], !p.isEmpty else {
