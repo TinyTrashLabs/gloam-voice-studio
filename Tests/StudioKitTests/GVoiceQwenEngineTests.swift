@@ -85,10 +85,21 @@ final class GVoiceQwenEngineTests: XCTestCase {
             guard let q = QwenEngineFiles.read(fromPack: data) else { XCTFail("\(f) has no usable engines/qwen3-0.6b"); continue }
             let m = try GVoice.manifest(ofPack: data)
             XCTAssertEqual(q.derivedFrom.sha256, QwenEngineFiles.sha256Hex(try XCTUnwrap(GVoice.member(q.derivedFrom.audio, ofPack: data))), f)
+            // The transcript of the audio it was prepared from: source/ normally, or the
+            // lux-tts window's own (its voice.json) for a reference over the encoder's 20 s.
+            let expected: String? = q.derivedFrom.audio.hasPrefix("engines/lux-tts/")
+                ? try GVoice.member("engines/lux-tts/voice.json", ofPack: data)
+                    .flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["text"] as? String
+                : m.source?["base"]?.text
+            XCTAssertNotNil(expected, f)
             XCTAssertEqual(q.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                           m.source?["base"]?.text?.trimmingCharacters(in: .whitespacesAndNewlines), f)
+                           expected?.trimmingCharacters(in: .whitespacesAndNewlines), f)
             let meta = try GVoice.import(data, into: lib)
-            let kept = try Data(contentsOf: try XCTUnwrap(try lib.entry(meta.slug).refURL))
+            let entry = try lib.entry(meta.slug)
+            let keptURL = q.derivedFrom.audio.hasPrefix("engines/lux-tts/")
+                ? entry.engines["lux-tts"]?[(q.derivedFrom.audio as NSString).lastPathComponent]
+                : entry.refURL
+            let kept = try Data(contentsOf: try XCTUnwrap(keptURL))
             print("QWENPACK \(f): library ref sha matches pack digest = \(QwenEngineFiles.sha256Hex(kept) == q.derivedFrom.sha256)")
         }
     }
