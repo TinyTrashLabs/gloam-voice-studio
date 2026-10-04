@@ -173,4 +173,65 @@ public enum ReferenceSection {
         }
         return (out, start)
     }
+
+    /// Whether `text` ends a sentence (`. ! ? …`, optionally followed by closing quotes/brackets).
+    public static func endsSentence(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = t.last.map { "\"'”’»)]".contains($0) } == true ? String(t.dropLast()) : t
+        return trimmed.last.map { ".!?…".contains($0) } ?? false
+    }
+
+    /// A reference that stops mid-sentence makes a continuing model (Qwen) carry on the sentence, so a
+    /// cut's audio and transcript end at a sentence end. When `text` already does, both are returned
+    /// as they are. Otherwise the transcript is cut back to its last sentence end and the audio to the
+    /// pause nearest that point's estimated position (characters as the clock, then snapped to the
+    /// longest quiet stretch within a second of it). Returns the input unchanged when there is no
+    /// sentence end in the back 60% of the text or the result would be under 5 s.
+    public static func endAtSentence(samples: [Float], text: String, sampleRate: Int) -> (samples: [Float], text: String) {
+        guard !endsSentence(text) else { return (samples, text) }
+        let words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard words.count > 3 else { return (samples, text) }
+        let weights = words.map { Double($0.count + 1) }
+        let total = weights.reduce(0, +)
+        var k = words.count - 1
+        while k > 0, !(words[k - 1].last.map { ".!?…".contains($0) } ?? false) { k -= 1 }
+        guard k > 0, weights[..<k].reduce(0, +) >= total * 0.4 else { return (samples, text) }
+        let estimate = Int(weights[..<k].reduce(0, +) / total * Double(samples.count))
+
+        let frame = max(1, Int(Double(sampleRate) * 0.02))
+        let frameCount = samples.count / frame
+        guard frameCount > 0 else { return (samples, text) }
+        var energy = [Float](repeating: 0, count: frameCount)
+        var loudest: Float = 0
+        for f in 0 ..< frameCount {
+            var sumSq: Float = 0
+            for i in (f * frame) ..< ((f + 1) * frame) { sumSq += samples[i] * samples[i] }
+            energy[f] = (sumSq / Float(frame)).squareRoot()
+            loudest = max(loudest, energy[f])
+        }
+        let floor = max(loudest * 0.08, 0.008)
+        let radius = Int(1.0 / 0.02)
+        let center = min(frameCount - 1, estimate / frame)
+        let lo = max(0, center - radius), hi = min(frameCount - 1, center + radius)
+        var best: (start: Int, length: Int)?
+        var run = 0
+        for f in lo ... hi {
+            if energy[f] <= floor { run += 1 } else { run = 0 }
+            if run >= 5, best == nil || run > best!.length || (run == best!.length && abs(f - center) < abs(best!.start + run / 2 - center)) {
+                best = (f - run + 1, run)
+            }
+        }
+        let end: Int
+        if let b = best { end = min(samples.count, (b.start + min(b.length, 5)) * frame) }   // keep ~100 ms of the pause
+        else {
+            var m = lo
+            for f in lo ... hi where energy[f] < energy[m] { m = f }
+            end = (m + 1) * frame
+        }
+        guard end >= sampleRate * 5 else { return (samples, text) }
+        var out = Array(samples[..<end])
+        let fade = min(out.count / 2, Int(Double(sampleRate) * 0.01))
+        for i in 0 ..< fade { out[out.count - 1 - i] *= Float(i) / Float(fade) }
+        return (out, words[..<k].joined(separator: " "))
+    }
 }

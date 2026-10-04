@@ -45,6 +45,18 @@ final class QwenVoicePrepFolderTests: XCTestCase {
     }
     private var sectionURL: URL { voiceDir.appendingPathComponent(QwenVoicePrep.sectionMember) }
 
+    func testSectionEndsAtASentenceEnd() async throws {
+        let words = (0 ..< 12).map { "uno dos tres cuatro cinco seis siete ocho nueve diez once doce\($0 == 11 ? "" : ".")" }
+            .joined(separator: " ") + " y luego"
+        let e = Encoder()
+        _ = try await run(master(seconds: 40), e, words: words)
+        let stored = try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir))
+        XCTAssertTrue(ReferenceSection.endsSentence(stored.text), stored.text)
+        let seconds = Double(try QwenVoicePrep.samples(of: try Data(contentsOf: sectionURL)).count) / 24_000
+        XCTAssertLessThanOrEqual(seconds, 20.48)
+        XCTAssertEqual(try XCTUnwrap(stored.derivedFrom.endSeconds) - XCTUnwrap(stored.derivedFrom.startSeconds), seconds, accuracy: 0.01)
+    }
+
     func testALongMasterGetsItsSectionStoredInThePack() async throws {
         let m = master(seconds: 50), e = Encoder()
         let r = try await run(m, e)

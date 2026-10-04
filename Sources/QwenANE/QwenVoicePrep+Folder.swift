@@ -113,11 +113,17 @@ extension QwenVoicePrep {
         // Choose it now (prep time), store it, and encode from it.
         let maxSeconds = min(Double(limit) / Double(sampleRate), 30)
         let cut = ReferenceSection.cut(samples: all, sampleRate: sampleRate, maxSeconds: maxSeconds)
-        let sectionWAV = ReferenceSection.wavData(cut.samples, sampleRate: sampleRate)
-        let cutSeconds = Double(cut.samples.count) / Double(sampleRate)
-        let heard = await transcribe?(sectionWAV)
-        let words = ReferenceSection.text(heard: heard, transcript: text, cutSeconds: cutSeconds,
-                                          start: cut.start, count: cut.samples.count, total: all.count).text
+        // The words of the energy cut, then both cut back to a sentence end: a reference that stops
+        // mid-sentence makes Qwen continue it.
+        let cutWAV = ReferenceSection.wavData(cut.samples, sampleRate: sampleRate)
+        let cutSecs = Double(cut.samples.count) / Double(sampleRate)
+        let heard = await transcribe?(cutWAV)
+        let cutWords = ReferenceSection.text(heard: heard, transcript: text, cutSeconds: cutSecs,
+                                             start: cut.start, count: cut.samples.count, total: all.count).text
+        let ended = ReferenceSection.endAtSentence(samples: cut.samples, text: cutWords, sampleRate: sampleRate)
+        let sectionWAV = ReferenceSection.wavData(ended.samples, sampleRate: sampleRate)
+        let cutSeconds = Double(ended.samples.count) / Double(sampleRate)
+        let words = ended.text
         let start = Double(cut.start) / Double(sampleRate)
         let span = (start: start, end: start + cutSeconds)
         if store {
