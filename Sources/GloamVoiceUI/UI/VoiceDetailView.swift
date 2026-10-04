@@ -22,6 +22,10 @@ public struct VoiceDetailView<Extra: View>: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var notes = ""
+    @State private var character = ""          // persona.systemPrompt
+    @State private var tagline = ""
+    @State private var catchphrases = ""       // one per line
+    @State private var color = ""              // "#RRGGBB" or ""
     /// The words the reference says -- editable, because a take that was
     /// not the script (Ryan, 2026-09-09) must be repairable in place: both
     /// engines condition on this text and disagree with the audio otherwise.
@@ -94,7 +98,10 @@ public struct VoiceDetailView<Extra: View>: View {
     }
     private var isDirty: Bool {
         guard let voice else { return false }
+        let p = voice.meta.persona
         return name != voice.name || notes != (voice.meta.notes ?? "")
+            || character != (p?.systemPrompt ?? "") || tagline != (p?.tagline ?? "")
+            || catchphrases != (p?.catchphrases ?? []).joined(separator: "\n") || color != (p?.color ?? "")
             || transcript.trimmingCharacters(in: .whitespacesAndNewlines) != storedTranscript
             || takes.state.stale
     }
@@ -282,6 +289,7 @@ public struct VoiceDetailView<Extra: View>: View {
                 }
                 .listRowBackground(t.panel)
             }
+            if features.contains(.persona) { characterSection }
             if let voice {
                 Section {
                     LabeledContent {
@@ -505,7 +513,12 @@ public struct VoiceDetailView<Extra: View>: View {
         }
         #endif
         .onAppear {
-            if let voice { name = voice.name; notes = voice.meta.notes ?? ""; takes.bind(store: store, voice: voice) }
+            if let voice {
+                name = voice.name; notes = voice.meta.notes ?? ""; takes.bind(store: store, voice: voice)
+                let p = voice.meta.persona
+                character = p?.systemPrompt ?? ""; tagline = p?.tagline ?? ""
+                catchphrases = (p?.catchphrases ?? []).joined(separator: "\n"); color = p?.color ?? ""
+            }
             transcript = storedTranscript
             measureReference()
         }
@@ -591,6 +604,49 @@ public struct VoiceDetailView<Extra: View>: View {
         catch { errorText = userMessage(for: error) }
     }
 
+    /// The Character fields as a Persona; nil when all are empty (the app falls back to its default).
+    private func editedPersona(keeping old: Persona?) -> Persona? {
+        let prompt = character.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tag = tagline.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = catchphrases.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if prompt.isEmpty && tag.isEmpty && lines.isEmpty && color.isEmpty { return nil }
+        return Persona(systemPrompt: prompt, greeting: old?.greeting, tagline: tag.isEmpty ? nil : tag,
+                       catchphrases: lines.isEmpty ? nil : lines, color: color.isEmpty ? nil : color)
+    }
+
+    private static var swatches: [String] { ["#E8A33D", "#D9534F", "#C77D3A", "#5BA4CF", "#6CC690", "#9B7FE0", "#E07FB5", "#8A8F98"] }
+
+    @ViewBuilder private var characterSection: some View {
+        Section {
+            TextField("Tagline — e.g. late-night bartender from Mendoza", text: $tagline)
+                .font(t.sans(15)).foregroundStyle(t.fg).tint(t.accent)
+            TextField("Who they are — how they talk, what they care about", text: $character, axis: .vertical)
+                .lineLimit(3...8)
+                .font(t.sans(15)).foregroundStyle(t.fg).tint(t.accent)
+            TextField("Catchphrases — one per line", text: $catchphrases, axis: .vertical)
+                .lineLimit(2...6)
+                .font(t.sans(15)).foregroundStyle(t.fg).tint(t.accent)
+            HStack(spacing: 10) {
+                ForEach(Self.swatches, id: \.self) { hex in
+                    Button { color = color == hex ? "" : hex } label: {
+                        Circle().fill(Color(hexString: hex) ?? .gray).frame(width: 26, height: 26)
+                            .overlay(Circle().stroke(t.fg, lineWidth: color == hex ? 2 : 0))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Color \(hex)")
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Character").font(t.console(11, .medium)).tracking(1.5).foregroundStyle(t.fgFaint)
+        } footer: {
+            Text("Travels with the voice pack. Apps use it to bring the voice to life as a host.")
+                .font(t.sans(12)).foregroundStyle(t.fgFaint)
+        }
+        .listRowBackground(t.panel)
+    }
+
     private func save() {
         focused = nil
         do {
@@ -598,6 +654,7 @@ public struct VoiceDetailView<Extra: View>: View {
                 $0.name = name.trimmingCharacters(in: .whitespaces)
                 let n = notes.trimmingCharacters(in: .whitespacesAndNewlines)
                 $0.notes = n.isEmpty ? nil : n
+                if features.contains(.persona) { $0.persona = editedPersona(keeping: $0.persona) }
             }
             // A rebuild writes the transcript from the takes' words, so a
             // field edit is only applied when no rebuild is about to run.
@@ -633,5 +690,15 @@ public struct VoiceDetailView<Extra: View>: View {
             Label("Share", systemImage: "square.and.arrow.up")
         }
         .tint(t.accent).foregroundStyle(t.accent)
+    }
+}
+
+
+extension Color {
+    /// "#RRGGBB" -> Color; nil for anything else.
+    init?(hexString: String) {
+        let h = hexString.hasPrefix("#") ? String(hexString.dropFirst()) : hexString
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
     }
 }

@@ -32,6 +32,9 @@ public struct VoiceLibraryFeatures: OptionSet, Sendable {
     public static let renditions = VoiceLibraryFeatures(rawValue: 1 << 9)
     /// Read-only: the pack's provenance.
     public static let provenance = VoiceLibraryFeatures(rawValue: 1 << 10)
+    /// The voice's character (`VoiceMeta.persona`): who it is, tagline, catchphrases, color. Apps
+    /// interpret it (radio: the host). Opt-in, not in `.all`, so a library without hosts never shows it.
+    public static let persona = VoiceLibraryFeatures(rawValue: 1 << 11)
 
     /// What the Studio app's store backs: everything.
     public static let all: VoiceLibraryFeatures = [
