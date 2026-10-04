@@ -6,6 +6,8 @@ struct HostConfig {
     let codecBos, codecEos, codecPad, codecThink, codecNothink, codecThinkBos, codecThinkEos: Int
     let vocab: Int
     let groups: Int
+    /// `codec_language_id`: lower-case language name -> codec token id ("spanish" -> 2054).
+    let codecLanguageIDs: [String: Int]
     init(path: String) throws {
         guard let j = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any] else {
             throw QwenANEError.invalid("bad host config")
@@ -16,6 +18,9 @@ struct HostConfig {
         codecThink = i("codec_think"); codecNothink = i("codec_nothink")
         codecThinkBos = i("codec_think_bos"); codecThinkEos = i("codec_think_eos")
         vocab = i("vocab"); groups = i("num_code_groups")
+        var langs: [String: Int] = [:]
+        for (k, v) in (j["codec_language_id"] as? [String: Any]) ?? [:] { if let id = v as? Int { langs[k.lowercased()] = id } }
+        codecLanguageIDs = langs
     }
 }
 
@@ -100,6 +105,24 @@ struct Prompt {
 /// reference's codec rows (the bulk of the CPU work and of the prompt). `buildICLPrompt` stitches a line's
 /// own rows between them. Also holds the talker's KV for the leading rows (`kv`), which the talker fills on
 /// the voice's first line and every later line restores instead of prefilling again.
+/// Language of a render, as the Qwen3-TTS codec names it (`config.json` `codec_language_id`).
+public enum QwenLanguage {
+    /// BCP-47 primary subtag -> the codec's language name.
+    static let names: [String: String] = [
+        "en": "english", "es": "spanish", "zh": "chinese", "de": "german", "it": "italian",
+        "pt": "portuguese", "ja": "japanese", "ko": "korean", "fr": "french", "ru": "russian",
+    ]
+
+    /// The codec language name for a BCP-47 tag ("es", "es-MX", "en_US") or a codec name ("spanish");
+    /// nil for nil, "auto", blank or a language Qwen has no token for. Nil means auto-detect.
+    public static func codecName(for language: String?) -> String? {
+        guard let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty, raw != "auto" else { return nil }
+        let primary = raw.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? raw
+        if let n = names[primary] { return n }
+        return names.values.contains(raw) ? raw : nil
+    }
+}
+
 final class VoicePrompt {
     static let H = 1024
     let roleIds: [Int]
@@ -116,7 +139,11 @@ final class VoicePrompt {
     /// Talker KV for the leading `kv.rows` rows (a multiple of the prefill chunk). Touched under the engine's lock.
     var kv: KVPrefix? = nil
 
-    init(host: HostTables, voice: QwenVoiceFiles) {
+    /// `language` nil (or "auto", or one Qwen has no token for) is language auto: think rows
+    /// [nothink, think_bos, think_eos], exactly as before the parameter existed. A known language uses
+    /// [think, think_bos, <language id>, think_eos], like qonnx.build_icl_prompt. It changes the shared
+    /// prefix rows, so a voice's prompt (and its KV) is cached per language.
+    init(host: HostTables, voice: QwenVoiceFiles, language: String? = nil) {
         let c = host.cfg
         let H = Self.H
         let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
@@ -151,10 +178,13 @@ final class VoicePrompt {
         self.codecIcl = codecIcl
         // prefix: think rows, speaker, pad, bos
         var prefix: [Float] = []
-        for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += host.codecRow(id) }
+        let langID = QwenLanguage.codecName(for: language).flatMap { c.codecLanguageIDs[$0] }
+        let think = langID.map { [c.codecThink, c.codecThinkBos, $0, c.codecThinkEos] }
+            ?? [c.codecNothink, c.codecThinkBos, c.codecThinkEos]
+        for id in think { prefix += host.codecRow(id) }
         prefix += voice.spkEmbedding
         for id in [c.codecPad, c.codecBos] { prefix += host.codecRow(id) }
-        let pRows = prefix.count / H                       // 6
+        let pRows = prefix.count / H                       // 6 (7 with a language)
         role = host.textProj(roleIds)                      // 3 x H
         let padCount = pRows - 2
         var comb = [Float](repeating: 0, count: (padCount + 1) * H)
@@ -167,10 +197,10 @@ final class VoicePrompt {
 
 /// Port of qonnx.build_icl_prompt (language auto). `voicePrompt` supplies the voice's cached rows (built here,
 /// not kept, when nil). The embeddings equal the uncached construction bit for bit.
-func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, voicePrompt: VoicePrompt? = nil,
-                    keepVoicePrompt: Bool = false) -> Prompt {
+func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, language: String? = nil,
+                    voicePrompt: VoicePrompt? = nil, keepVoicePrompt: Bool = false) -> Prompt {
     let H = 1024
-    let vp = voicePrompt ?? VoicePrompt(host: host, voice: voice)
+    let vp = voicePrompt ?? VoicePrompt(host: host, voice: voice, language: language)
     let tgtIds = host.tok.encode("<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n")
     let ts = min(3, tgtIds.count), te = max(ts, tgtIds.count - 5)
     let textIds = Array(tgtIds[ts..<te])

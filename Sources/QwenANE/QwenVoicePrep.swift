@@ -4,7 +4,7 @@ import Foundation
 import GVoiceKit
 
 public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
-    /// The trimmed reference is longer than the speech encoder's fixed 20 s input; the caller picks a window.
+    /// The trimmed reference is longer than the speech encoder's fixed input (40 s; 20 s on older model sets); the caller picks a window.
     case referenceTooLong(seconds: Double)
     case referenceTooShort(seconds: Double)
     /// Not mono 24 kHz PCM16/float32 WAV (run it through ReferenceStandard / the cleanup pipeline first).
@@ -14,7 +14,7 @@ public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, the encoder takes at most 20 s"
+        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, the encoder takes at most 40 s"
         case .referenceTooShort(let s): return "QwenVoicePrep: reference is \(s) s, too short to clone from"
         case .unsupportedWAV(let m): return "QwenVoicePrep: \(m)"
         case .modelMissing(let m): return "QwenVoicePrep: missing model \(m)"
@@ -34,9 +34,11 @@ public enum QwenVoicePrep {
     /// Bump when the recipe changes (mel, tail rule, encoders): cached voices are recomputed.
     public static let prepVersion = 1
     public static let melKind = "upstream"
-    public static let maxSamples = 480_000          // the speech encoder's fixed 20 s input
+    /// The shipped speech encoder's fixed input (40 s since 2026-10-04; it was 20 s). The real limit is
+    /// read from the model file at prep time, so an older 20 s model set keeps working.
+    public static let maxSamples = 960_000
     public static let minSamples = 12_000           // 0.5 s
-    static let speakerFrames = 2048
+    static let speakerFrames = 4096
     static let sampleRate = 24_000
 
     // MARK: cache API
@@ -62,12 +64,16 @@ public enum QwenVoicePrep {
         let all = try samples(of: referenceWAV)
         let samples = Array(all[0..<ReferenceTail.end(of: all, sampleRate: sampleRate)])
         let seconds = Double(samples.count) / Double(sampleRate)
+        // Cheap check first (no model load): nothing past the largest encoder ever shipped.
         guard samples.count <= maxSamples else { throw QwenVoicePrepError.referenceTooLong(seconds: seconds) }
         guard samples.count >= minSamples else { throw QwenVoicePrepError.referenceTooShort(seconds: seconds) }
 
         let coreml = modelsDirectory.appendingPathComponent("coreml")
         let speech = try load(coreml.appendingPathComponent("QwenSpeechEncoder.mlmodelc"))
         let speaker = try load(coreml.appendingPathComponent("QwenSpeakerEncoder.mlmodelc"))
+        guard samples.count <= inputLength(speech, "wav", axis: 2, default: maxSamples) else {
+            throw QwenVoicePrepError.referenceTooLong(seconds: seconds)
+        }
         return QwenVoiceFiles(refText: text,
                               refCodes: try codes(speech, samples),
                               spkEmbedding: try embedding(speaker, samples))
@@ -83,15 +89,22 @@ public enum QwenVoicePrep {
         catch { throw QwenVoicePrepError.modelFailed("loading \(url.lastPathComponent): \(error)") }
     }
 
+    /// Length of a fixed-shape model input along `axis` (the encoders are built for one padded size).
+    static func inputLength(_ model: MLModel, _ name: String, axis: Int, default d: Int) -> Int {
+        let shape = model.modelDescription.inputDescriptionsByName[name]?.multiArrayConstraint?.shape ?? []
+        return axis < shape.count ? shape[axis].intValue : d
+    }
+
     /// T = ceil(ceil(ceil(ceil(ceil(n/4)/5)/6)/8)/2)
     static func codeFrames(samples n: Int) -> Int {
         [4, 5, 6, 8, 2].reduce(n) { ($0 + $1 - 1) / $1 }
     }
 
     private static func codes(_ model: MLModel, _ x: [Float]) throws -> [[Int]] {
-        let wav = try MLMultiArray(shape: [1, 1, NSNumber(value: maxSamples)], dataType: .float32)
-        let p = wav.dataPointer.bindMemory(to: Float.self, capacity: maxSamples)
-        p.initialize(repeating: 0, count: maxSamples)
+        let N = inputLength(model, "wav", axis: 2, default: maxSamples)
+        let wav = try MLMultiArray(shape: [1, 1, NSNumber(value: N)], dataType: .float32)
+        let p = wav.dataPointer.bindMemory(to: Float.self, capacity: N)
+        p.initialize(repeating: 0, count: N)
         x.withUnsafeBufferPointer { p.update(from: $0.baseAddress!, count: x.count) }
         let n = try MLMultiArray(shape: [1], dataType: .int32)
         n[0] = NSNumber(value: x.count)
@@ -110,10 +123,11 @@ public enum QwenVoicePrep {
 
     private static func embedding(_ model: MLModel, _ x: [Float]) throws -> [Float] {
         let (mel, frames) = QwenMel.logMel(x)
-        guard frames <= speakerFrames else { throw QwenVoicePrepError.referenceTooLong(seconds: Double(x.count) / Double(sampleRate)) }
-        let arr = try MLMultiArray(shape: [1, NSNumber(value: speakerFrames), NSNumber(value: QwenMel.nMels)], dataType: .float32)
-        let p = arr.dataPointer.bindMemory(to: Float.self, capacity: speakerFrames * QwenMel.nMels)
-        p.initialize(repeating: 0, count: speakerFrames * QwenMel.nMels)
+        let F = inputLength(model, "mel", axis: 1, default: speakerFrames)
+        guard frames <= F else { throw QwenVoicePrepError.referenceTooLong(seconds: Double(x.count) / Double(sampleRate)) }
+        let arr = try MLMultiArray(shape: [1, NSNumber(value: F), NSNumber(value: QwenMel.nMels)], dataType: .float32)
+        let p = arr.dataPointer.bindMemory(to: Float.self, capacity: F * QwenMel.nMels)
+        p.initialize(repeating: 0, count: F * QwenMel.nMels)
         mel.withUnsafeBufferPointer { p.update(from: $0.baseAddress!, count: mel.count) }
         let n = try MLMultiArray(shape: [1], dataType: .int32)
         n[0] = NSNumber(value: frames)

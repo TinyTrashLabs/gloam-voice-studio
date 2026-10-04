@@ -52,7 +52,7 @@ Preparing a voice on the device (`QwenVoicePrep`) needs two more compiled models
 run on the CPU only (`.cpuOnly`; never CPU_AND_NE, it hung the ANE compiler):
 
 ```
-<models>/coreml/  QwenSpeechEncoder.mlmodelc    (speech tokenizer, fixed 20 s input + valid length)
+<models>/coreml/  QwenSpeechEncoder.mlmodelc    (speech tokenizer, fixed 40 s input + valid length; 20 s on older sets)
                   QwenSpeakerEncoder.mlmodelc   (x-vector ECAPA-TDNN, mel input + valid length)
 ```
 
@@ -70,7 +70,7 @@ let voice = try QwenVoicePrep.prepared(referenceWAV: wav, transcript: text,
                                        cacheDirectory: voiceDir, modelsDirectory: modelsURL)
 ```
 
-It trims a cut-off tail (`ReferenceTail`), throws `referenceTooLong(seconds:)` past 20 s (the caller
+It trims a cut-off tail (`ReferenceTail`), throws `referenceTooLong(seconds:)` past the encoder's input (40 s) (the caller
 supplies a window), and caches `voice.json` / `ref_codes.npy` / `spk_embed.npy` keyed by source
 sha256 + transcript + prep version. The speaker mel is the upstream one (magnitude, Slaney, reflect
 pad 384), not the mlx-audio-swift fork's. Parity tests: `QWEN_ANE_MODELS=... swift test --filter QwenVoicePrepTests`.

@@ -117,9 +117,9 @@ public final class QwenANEEngine: @unchecked Sendable {
     /// smaller of the 6-frames-per-token cap and the window left after the prompt (reference + text).
     /// A line that hits the window ends with `.contextFull`; hosts split text so this stays above the
     /// frames the line needs. Throws for a voice that fails validation.
-    public func maxFrames(text: String, voice: QwenVoiceFiles) throws -> Int {
+    public func maxFrames(text: String, voice: QwenVoiceFiles, language: String? = nil) throws -> Int {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
-        let p = buildICLPrompt(host: host, voice: voice, text: text)
+        let p = buildICLPrompt(host: host, voice: voice, text: text, language: language)
         return min(effectiveMaxTokens(p.nTextTokens), ANETalkerEngine.windowFrames(promptRows: p.T))
     }
 
@@ -134,22 +134,25 @@ public final class QwenANEEngine: @unchecked Sendable {
     /// Voices whose prompt rows and talker KV prefix are kept (least recently used out).
     public static let maxCachedVoices = 4
     private struct VoiceKey: Hashable {
-        let refText: String, refCodes: [[Int]], spk: [Float]
-        init(_ v: QwenVoiceFiles) { refText = v.refText; refCodes = v.refCodes; spk = v.spkEmbedding }
+        let refText: String, refCodes: [[Int]], spk: [Float], language: String?
+        init(_ v: QwenVoiceFiles, language: String?) {
+            refText = v.refText; refCodes = v.refCodes; spk = v.spkEmbedding
+            self.language = QwenLanguage.codecName(for: language)
+        }
     }
     private var voicePrompts: [VoiceKey: VoicePrompt] = [:]
     private var voicePromptOrder: [VoiceKey] = []      // least recently used first
     /// Number of voices with cached prompt rows (for tests and diagnostics).
     public var cachedVoiceCount: Int { lock.lock(); defer { lock.unlock() }; return voicePrompts.count }
     /// Caller holds `lock`.
-    private func voicePrompt(for voice: QwenVoiceFiles) -> VoicePrompt {
-        let key = VoiceKey(voice)
+    private func voicePrompt(for voice: QwenVoiceFiles, language: String? = nil) -> VoicePrompt {
+        let key = VoiceKey(voice, language: language)
         if let hit = voicePrompts[key] {
             if let i = voicePromptOrder.firstIndex(of: key) { voicePromptOrder.remove(at: i) }
             voicePromptOrder.append(key)
             return hit
         }
-        let vp = VoicePrompt(host: host, voice: voice)
+        let vp = VoicePrompt(host: host, voice: voice, language: language)
         voicePrompts[key] = vp; voicePromptOrder.append(key)
         while voicePrompts.count > Self.maxCachedVoices, let old = voicePromptOrder.first {
             voicePromptOrder.removeFirst(); voicePrompts[old] = nil
@@ -192,6 +195,8 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///     a render reproducible and comparable to the Python reference. `nil` picks a random one.
     ///   - maxFrames: optional cap on generated frames (80 ms each), below the built-in cap.
     ///   - chunkFrames: this line's vocoder chunk schedule (see `Options.chunkFrames`); nil uses the option.
+    ///   - language: BCP-47 tag ("es", "es-MX", "en-US") that sets Qwen's codec language token. Nil (the
+    ///     default) or "auto" is language auto-detect, bit-identical to a render without the parameter.
     ///   - cancelled: polled once per frame; return true to stop. The render then returns no samples.
     ///   - pace: called between stages and after every frame, on the rendering thread. A host app
     ///     can sleep in it to hold a duty cycle (thermal / battery); a sleep adds directly to wall time.
@@ -203,7 +208,7 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///     a contiguous slice, bit for bit, of the un-capped line; `QwenRender.samples` is unchanged by
     ///     this hook (it still gets `Options.capPauses`). Nothing is delivered for a cancelled render.
     public func render(text: String, voice: QwenVoiceFiles, seed: UInt64? = nil, maxFrames: Int? = nil,
-                       chunkFrames: [Int]? = nil,
+                       chunkFrames: [Int]? = nil, language: String? = nil,
                        cancelled: () -> Bool = { false }, pace: () -> Void = {},
                        onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
@@ -214,8 +219,8 @@ public final class QwenANEEngine: @unchecked Sendable {
         var sampler = Sampler(vocab: host.cfg.vocab, eos: host.cfg.codecEos, seed: seed ?? UInt64.random(in: 0...UInt64.max))
         let t0 = Date()
         talker.usePrefixCache = options.prefixCache
-        let prompt = buildICLPrompt(host: host, voice: voice, text: text,
-                                    voicePrompt: options.prefixCache ? voicePrompt(for: voice) : nil,
+        let prompt = buildICLPrompt(host: host, voice: voice, text: text, language: language,
+                                    voicePrompt: options.prefixCache ? voicePrompt(for: voice, language: language) : nil,
                                     keepVoicePrompt: options.prefixCache)
         let promptS = Date().timeIntervalSince(t0)
         pace()
