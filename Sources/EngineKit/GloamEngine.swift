@@ -84,12 +84,15 @@ public actor GloamEngine {
 
     /// Evicts the resident model and releases accelerator memory.
     /// Takes effect immediately; callers must not unload while a generation is in flight.
-    public func unload() {
-        guard let resident else { return }
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func unload() -> BackendID? {
+        guard let resident else { return nil }
         engineLog.log("unload TTS \(resident.backend.rawValue, privacy: .public)")
         measured[resident.backend.rawValue] = nil
         self.resident = nil
         provider.didEvictModel()
+        return resident.backend
     }
 
     /// Evicts the resident TTS model as soon as no TTS work is executing —
@@ -97,11 +100,13 @@ public actor GloamEngine {
     /// EVERYTHING, including an active chat stream whose task parks on `tail`
     /// for the whole LLM reply; TTS eviction must not wait on that (it is
     /// exactly what a cross-engine residency hand-off does mid-stream).
-    public func evictTTSWhenIdle() async {
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func evictTTSWhenIdle() async -> BackendID? {
         while ttsBusy {
             await withCheckedContinuation { ttsIdleWaiters.append($0) }
         }
-        unload()
+        return unload()
     }
 
     /// True while a TTS load or generation is executing (`performSynthesis`,
@@ -119,12 +124,36 @@ public actor GloamEngine {
     public func loadedLLM() -> LLMBackendID? { residentLLM?.backend }
 
     /// Evicts the resident language model and releases accelerator memory.
-    public func unloadLLM() {
-        guard let residentLLM else { return }
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func unloadLLM() -> LLMBackendID? {
+        guard let residentLLM else { return nil }
         engineLog.log("unload LLM \(residentLLM.backend.rawValue, privacy: .public)")
         measured[residentLLM.backend.rawValue] = nil
         self.residentLLM = nil
         languageProvider?.didEvictModel()
+        return residentLLM.backend
+    }
+
+    /// Evicts the resident language model once every piece of model work
+    /// queued before this call has finished — an in-flight chat reply
+    /// (single-shot or streamed) completes before its model goes away.
+    ///
+    /// Chained onto the task tail rather than `quiesce()` + `unloadLLM()`: a
+    /// chat stream holds `tail` for its whole reply, so waiting on the tail is
+    /// the wait that covers it, and enqueueing the unload AS a tail entry
+    /// closes the gap where a chat queued between "quiesce returned" and
+    /// "unload ran" could grab the model and have it pulled mid-reply. Work
+    /// queued after this call runs after the unload and reloads on demand.
+    @discardableResult
+    public func unloadLLMWhenIdle() async -> LLMBackendID? {
+        let previous = tail
+        let work = Task<LLMBackendID?, Never>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            return await self.unloadLLM()
+        }
+        tail = Task { _ = await work.value }
+        return await work.value
     }
 
     public func chat(backend: LLMBackendID, request: ChatRequest) async throws -> ChatResult {

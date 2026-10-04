@@ -134,6 +134,25 @@ struct APIVoice: Codable, ResponseEncodable {
 struct VoicesResponse: Codable, ResponseEncodable { let voices: [APIVoice] }
 struct OkResponse: Codable, ResponseEncodable { let ok: Bool }
 
+/// Which resident models `POST /v1/models/unload` (and the `unload_models` MCP
+/// tool) evicts. `all` when the caller doesn't say.
+enum UnloadTarget: String, Sendable {
+    case tts, llm, all
+
+    static let invalidDetail = "target must be one of: tts, llm, all"
+}
+
+struct UnloadRequest: Codable {
+    let target: String?
+}
+
+/// Backend ids actually evicted (empty when nothing of that kind was
+/// resident), plus the same `memGb` figure `/health` reports.
+struct UnloadResponse: Codable, ResponseEncodable {
+    let unloaded: [String]
+    let memGb: Double
+}
+
 struct VoiceCreateRequest: Codable {
     let name: String
     let refAudio: String          // base64 wav

@@ -61,6 +61,29 @@ public enum APIRouter {
                 loadedBackends: loaded.map { [$0.rawValue] } ?? [])
         }
 
+        // Free memory on demand: evict the resident TTS and/or LLM model without
+        // cutting off work already running. No request gate — eviction waits on
+        // the engine itself (see `unloadModels`), and holding a gate slot would
+        // make an unload 503 behind a queue of renders it has no need to wait for.
+        router.post("v1/models/unload") { request, _ -> UnloadResponse in
+            // Optional body: empty (or whitespace) means target=all.
+            var buffer = try await request.body.collect(upTo: 64 * 1024)
+            let data = buffer.readData(length: buffer.readableBytes) ?? Data()
+            var raw: String? = nil
+            if !data.allSatisfy({ [0x20, 0x09, 0x0A, 0x0D].contains($0) }) {
+                guard let body = try? JSONDecoder().decode(UnloadRequest.self, from: data) else {
+                    throw APIError(status: .badRequest,
+                                   detail: "invalid JSON body — " + UnloadTarget.invalidDetail)
+                }
+                raw = body.target
+            }
+            // Absent/null target → all; a present but unknown one → 400.
+            guard let target = raw.map({ UnloadTarget(rawValue: $0) }) ?? .all else {
+                throw APIError(status: .badRequest, detail: UnloadTarget.invalidDetail)
+            }
+            return await unloadModels(target, deps: deps)
+        }
+
         router.get("voices") { _, _ in
             VoicesResponse(voices: deps.voices.list().map {
                 APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug),
@@ -667,6 +690,28 @@ public enum APIRouter {
         }
 
         return router
+    }
+
+    /// Evicts the resident models `target` names from the server's engine and
+    /// reports what actually went, plus `/health`'s memory figure. Shared by
+    /// `POST /v1/models/unload` and the `unload_models` MCP tool.
+    ///
+    /// - tts: `evictTTSWhenIdle` — an in-flight speech/dialogue render finishes
+    ///   first; an active chat stream is NOT waited on (TTS eviction never is).
+    /// - llm: `unloadLLMWhenIdle` — chained onto the engine's task tail, which
+    ///   a chat stream holds for its whole reply, so an in-flight
+    ///   /v1/chat/completions (streamed or not) completes before the model goes.
+    /// - all: LLM first, then TTS, so a live stream's interleaved speech isn't
+    ///   evicted mid-reply only to reload for the next sentence.
+    static func unloadModels(_ target: UnloadTarget, deps: APIDependencies) async -> UnloadResponse {
+        var unloaded: [String] = []
+        if target != .tts, let llm = await deps.engine.unloadLLMWhenIdle() {
+            unloaded.append(llm.rawValue)
+        }
+        if target != .llm, let tts = await deps.engine.evictTTSWhenIdle() {
+            unloaded.append(tts.rawValue)
+        }
+        return UnloadResponse(unloaded: unloaded, memGb: memGb())
     }
 
     /// Wrap already-serialized JSON bytes in a 200 response — the Lab routes hand

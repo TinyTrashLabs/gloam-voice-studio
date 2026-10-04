@@ -98,6 +98,20 @@ enum MCPRoute {
                 ],
             ],
             [
+                "name": "unload_models",
+                "description": "Free memory by evicting the resident speech (tts) "
+                    + "and/or language (llm) model. Waits for an in-flight render "
+                    + "or chat reply to finish first; the next request reloads on "
+                    + "demand. Returns the evicted backend ids and memGb.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "target": ["type": "string", "enum": ["tts", "llm", "all"],
+                                   "description": "Which model to unload (default all)"],
+                    ],
+                ],
+            ],
+            [
                 "name": "listen",
                 "description": "Open the microphone, listen for one spoken "
                     + "utterance, and return the transcript (native on-device "
@@ -330,6 +344,19 @@ enum MCPRoute {
             } catch {
                 return toolError(id: id, "transcription failed: \(error)")
             }
+        case "unload_models":
+            let raw = arguments["target"]
+            let target: UnloadTarget
+            if raw == nil || raw is NSNull {
+                target = .all
+            } else if let name = raw as? String, let parsed = UnloadTarget(rawValue: name) {
+                target = parsed
+            } else {
+                return toolError(id: id, UnloadTarget.invalidDetail)
+            }
+            let out = await APIRouter.unloadModels(target, deps: deps)
+            let json = (try? JSONEncoder().encode(out)) ?? Data("{}".utf8)
+            return toolResult(id: id, content: [jsonText(json)])
         case "listen":
             let maxSeconds = (arguments["maxSeconds"] as? NSNumber)?.doubleValue ?? 30
             let silenceSeconds = (arguments["silenceSeconds"] as? NSNumber)?.doubleValue ?? 1.2

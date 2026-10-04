@@ -187,6 +187,32 @@ usage.
 | `GET /voices/:slug/export` | `.gvoice` pack (zip) |
 | `POST /voices/import` | `{"data": <base64 .gvoice>}` |
 
+## Models
+
+### `POST /v1/models/unload`
+
+Frees memory by evicting resident models. The body is optional:
+
+```bash
+curl -s http://127.0.0.1:8790/v1/models/unload \
+  -H 'content-type: application/json' \
+  -d '{"target": "tts"}'
+```
+
+| `target` | Evicts | Waits for |
+| --- | --- | --- |
+| `tts` | the speech model | an in-flight speech/dialogue render (not an active chat stream) |
+| `llm` | the language model | every model request already queued, so an in-flight `/v1/chat/completions` reply (streamed or not) finishes first |
+| `all` (default) | both, LLM first | both of the above |
+
+Response: `{"unloaded": ["qwen3-1.7b-text", "qwen3-design"], "memGb": 3.12}`.
+`unloaded` lists the backend ids actually evicted (empty when nothing of that
+kind was resident); `memGb` is the same figure `/health` reports — the
+process's *peak* resident memory, so it does not fall after an unload. An unknown
+`target` is `400 {"detail": "target must be one of: tts, llm, all"}`. The next
+request that needs a model reloads it on demand. Does not take a slot in the
+generation queue, so it never gets `503 server busy`.
+
 ## Health
 
 `GET /health` → engine/backend status, resident models, app memory.

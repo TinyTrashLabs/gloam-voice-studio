@@ -55,6 +55,17 @@ voice:
 Preset-voicepack backends (`kokoro`, `supertonic`, `qwen3-custom`) are
 unaffected by this gate.
 
+### `unload_models`
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `target` | string | `tts` \| `llm` \| `all` (default `all`) |
+
+Evicts resident models to free memory — same semantics as
+`POST /v1/models/unload` (see [api.md](api.md)): an in-flight render or chat
+reply finishes first. Returns JSON text `{"unloaded": [<backend ids>],
+"memGb": <number>}`; an unknown `target` is a tool error.
+
 ## Notes & limits
 
 - Loopback by default, no auth — same trust model as the rest of the local
