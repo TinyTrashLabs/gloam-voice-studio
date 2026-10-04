@@ -111,6 +111,10 @@ for part in parts { let r = try session.render(part) /* r.samples */ }
   silence inside the line), from the same stream, at most `maxRedraws` (2) times; a clean take is never redrawn.
   Not with `onAudio` (streamed chunks cannot be recalled). A derailed take is never carried into the next part.
 
+Studio's `qwen3-0.6b-ane` backend (`QwenANESpeechModel`) does this for you: a line that fits one render is one
+render, as before; a longer one is split at sentences (~160 characters a part) and rendered through one session
+with a random seed (or the request's), so Regenerate still gives a new take.
+
 The reference itself matters most: a reference whose audio says words its transcript does not (or the reverse)
 makes Qwen continue the wrong thing. `QwenVoicePrep.prepareEngineFolder` checks a stored section's last sentence
 against a transcription of the cut (`ReferenceSection.sentenceEndCandidates`, `wordDistance`) when a recogniser is

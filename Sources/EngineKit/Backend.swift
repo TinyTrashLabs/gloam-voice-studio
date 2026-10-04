@@ -540,8 +540,9 @@ extension BackendID {
              .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro, .supertonic,
              .luxTTS, .pocketTTS, .dia2: nil
         // A real limit, but not a fixed one: the 1024-row talker window holds
-        // the reference codes too, so the room left depends on the voice. A
-        // line past it ends `.contextFull` and is logged (QwenANESpeechModel).
+        // the reference codes too, so the room left depends on the voice.
+        // QwenANESpeechModel splits a line past it itself and renders the parts
+        // through one QwenTalkSession, so each part continues the one before.
         case .qwen06BANE: nil
         }
     }
