@@ -18,8 +18,12 @@ public struct Persona: Codable, Equatable, Sendable {
     public var catchphrases: [String]?
     /// Signature color as "#RRGGBB".
     public var color: String?
+    /// BCP-47 language this character speaks ("es"); nil = automatic (the listener's language when the
+    /// voice speaks it, else the pack's default language).
+    public var language: String?
     public init(systemPrompt: String, greeting: String? = nil, tagline: String? = nil,
-                catchphrases: [String]? = nil, color: String? = nil) {
+                catchphrases: [String]? = nil, color: String? = nil, language: String? = nil) {
+        self.language = language
         self.systemPrompt = systemPrompt
         self.greeting = greeting
         self.tagline = tagline

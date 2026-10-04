@@ -83,6 +83,9 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
 
     /// Edit the stored metadata (name, notes) and republish.
     func update(_ slug: String, _ mutate: (inout VoiceMeta) -> Void) throws
+    /// Languages the voice speaks (BCP-47), its default first. The Character section offers a
+    /// language picker when there is more than one.
+    func languages(of slug: String) -> [String]
     /// The words the reference says, corrected in the editor.
     func updateTranscript(of voice: Voice, _ text: String) throws
 
@@ -147,6 +150,10 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
     /// Builds the voice's `.gvoice` off the main actor: the returned closure
     /// runs on a background task. Nil when the voice cannot be shared.
     func packExport(for voice: Voice, includeSource: Bool) -> (@Sendable () throws -> Data)?
+}
+
+public extension VoiceLibraryStore {
+    func languages(of slug: String) -> [String] { ["en"] }
 }
 
 extension VoiceLibraryStore {

@@ -26,6 +26,7 @@ public struct VoiceDetailView<Extra: View>: View {
     @State private var tagline = ""
     @State private var catchphrases = ""       // one per line
     @State private var color = ""              // "#RRGGBB" or ""
+    @State private var language = ""           // BCP-47 or "" (automatic)
     /// The words the reference says -- editable, because a take that was
     /// not the script (Ryan, 2026-09-09) must be repairable in place: both
     /// engines condition on this text and disagree with the audio otherwise.
@@ -102,6 +103,7 @@ public struct VoiceDetailView<Extra: View>: View {
         return name != voice.name || notes != (voice.meta.notes ?? "")
             || character != (p?.systemPrompt ?? "") || tagline != (p?.tagline ?? "")
             || catchphrases != (p?.catchphrases ?? []).joined(separator: "\n") || color != (p?.color ?? "")
+            || language != (p?.language ?? "")
             || transcript.trimmingCharacters(in: .whitespacesAndNewlines) != storedTranscript
             || takes.state.stale
     }
@@ -518,6 +520,7 @@ public struct VoiceDetailView<Extra: View>: View {
                 let p = voice.meta.persona
                 character = p?.systemPrompt ?? ""; tagline = p?.tagline ?? ""
                 catchphrases = (p?.catchphrases ?? []).joined(separator: "\n"); color = p?.color ?? ""
+                language = p?.language ?? ""
             }
             transcript = storedTranscript
             measureReference()
@@ -610,9 +613,14 @@ public struct VoiceDetailView<Extra: View>: View {
         let tag = tagline.trimmingCharacters(in: .whitespacesAndNewlines)
         let lines = catchphrases.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        if prompt.isEmpty && tag.isEmpty && lines.isEmpty && color.isEmpty { return nil }
+        if prompt.isEmpty && tag.isEmpty && lines.isEmpty && color.isEmpty && language.isEmpty { return nil }
         return Persona(systemPrompt: prompt, greeting: old?.greeting, tagline: tag.isEmpty ? nil : tag,
-                       catchphrases: lines.isEmpty ? nil : lines, color: color.isEmpty ? nil : color)
+                       catchphrases: lines.isEmpty ? nil : lines, color: color.isEmpty ? nil : color,
+                       language: language.isEmpty ? nil : language)
+    }
+
+    private static func languageName(_ code: String) -> String {
+        Locale(identifier: code).localizedString(forLanguageCode: code)?.capitalized ?? code
     }
 
     private static var swatches: [String] { ["#E8A33D", "#D9534F", "#C77D3A", "#5BA4CF", "#6CC690", "#9B7FE0", "#E07FB5", "#8A8F98"] }
@@ -638,6 +646,14 @@ public struct VoiceDetailView<Extra: View>: View {
                 }
             }
             .padding(.vertical, 4)
+            let langs = store.languages(of: slug)
+            if langs.count > 1 {
+                Picker("Language", selection: $language) {
+                    Text("Automatic").tag("")
+                    ForEach(langs, id: \.self) { Text(Self.languageName($0)).tag($0) }
+                }
+                .font(t.sans(15)).tint(t.accent)
+            }
         } header: {
             Text("Character").font(t.console(11, .medium)).tracking(1.5).foregroundStyle(t.fgFaint)
         } footer: {
