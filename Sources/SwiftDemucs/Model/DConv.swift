@@ -14,7 +14,7 @@ import MLXNN
 ///
 /// Uses named keys instead of numeric indices to avoid conflict with
 /// MLX-Swift's NestedItem.unflattened() which treats all-numeric keys
-/// as array indices. convert_weights.py remaps the PyTorch indices
+/// as array indices. scripts/convert_demucs_weights.py remaps the PyTorch indices
 /// (0, 1, 3, 4, 6) to these named keys.
 class DConvSubLayer: Module {
     @ModuleInfo(key: "conv1") var conv1: Conv1d
