@@ -4,7 +4,7 @@ import Foundation
 import GVoiceKit
 
 public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
-    /// The trimmed reference is longer than the speech encoder's fixed input (40 s; 20 s on older model sets); the caller picks a window.
+    /// The trimmed reference is longer than the speech encoder's fixed input (40 s; 20 s on older model sets). Internal signal, not a refusal: `QwenANESpeechModel.prepare` answers it by picking a window of the master.
     case referenceTooLong(seconds: Double)
     case referenceTooShort(seconds: Double)
     /// Not mono 24 kHz PCM16/float32 WAV (run it through ReferenceStandard / the cleanup pipeline first).
@@ -14,7 +14,7 @@ public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, the encoder takes at most 40 s"
+        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, longer than the encoder's input; a window of it is needed"
         case .referenceTooShort(let s): return "QwenVoicePrep: reference is \(s) s, too short to clone from"
         case .unsupportedWAV(let m): return "QwenVoicePrep: \(m)"
         case .modelMissing(let m): return "QwenVoicePrep: missing model \(m)"
@@ -77,6 +77,14 @@ public enum QwenVoicePrep {
         return QwenVoiceFiles(refText: text,
                               refCodes: try codes(speech, samples),
                               spkEmbedding: try embedding(speaker, samples))
+    }
+
+    /// The speech encoder's real input length in samples, read from the model file (40 s, or 20 s on an
+    /// older model set); `maxSamples` when the model can't be loaded (prep then reports that itself).
+    public static func encoderLimitSamples(modelsDirectory: URL) -> Int {
+        let url = modelsDirectory.appendingPathComponent("coreml").appendingPathComponent("QwenSpeechEncoder.mlmodelc")
+        guard let speech = try? load(url) else { return maxSamples }
+        return min(maxSamples, inputLength(speech, "wav", axis: 2, default: maxSamples))
     }
 
     // MARK: encoders

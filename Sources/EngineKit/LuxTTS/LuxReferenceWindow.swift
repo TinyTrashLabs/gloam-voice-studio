@@ -37,9 +37,10 @@
 // that sounds like the audio is harmless. What is NOT harmless is a transcript
 // that under-counts the audio — hence the words-per-second gate below.
 //
-// Best-effort by construction: with no on-device recognizer the window can't
-// be established, and the caller should refuse the reference rather than emit
-// the garbage this exists to prevent.
+// A reference is never refused for its length: `pick` always returns a
+// window. With no on-device recognizer (or an implausible transcription) the
+// transcript falls back to the matching share of the master's own, snapped to
+// sentence boundaries — see `approximateText`.
 
 import Foundation
 import Speech
@@ -56,6 +57,11 @@ public enum LuxReferenceWindow {
         /// Where the window sits in the master clip.
         public let startSeconds: Double
         public let sourceSeconds: Double
+        /// True when the transcript is a proportional slice of the master's own
+        /// (no on-device recognizer, or its words failed the density gate), so
+        /// it describes the window less exactly than a transcription would.
+        /// Such a window is used for the render but never stored as the voice's.
+        public var approximate = false
     }
 
     /// `engines/lux-tts/voice.json` — the metadata beside the materialized
@@ -206,6 +212,63 @@ public enum LuxReferenceWindow {
         return Window(
             samples: trimmed, text: text, seconds: windowSeconds,
             startSeconds: startSeconds, sourceSeconds: seconds)
+    }
+
+    /// The window for a master that may be any length: nil when it already fits
+    /// `maxSeconds`, otherwise the best section the engine can hold. Prefers the
+    /// on-device transcription of the cut (`fit`); when that is unavailable it
+    /// keeps the same audio cut and slices the master's transcript to match
+    /// (`approximateText`), so a long reference never turns into a refusal.
+    public static func pick(
+        samples: [Float], sampleRate: Int, refText: String,
+        maxSeconds: Double = LuxReferenceWindow.maxSeconds
+    ) async -> Window? {
+        let seconds = Double(samples.count) / Double(max(1, sampleRate))
+        guard seconds > maxSeconds, sampleRate > 0 else { return nil }
+        if let heard = await fit(
+            samples: samples, sampleRate: sampleRate, refText: refText, maxSeconds: maxSeconds)
+        {
+            return heard
+        }
+        let cut = window(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
+        let windowSeconds = Double(cut.samples.count) / Double(sampleRate)
+        let text = approximateText(
+            refText, windowStart: cut.start, windowCount: cut.samples.count,
+            totalCount: samples.count)
+        var w = Window(
+            samples: cut.samples, text: text, seconds: windowSeconds,
+            startSeconds: Double(cut.start) / Double(sampleRate), sourceSeconds: seconds)
+        w.approximate = true
+        return w
+    }
+
+    /// The share of `text` that sits under the audio window, by position in the
+    /// master, with each edge moved to the nearest sentence end when one is
+    /// close enough — so the slice starts and stops on whole sentences, the way
+    /// the audio cut starts and stops in pauses.
+    static func approximateText(
+        _ text: String, windowStart: Int, windowCount: Int, totalCount: Int
+    ) -> String {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !words.isEmpty, totalCount > 0 else { return text }
+        var from = Int((Double(windowStart) / Double(totalCount) * Double(words.count)).rounded())
+        var to = Int((Double(windowStart + windowCount) / Double(totalCount) * Double(words.count)).rounded())
+        from = max(0, min(words.count - 1, from))
+        to = max(from + 1, min(words.count, to))
+        // Index i is a sentence start when the word before it ends one.
+        func isStart(_ i: Int) -> Bool {
+            i == 0 || i == words.count || (words[i - 1].last.map { ".!?".contains($0) } ?? false)
+        }
+        let slack = max(2, (to - from) / 6)
+        func snap(_ i: Int) -> Int {
+            for d in 0 ... slack {
+                if i + d <= words.count, isStart(i + d) { return i + d }
+                if i - d >= 0, isStart(i - d) { return i - d }
+            }
+            return i
+        }
+        let a = snap(from), b = snap(to)
+        return (b > a ? words[a ..< b] : words[from ..< to]).joined(separator: " ")
     }
 
     /// The energy-based cut: start at the first speech (lead-in silence would

@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import EngineKit
 
@@ -115,17 +116,31 @@ final class QwenANEBackendTests: XCTestCase {
     }
 
     @available(macOS 15.0, iOS 18.0, *)
-    func testReferenceOverTwentySecondsWithoutAWindowIsRefusedNotGuessed() throws {
+    func testReferenceOverTheEncoderInputGetsAWindowInsteadOfARefusal() async throws {
         let dir = try tempDir()
         let ref = dir.appendingPathComponent("ref.wav")
-        try wav(seconds: 25).write(to: ref)
-        XCTAssertThrowsError(try QwenANESpeechModel.prepare(reference: ref, transcript: "some words",
-                                                            modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))) { error in
-            guard case EngineError.referenceTooLong(let b, let seconds, let max) = error else { return XCTFail("\(error)") }
-            XCTAssertEqual(b, .qwen06BANE)
-            XCTAssertEqual(seconds, 25, accuracy: 0.6)
-            XCTAssertEqual(max, 20)
+        try wav(seconds: 50).write(to: ref)
+        // A 50 s master with no stored window: a section of it is picked, and prep moves on to the encoders,
+        // which this empty set lacks. A refusal for length would be a different error. Off the main thread,
+        // as the render queue is: the recognizer reports back on the main queue, which prep blocks on.
+        do {
+            _ = try await Task.detached {
+                try QwenANESpeechModel.prepare(reference: ref, transcript: "some words of the master",
+                                               modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))
+            }.value
+            XCTFail("an empty model set cannot prepare a voice")
+        } catch EngineError.generationFailed(_, let message) {
+            XCTAssertTrue(message.contains("QwenSpeechEncoder"), message)
         }
+        // The window that went to the encoder: the voice's own (transcribed) or the cached slice.
+        let candidates = [dir.appendingPathComponent("engines/lux-tts/ref.wav")]
+            + ((try? FileManager.default.contentsOfDirectory(at: dir.appendingPathComponent("cache/windows"),
+                                                             includingPropertiesForKeys: nil)) ?? [])
+        let window = try XCTUnwrap(candidates.first { FileManager.default.fileExists(atPath: $0.path) })
+        let file = try AVAudioFile(forReading: window)
+        let seconds = Double(file.length) / file.processingFormat.sampleRate
+        XCTAssertLessThanOrEqual(seconds, 30.0)
+        XCTAssertGreaterThan(seconds, 15.0)
     }
 
     @available(macOS 15.0, iOS 18.0, *)

@@ -46,9 +46,8 @@ final class TakeCombinerTests: XCTestCase {
         XCTAssertNotNil(TakeRules.saveBlocker(verdicts: [], combinedSeconds: 0))
         XCTAssertNil(TakeRules.saveBlocker(verdicts: [.good, .warning("noisy")], combinedSeconds: 12))
         XCTAssertNotNil(TakeRules.saveBlocker(verdicts: [.good, .error("short")], combinedSeconds: 12))
-        XCTAssertNil(TakeRules.saveBlocker(verdicts: [.good], combinedSeconds: TakeRules.capSeconds))
-        XCTAssertNotNil(TakeRules.saveBlocker(verdicts: [.good], combinedSeconds: TakeRules.capSeconds + 0.5),
-                        "over the cap the engine would refuse the master")
+        XCTAssertNil(TakeRules.saveBlocker(verdicts: [.good], combinedSeconds: 290),
+                     "a long master is fine: each engine picks its own section")
     }
 
     func testCountLineSaysWhatSaveWillDo() {
@@ -58,9 +57,11 @@ final class TakeCombinerTests: XCTestCase {
         XCTAssertEqual(TakeRules.countLine(count: 2, combinedSeconds: 65, stale: true, blocker: "too long"), "2 takes · 1:05 · too long")
     }
 
-    func testLengthLineNamesTheCap() {
-        XCTAssertTrue(TakeRules.lengthLine(combinedSeconds: 12).contains("30s"))
-        XCTAssertTrue(TakeRules.lengthLine(combinedSeconds: 24).contains("window"))
-        XCTAssertTrue(TakeRules.lengthLine(combinedSeconds: 31).contains("over"))
+    func testLengthLineStatesTheLengthAndNoCap() {
+        XCTAssertEqual(TakeRules.lengthLine(combinedSeconds: 12), "12s of takes.")
+        for seconds in [24.0, 31.0, 200.0] {
+            let line = TakeRules.lengthLine(combinedSeconds: seconds).lowercased()
+            XCTAssertFalse(line.contains("cap") || line.contains("over") || line.contains("window"), line)
+        }
     }
 }

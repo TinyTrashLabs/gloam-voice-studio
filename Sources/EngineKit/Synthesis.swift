@@ -218,9 +218,6 @@ public enum EngineError: Error, Equatable, Sendable {
     case instructRequired(BackendID)
     case speakerRequired(BackendID)
     case languageProviderUnavailable
-    /// The voice's reference clip is longer than the backend can condition on
-    /// and could not be windowed down (see LuxReferenceWindow).
-    case referenceTooLong(backend: BackendID, seconds: Double, maxSeconds: Double)
     /// The backend's model files are not on this machine and cannot be downloaded in-app.
     case modelNotInstalled(backend: BackendID, detail: String)
 }
@@ -228,11 +225,6 @@ public enum EngineError: Error, Equatable, Sendable {
 extension EngineError: LocalizedError {
     public var errorDescription: String? {
         switch self {
-        case .referenceTooLong(let backend, let seconds, let maxSeconds):
-            return String(
-                format: "This voice's reference clip is %.0fs. %@ needs %.0fs or less — "
-                    + "re-record or re-import it shorter.",
-                seconds, backend.rawValue, maxSeconds)
         case .modelNotInstalled(let backend, let detail):
             return "\(backend.rawValue) is not installed: \(detail)"
         default:

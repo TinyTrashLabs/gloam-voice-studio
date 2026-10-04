@@ -23,7 +23,6 @@ public enum RecordingCheck {
 
     // Quality thresholds (dBFS RMS unless noted).
     public static let minSeconds = 3.0
-    public static let maxSeconds = 30.0          // LuxOnnx.maxReferenceSeconds
     /// The phone mic records in measurement mode (no AGC), so normal speech at
     /// arm's length lands near −36 dBFS RMS (David's iPhone 15 Pro take,
     /// 2026-09-10: −36.0 over a −66 floor). −25 was set from Mac captures and
@@ -53,9 +52,6 @@ public enum RecordingCheck {
         public var problem: String? {
             if seconds < RecordingCheck.minSeconds {
                 return "That was too short to learn from. Read the whole line, then tap to finish."
-            }
-            if seconds > RecordingCheck.maxSeconds {
-                return String(format: "That's %.0f seconds — keep it under %.0f.", seconds, RecordingCheck.maxSeconds)
             }
             if clippedFraction > RecordingCheck.maxClippedFraction {
                 return "That clipped — hold the phone a little further away and try again."

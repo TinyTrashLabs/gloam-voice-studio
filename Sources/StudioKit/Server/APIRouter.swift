@@ -914,14 +914,11 @@ private func dialoguePrefixes(_ voices: [String?],
 }
 
 /// How an `EngineError` from the speech route reaches the client: a missing
-/// model set is a 503 (the server cannot serve it right now), a voice whose
-/// reference cannot be used is a 400, everything else a 500 with its reason.
+/// model set is a 503 (the server cannot serve it right now), everything else a 500 with its reason.
 func speechAPIError(_ error: EngineError) -> APIError {
     switch error {
     case .modelNotInstalled:
         return APIError(status: .serviceUnavailable, detail: error.localizedDescription)
-    case .referenceTooLong:
-        return APIError(status: .badRequest, detail: error.localizedDescription)
     default:
         return APIError(status: .internalServerError, detail: "\(error)")
     }

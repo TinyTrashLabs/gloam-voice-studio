@@ -53,7 +53,6 @@ public enum PocketOnnx {
         case engineInitFailed(String)
         case badBundle(String)
         case emptyText
-        case referenceTooLong(Double)
         case promptTooLong(Int)
         case emptyAudio
         public var errorDescription: String? {
@@ -63,9 +62,6 @@ public enum PocketOnnx {
             case .engineInitFailed(let m): return "ONNX Runtime failed: \(m)"
             case .badBundle(let m): return "bad Pocket ONNX bundle: \(m)"
             case .emptyText: return "no tokenizable text"
-            case .referenceTooLong(let s):
-                return String(format: "Reference clip is %.0fs — keep it under %.0fs.",
-                              s, PocketOnnx.maxReferenceSeconds)
             case .promptTooLong(let n):
                 return "voice + text + generation needs \(n) transformer positions; "
                     + "the exported flow LM cache holds \(PocketOnnx.flowCachePositions)"
@@ -289,12 +285,14 @@ public final class PocketOnnxEngine {
         guard !refSamples24k.isEmpty else {
             throw PocketOnnx.SynthError.badBundle("empty reference audio")
         }
-        let seconds = Double(refSamples24k.count) / Double(meta.sampleRate)
-        guard seconds <= PocketOnnx.maxReferenceSeconds else {
-            throw PocketOnnx.SynthError.referenceTooLong(seconds)
-        }
+        // Pocket conditions on audio alone (no transcript), so a longer master
+        // is simply cut to its best section: first speech to a pause, the
+        // same energy cut LuxTTS windows with.
+        let ref = LuxReferenceWindow.window(
+            samples: refSamples24k, sampleRate: meta.sampleRate,
+            maxSeconds: PocketOnnx.maxReferenceSeconds).samples
 
-        let audioT = try floatTensor(refSamples24k, shape: [1, 1, refSamples24k.count])
+        let audioT = try floatTensor(ref, shape: [1, 1, ref.count])
         let enc = try run(mimiEncoder, ["audio": audioT], outputs: ["latents"])
         let latShape = tensorShape(enc["latents"]!)
         guard latShape.count == 3, latShape[2] == meta.conditioningDim, latShape[1] > 0 else {

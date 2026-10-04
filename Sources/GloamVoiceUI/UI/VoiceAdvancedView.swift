@@ -93,10 +93,8 @@ public struct VoiceAdvancedView: View {
                             Text(w.text).font(t.sans(12)).foregroundStyle(t.fgFaint).lineLimit(2)
                         } else {
                             Text(String(format: "Whole master · %@", TakesSection.timeString(seconds)))
-                                .font(t.console(12, .semibold)).foregroundStyle(seconds > ReferenceWindowRule.maxSeconds ? t.peak : t.accent)
-                            Text(seconds > ReferenceWindowRule.maxSeconds
-                                 ? String(format: "Over the %.0fs cap — choose a window or the voice can't render.", ReferenceWindowRule.maxSeconds)
-                                 : "Choose the part the engine listens to.")
+                                .font(t.console(12, .semibold)).foregroundStyle(t.accent)
+                            Text("Each engine picks its own section. Choose the part yourself.")
                                 .font(t.sans(12)).foregroundStyle(t.fgFaint)
                         }
                     }
@@ -105,7 +103,7 @@ public struct VoiceAdvancedView: View {
             } header: {
                 Text("Reference window").font(t.console(11, .medium)).tracking(1.5).foregroundStyle(t.fgFaint)
             } footer: {
-                Text("A long master is cut to a window before LuxTTS hears it; the window travels in the pack so every device listens to the same part.")
+                Text("A window you set travels in the pack, so every device listens to the same part.")
                     .font(t.sans(11)).foregroundStyle(t.fgFaint)
             }
             .listRowBackground(t.panel)
