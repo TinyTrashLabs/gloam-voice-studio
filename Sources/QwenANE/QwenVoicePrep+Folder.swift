@@ -70,6 +70,33 @@ extension QwenVoicePrep {
             encode: { try prepare(referenceWAV: $0, transcript: $1, modelsDirectory: modelsDirectory) })
     }
 
+    /// The sentence-end cut whose audio says exactly its transcript. `endAtSentence` places the cut by a
+    /// character clock, which can land a pause or two late: Bad Bunny's Spanish section kept "Yo creo que"
+    /// after a transcript ending "en especifico.", and that mismatch at the end of the reference (Qwen continues
+    /// it) is what made one Spanish part in four come out as silence or "no, no, no". Each candidate cut
+    /// (`ReferenceSection.sentenceEndCandidates`, the guess first) is transcribed and the one whose words are
+    /// closest to its transcript (`wordDistance`) is kept, an exact match ending the search. Without a
+    /// transcription (no recogniser for the language) the guess stands.
+    static func verifiedSentenceEnd(cut: [Float], words: String, guess: (samples: [Float], text: String),
+                                    transcribe: @Sendable (Data) async -> String?) async -> (samples: [Float], text: String) {
+        var candidates = [guess]
+        for c in ReferenceSection.sentenceEndCandidates(samples: cut, text: words, sampleRate: sampleRate)
+        where !(c.samples.count == guess.samples.count && c.text == guess.text) { candidates.append(c) }
+        var best: (cut: (samples: [Float], text: String), distance: Int)? = nil
+        for c in candidates {
+            guard let heard = await transcribe(ReferenceSection.wavData(c.samples, sampleRate: sampleRate)) else {
+                if best == nil { return guess } else { continue }
+            }
+            let d = ReferenceSection.wordDistance(heard: heard, text: c.text)
+            // fewer mismatched words wins; on a tie, the longer cut (more of the voice)
+            if best == nil || d < best!.distance || (d == best!.distance && c.samples.count > best!.cut.samples.count) {
+                best = (c, d)
+            }
+            if d == 0 { break }
+        }
+        return best?.cut ?? guess
+    }
+
     /// Test seam: the encoder's input length and the encoders themselves are injected.
     static func prepareEngineFolder(
         voiceDir: URL, masterWAV: Data, transcript: String, cacheDirectory: URL,
@@ -120,7 +147,10 @@ extension QwenVoicePrep {
         let heard = await transcribe?(cutWAV)
         let cutWords = ReferenceSection.text(heard: heard, transcript: text, cutSeconds: cutSecs,
                                              start: cut.start, count: cut.samples.count, total: all.count).text
-        let ended = ReferenceSection.endAtSentence(samples: cut.samples, text: cutWords, sampleRate: sampleRate)
+        var ended = ReferenceSection.endAtSentence(samples: cut.samples, text: cutWords, sampleRate: sampleRate)
+        if let transcribe, ended.samples.count < cut.samples.count {
+            ended = await verifiedSentenceEnd(cut: cut.samples, words: cutWords, guess: ended, transcribe: transcribe)
+        }
         let sectionWAV = ReferenceSection.wavData(ended.samples, sampleRate: sampleRate)
         let cutSeconds = Double(ended.samples.count) / Double(sampleRate)
         let words = ended.text

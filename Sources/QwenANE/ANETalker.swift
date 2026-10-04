@@ -44,6 +44,8 @@ final class ANETalkerEngine {
     private(set) var forcedPicks: [[Int]] = []
     /// Restore / fill the voice's KV prefix (see `KVPrefix`). Off = every line prefills from row 0.
     var usePrefixCache = true
+    /// Also stop when the raw (unsampled) argmax is EOS, not only when EOS is drawn.
+    var eosOnArgmax = true
 
     init(coreMLDirectory dir: URL, host: HostTables) throws {
         self.host = host
@@ -301,7 +303,7 @@ final class ANETalkerEngine {
                 if let fc = forced { g0 = fc[f][0] }
                 var am = 0; var av = logits[0]
                 for i in 1..<3072 where logits[i] > av { av = logits[i]; am = i }   // raw argmax (eosGreedyStop)
-                if forced == nil && (g0 == eos || am == eos) { stop = .eos; return true }
+                if forced == nil && (g0 == eos || (eosOnArgmax && am == eos)) { stop = .eos; return true }
                 guard g0 >= 0, g0 < QwenVoiceFiles.codebookSize else { throw QwenANEError.nonFinite("first-codebook code \(g0) outside the vocoder's range") }
                 // code predictor: hidden + codec[g0] -> 15 sub-codes
                 let ep = Self.p16(e0), cr = host.codecRow(g0)
@@ -350,6 +352,8 @@ final class ANETalkerEngine {
     var injectNaNLogitsAtFrame: Int? = nil
     var injectNaNSubCodesAtFrame: Int? = nil
     var usePrefixCache = true
+    /// Also stop when the raw (unsampled) argmax is EOS, not only when EOS is drawn.
+    var eosOnArgmax = true
     init(coreMLDirectory dir: URL, host: HostTables) throws {
         throw QwenANEError.invalid("the Neural Engine voice needs a Mac with Apple silicon")
     }

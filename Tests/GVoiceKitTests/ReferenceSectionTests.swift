@@ -33,4 +33,27 @@ final class ReferenceSectionTests: XCTestCase {
         let c = ReferenceSection.text(heard: nil, transcript: master, cutSeconds: 10, start: 25_000, count: 50_000, total: 100_000)
         XCTAssertTrue(c.approximate)
     }
+
+    func testWordDistanceIgnoresCaseAccentsAndPunctuation() {
+        XCTAssertEqual(ReferenceSection.wordDistance(heard: "ha sido complicado en especifico", text: "Ha sido complicado en específico."), 0)
+        XCTAssertEqual(ReferenceSection.wordDistance(heard: "en específico. Yo creo que", text: "en específico."), 3)
+        XCTAssertEqual(ReferenceSection.wordDistance(heard: "", text: "uno dos"), 2)
+        XCTAssertEqual(ReferenceSection.wordDistance(heard: "uno dos", text: ""), 2)
+    }
+
+    func testSentenceEndCandidatesEndInPausesAtSentenceEnds() {
+        let x = Self.speech(seconds: 18)              // 20 bursts, a 0.3 s pause after each
+        let text = (0 ..< 20).map { $0 % 4 == 3 ? "w\($0)." : "w\($0)" }.joined(separator: " ")
+        let c = ReferenceSection.sentenceEndCandidates(samples: x, text: text, sampleRate: sr)
+        XCTAssertFalse(c.isEmpty)
+        for cand in c {
+            XCTAssertTrue(ReferenceSection.endsSentence(cand.text), cand.text)
+            XCTAssertGreaterThanOrEqual(cand.samples.count, 5 * sr)
+            // each cut ends inside a pause: its last 50 ms (before the fade) is silent
+            let tail = cand.samples[(cand.samples.count - 1200) ..< (cand.samples.count - 240)]
+            XCTAssertLessThan(tail.map { abs($0) }.max() ?? 1, 0.01)
+        }
+        // the true end of the 16th word ("w15.") is among them
+        XCTAssertTrue(c.contains { $0.text.hasSuffix("w15.") && abs(Double($0.samples.count) / Double(sr) - 14.2) < 0.05 })
+    }
 }

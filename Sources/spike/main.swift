@@ -6,6 +6,56 @@ import MLXFFT
 import StudioKit
 import SpeechKit
 import GVoiceProductionKit
+import QwenANE
+
+if CommandLine.arguments.dropFirst().first == "qwen-ane-stress" {
+    do {
+        try runQwenStress(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("qwen-ane-stress failed: \(error)")
+    }
+}
+
+if CommandLine.arguments.dropFirst().first == "qwen-continuity" {
+    do {
+        try runQwenContinuity(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("qwen-continuity failed: \(error)")
+    }
+}
+
+// Prepares a Qwen ANE voice folder (voice.json, ref_codes.npy, spk_embed.npy) from one WAV + its transcript.
+if CommandLine.arguments.dropFirst().first == "qwen-prep-wav" {
+    var wav: String?, text: String?, models: String?, out: String?
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let a = it.next() {
+        switch a {
+        case "--wav": wav = it.next()
+        case "--text": text = it.next()
+        case "--models": models = it.next()
+        case "--out": out = it.next()
+        default: die("unknown argument \(a)")
+        }
+    }
+    guard let wav, let text, let models, let out else { die("qwen-prep-wav --wav W --text T --models M --out DIR") }
+    do {
+        let v = try QwenVoicePrep.prepared(referenceWAV: try Data(contentsOf: URL(fileURLWithPath: wav)), transcript: text,
+                                           cacheDirectory: URL(fileURLWithPath: out), modelsDirectory: URL(fileURLWithPath: models))
+        print("frames \(v.refCodes[0].count)")
+        exit(0)
+    } catch { die("qwen-prep-wav failed: \(error)") }
+}
+
+if CommandLine.arguments.dropFirst().first == "asr-batch" {
+    do {
+        try await runASRBatch(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("asr-batch failed: \(error)")
+    }
+}
 
 if CommandLine.arguments.dropFirst().first == "gvoice-qwen-prep" {
     do {
