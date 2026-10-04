@@ -9,6 +9,7 @@
 
 import Foundation
 import GVoiceKit
+import QwenANE
 
 public enum ReferenceSections {
     public static let pocketEngine = "pocket-tts"
@@ -56,5 +57,25 @@ public enum ReferenceSections {
             written.append(pocketEngine)
         }
         return written
+    }
+
+    /// Prepares and stores the Qwen section (`engines/qwen3-0.6b/`, <= 256 frames, cut at a sentence end,
+    /// its exact transcript) of the voice or take whose master is `refURL`, through the same
+    /// `QwenVoicePrep.prepareEngineFolder` the base voice uses. A folder already complete for this master
+    /// is read, not recomputed. Returns true when it was computed now; false when it was current, the
+    /// models are not installed, or the voice has no transcript.
+    @discardableResult
+    public static func prepareQwen(referenceURL refURL: URL, refText: String, modelsDirectory: URL? = nil,
+                                   cacheRoot: URL = StoragePaths.appSupport
+        .appendingPathComponent("GloamVoiceStudio/Cache/\(QwenANEModelLocation.folderName)", isDirectory: true)) async -> Bool {
+        let text = refText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let models = modelsDirectory ?? (try? QwenANEModelLocation.resolve()),
+              let master = try? Data(contentsOf: refURL) else { return false }
+        let key = QwenEngineFiles.sha256Hex(Data(refURL.standardizedFileURL.path.utf8)).prefix(16)
+        let prepared = try? await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: refURL.deletingLastPathComponent(), masterWAV: master, transcript: text,
+            modelsDirectory: models, cacheDirectory: cacheRoot.appendingPathComponent(String(key), isDirectory: true),
+            transcribe: { await LuxReferenceWindow.transcribeWAV($0) })
+        return prepared?.origin == .computed
     }
 }

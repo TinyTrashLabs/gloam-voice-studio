@@ -16,6 +16,15 @@ if CommandLine.arguments.dropFirst().first == "gvoice-qwen-prep" {
     }
 }
 
+if CommandLine.arguments.dropFirst().first == "gvoice-qwen-sections" {
+    do {
+        try await runGVoiceQwenSections(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("gvoice-qwen-sections failed: \(error)")
+    }
+}
+
 if CommandLine.arguments.dropFirst().first == "gvoice-prepare" {
     do {
         try await runGVoicePrepare(Array(CommandLine.arguments.dropFirst(2)))

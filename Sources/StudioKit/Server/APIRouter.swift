@@ -224,6 +224,7 @@ public enum APIRouter {
 
         router.get("voices/:slug/export") { _, context in
             let slug = try context.parameters.require("slug")
+            await deps.voices.prepareQwenSections(slug)
             let data = try mapStoreErrors { try GVoice.export(slug, from: deps.voices) }
             var headers = HTTPFields()
             headers[.contentType] = "application/zip"

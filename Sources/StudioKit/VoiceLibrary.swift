@@ -99,6 +99,19 @@ public struct VoiceLibrary: Sendable {
         return await ReferenceSections.prepare(referenceURL: refURL, refText: meta.refText)
     }
 
+    /// Prepares and stores the Qwen section of the voice and of every take (language references, emotions)
+    /// that has a master and a transcript, so an export carries `engines/qwen3-0.6b/` for each of them.
+    /// Sections already complete for their master are kept. Returns the slugs prepared now.
+    @discardableResult
+    public func prepareQwenSections(_ slug: String) async -> [String] {
+        var done: [String] = []
+        for (_, vslug) in variantSlugs(of: slug).sorted(by: { $0.key < $1.key }) {
+            guard let (meta, refURL, _) = try? entry(vslug), let refURL else { continue }
+            if await ReferenceSections.prepareQwen(referenceURL: refURL, refText: meta.refText) { done.append(vslug) }
+        }
+        return done
+    }
+
     /// Save a new voice from reference audio, engine assets, or both.
     ///
     /// `refWav` is optional because a voice is not always a recording: a

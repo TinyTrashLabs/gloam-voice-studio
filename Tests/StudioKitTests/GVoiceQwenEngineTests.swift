@@ -74,6 +74,44 @@ final class GVoiceQwenEngineTests: XCTestCase {
         XCTAssertTrue(VoiceCapabilities(hasSource: true, hasRefText: true, engines: ["qwen3-0.6b"]).supports(.qwen06B))
     }
 
+    /// A language reference (take) carries its own section: export names it with the take suffix, a reader
+    /// finds it by variant, and export -> import -> export keeps every file byte-identical.
+    func testLanguageReferenceSectionRoundTripsByteIdentical() throws {
+        let master = Data([1, 2, 3, 4, 5]), esMaster = Data([6, 7, 8, 9]), section = Data([42, 43, 44])
+        _ = try lib.save(name: "Bunny", refWav: master, refText: "hello there",
+                         engines: ["qwen3-0.6b": try payload(for: master).files()])
+        var es = payload(for: esMaster)
+        es.text = "Hola, ven aqui. Todo bien."
+        es.derivedFrom = .init(audio: "engines/qwen3-0.6b/ref.wav", sha256: QwenEngineFiles.sha256Hex(section),
+                               startSeconds: 0, endSeconds: 9, by: "QwenVoicePrep", prepVersion: 1, mel: "upstream",
+                               sourceSha256: QwenEngineFiles.sha256Hex(esMaster))
+        var esFiles = try es.files(); esFiles["ref.wav"] = section
+        _ = try lib.addLanguageTake("bunny", language: "es", refWav: esMaster, refText: "Hola, ven aqui. Todo bien. Y luego")
+        _ = try lib.saveAt(slug: "bunny-es", name: "Bunny es", refWav: esMaster, refText: "Hola, ven aqui. Todo bien. Y luego",
+                           provenance: nil, variantOf: "bunny", engines: ["qwen3-0.6b": esFiles], notes: nil)
+
+        let pack = try GVoice.export("bunny", from: lib)
+        let manifest = try GVoice.manifest(ofPack: pack)
+        XCTAssertEqual(manifest.engines?["qwen3-0.6b"]?["es"]?.sorted(),
+                       ["engines/qwen3-0.6b/ref-es.wav", "engines/qwen3-0.6b/ref_codes-es.npy",
+                        "engines/qwen3-0.6b/spk_embed-es.npy", "engines/qwen3-0.6b/voice-es.json"])
+        let read = try XCTUnwrap(QwenEngineFiles.read(fromPack: pack, variant: "es"))
+        XCTAssertEqual(read.text, "Hola, ven aqui. Todo bien.")
+        XCTAssertTrue(["!", ".", "?"].contains(String(read.text.last!)), "the section's transcript ends at a sentence end")
+        XCTAssertEqual(read.derivedFrom.audio, "engines/qwen3-0.6b/ref-es.wav")
+        XCTAssertEqual(QwenEngineFiles.sha256Hex(try XCTUnwrap(GVoice.member(read.derivedFrom.audio, ofPack: pack))),
+                       read.derivedFrom.sha256)
+
+        try lib.delete("bunny")
+        _ = try GVoice.import(pack, into: lib)
+        let kept = try lib.entry("bunny-es")
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(kept.engines["qwen3-0.6b"]?["ref.wav"])), section)
+        let again = try GVoice.export("bunny", from: lib)
+        for member in manifest.engines?["qwen3-0.6b"]?["es"] ?? [] {
+            XCTAssertEqual(GVoice.member(member, ofPack: again), GVoice.member(member, ofPack: pack), member)
+        }
+    }
+
     /// The bundled packs: whichever carry the folder must verify against the audio the library keeps after import.
     func testBundledPacksCarryVerifiableFolders() throws {
         let packs = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

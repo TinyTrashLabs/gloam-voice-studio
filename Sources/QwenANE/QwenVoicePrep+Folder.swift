@@ -20,6 +20,12 @@ import GVoiceKit
 extension QwenVoicePrep {
     public static let sectionMember = "engines/qwen3-0.6b/ref.wav"
 
+    /// A section's audio path: `ref.wav`, or a pack's suffixed `ref-<key>.wav` for a take (import keeps the
+    /// pack's name in voice.json while installing the file under its plain name).
+    static func isSectionAudio(_ path: String) -> Bool {
+        path == sectionMember || (path.hasPrefix("engines/qwen3-0.6b/ref-") && path.hasSuffix(".wav"))
+    }
+
     /// The voice's `engines/qwen3-0.6b/` files, or nil when absent or unusable.
     public static func storedFolder(in voiceDir: URL) -> QwenEngineFiles? {
         let dir = voiceDir.appendingPathComponent(QwenEngineFiles.directory, isDirectory: true)
@@ -47,9 +53,9 @@ extension QwenVoicePrep {
     }
 
     /// Prepares `voiceDir`'s qwen3-0.6b folder from its master. `masterWAV` is the voice's `source/ref.wav`
-    /// (mono 24 kHz, through ReferenceStandard); `transcript` is the master's. `storeFolder` false (a take:
-    /// its files carry a `-<key>` suffix on export that this plain layout does not) prepares without
-    /// persisting. `transcribe` returns the words of a WAV (on-device recognition) or nil; without it the
+    /// (mono 24 kHz, through ReferenceStandard); `transcript` is the master's. `storeFolder` false prepares without
+    /// persisting. A take (language reference, emotion) stores its own folder like the base; export
+    /// suffixes the member names (GVoice.export). `transcribe` returns the words of a WAV (on-device recognition) or nil; without it the
     /// section's transcript is the master's, sliced to the section at sentence ends.
     @discardableResult
     public static func prepareEngineFolder(
@@ -72,7 +78,7 @@ extension QwenVoicePrep {
         limitSamples limit: Int,
         encode: (Data, String) throws -> QwenVoiceFiles
     ) async throws -> Prepared {
-        let store = storeFolder ?? !voiceDir.pathComponents.contains("variants")
+        let store = storeFolder ?? true
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let masterSha = sha256Hex(masterWAV)
         let all = try samples(of: masterWAV)
@@ -93,7 +99,7 @@ extension QwenVoicePrep {
 
         // A stored section for THIS master, intact: read it, cut nothing.
         let sectionURL = voiceDir.appendingPathComponent(sectionMember)
-        if let e = existing, e.derivedFrom.audio == sectionMember,
+        if let e = existing, isSectionAudio(e.derivedFrom.audio),
            let start = e.derivedFrom.startSeconds, let end = e.derivedFrom.endSeconds,
            e.derivedFrom.sourceSha256 == nil || e.derivedFrom.sourceSha256 == masterSha,
            let wav = try? Data(contentsOf: sectionURL), sha256Hex(wav) == e.derivedFrom.sha256 {

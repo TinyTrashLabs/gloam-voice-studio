@@ -244,9 +244,18 @@ public enum GVoice {
                 // The qwen3-0.6b codes + speaker embedding clone the voice as surely as
                 // source/ does, so they stay home whenever source/ does.
 
+                // A take's (or language reference's) qwen3-0.6b voice.json names its files plainly
+                // (that is how the library stores it); in the pack it must name the suffixed members,
+                // and a section's audio path must name the suffixed ref, so a reader can verify it.
+                var rewritten: [String: Data] = [:]
+                if engine == QwenEngineFiles.engineID, key != "base",
+                   let payload = Self.stemmedQwenFolder(files: files, key: key, suffix: suffix) {
+                    rewritten = payload
+                }
                 for (filename, url) in files.sorted(by: { $0.key < $1.key }) {
-                    let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
-                    entries.append((member, try Data(contentsOf: url)))
+                    let name = stem(filename, suffix: suffix)
+                    let member = "engines/\(engine)/\(name)"
+                    entries.append((member, try rewritten[name] ?? Data(contentsOf: url)))
                     manifest.engines?[engine, default: [:]][key, default: []].append(member)
                 }
             }
@@ -269,6 +278,28 @@ public enum GVoice {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try makeArchive(entries: [("manifest.json", try encoder.encode(manifest))] + entries)
+    }
+
+    /// The pack-side bytes of a take's `engines/qwen3-0.6b/` files that differ from the library's: its
+    /// `voice.json` (member names suffixed, section audio path suffixed). Keyed by pack file name; nil
+    /// when the folder is not a valid prepared voice (then it is exported untouched).
+    static func stemmedQwenFolder(files: [String: URL], key: String, suffix: String) -> [String: Data]? {
+        var data: [String: Data] = [:]
+        for (name, url) in files {
+            guard let d = try? Data(contentsOf: url), d.count <= QwenEngineFiles.maxNPYBytes else { continue }
+            data[name] = d
+        }
+        guard var payload = try? QwenEngineFiles.decode(files: data) else { return nil }
+        let dirPrefix = QwenEngineFiles.directory + "/"
+        switch payload.derivedFrom.audio {
+        case "source/ref.wav": payload.derivedFrom.audio = "source/ref\(suffix).wav"
+        case dirPrefix + "ref.wav": payload.derivedFrom.audio = dirPrefix + "ref\(suffix).wav"
+        default: break
+        }
+        guard let members = try? payload.members(variant: key) else { return nil }
+        var out: [String: Data] = [:]
+        for (path, bytes) in members { out[(path as NSString).lastPathComponent] = bytes }
+        return out
     }
 
     /// "base" first, then the rest alphabetically. Written out rather than

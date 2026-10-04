@@ -247,6 +247,7 @@ extension MCPRoute {
                 let slug = try string(arguments, "voice")
                 var path = (try string(arguments, "path") as NSString).expandingTildeInPath
                 if (path as NSString).pathExtension.isEmpty { path += ".gvoice" }
+                await deps.voices.prepareQwenSections(slug)
                 let pack = try APIRouter.mapStoreErrors { try GVoice.export(slug, from: deps.voices) }
                 try pack.write(to: URL(fileURLWithPath: path))
                 return toolResult(id: id, content: [["type": "text",
