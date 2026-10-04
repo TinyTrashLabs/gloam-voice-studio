@@ -123,6 +123,12 @@ public enum GVoice {
         public var persona: Persona?
         /// Free-form description of the voice.
         public var notes: String?
+        /// Stable identity of this voice across every share: a UUID minted when the voice is created and
+        /// kept by every export. Two packs with the same `id` are versions of one voice.
+        public var id: String?
+        /// Version of this voice: bumped whenever its audio, character or photo changes. With `id`, an
+        /// importer can tell an update (higher revision) from a copy or an older version.
+        public var revision: Int?
 
         /// Spelled out because a public struct's memberwise init is internal.
         /// It went unnoticed while the only caller was in this module; a client
@@ -133,7 +139,9 @@ public enum GVoice {
                     gain: Double? = nil, source: [String: Source]? = nil,
                     engines: [String: [String: [String]]]? = nil,
                     provenance: JSONValue? = nil, avatar: String? = nil, language: String? = nil,
-                    persona: Persona? = nil, notes: String? = nil) {
+                    persona: Persona? = nil, notes: String? = nil, id: String? = nil, revision: Int? = nil) {
+            self.id = id
+            self.revision = revision
             self.language = language
             self.persona = persona
             self.notes = notes
