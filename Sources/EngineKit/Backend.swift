@@ -1,5 +1,14 @@
 import Foundation
 
+/// Which silicon a backend renders on. Requests on different families can run at the same time (a
+/// GPU render and a Neural Engine render do not contend), requests on one family queue.
+public enum SpeechFamily: String, Sendable, CaseIterable {
+    /// MLX (Metal GPU), plus every other backend that is not on the Neural Engine.
+    case gpu
+    /// Core ML on the Neural Engine: `qwen3-0.6b-ane`.
+    case neuralEngine
+}
+
 /// TTS backends, raw values identical to the Python engine's backend strings
 /// so .gvoice metadata and API payloads interoperate.
 public enum BackendID: String, CaseIterable, Sendable, Codable {
@@ -44,6 +53,9 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
     /// rate; the codec raises on mismatch.
     public static let fishCodecSampleRate = 44100
+
+    /// The silicon this backend's render runs on; see `SpeechFamily`.
+    public var speechFamily: SpeechFamily { self == .qwen06BANE ? .neuralEngine : .gpu }
 
     /// Qwen3-TTS family — these resolve their repo from a base + quant suffix and
     /// store weights in quant-suffixed directories.

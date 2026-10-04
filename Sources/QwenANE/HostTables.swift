@@ -43,6 +43,7 @@ final class HostTables {
     /// text_proj: dequant 4-bit rows (group 64, MLX affine) -> fc1 -> silu -> fc2. Returns n x 1024.
     func textProj(_ ids: [Int]) -> [Float] {
         let n = ids.count
+        if n == 0 { return [] }
         let D = 2048, groupSize = 64, groups = D / groupSize, wordsPerRow = D / 8
         var x = [Float](repeating: 0, count: n * D)
         let q = teQ.u32, s = teS, b = teB
@@ -86,52 +87,101 @@ struct Prompt {
     var textIds: [Int]
     var refTextIds: [Int]
     var targetIds: [Int]
+    /// Leading rows that are the same for every line of this voice: role (3) + think/speaker/bos (5) + the
+    /// reference transcript's text rows. Everything after them (the line's own text, then the reference
+    /// codec rows) depends on the line, because the ICL layout is [text rows ; codec rows].
+    var prefixRows: Int = 0
+    /// The voice's cached rows and talker KV prefix, when the engine keeps them (nil: build everything per line).
+    var voice: VoicePrompt? = nil
 }
 
-/// Port of qonnx.build_icl_prompt (language auto).
-func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String) -> Prompt {
-    let c = host.cfg
+/// Everything in an ICL prompt that depends only on the voice (reference text, reference codes, speaker
+/// embedding), computed once: the role and think/speaker rows, the reference transcript's text rows and the
+/// reference's codec rows (the bulk of the CPU work and of the prompt). `buildICLPrompt` stitches a line's
+/// own rows between them. Also holds the talker's KV for the leading rows (`kv`), which the talker fills on
+/// the voice's first line and every later line restores instead of prefilling again.
+final class VoicePrompt {
+    static let H = 1024
+    let roleIds: [Int]
+    let role: [Float]          // 3 x H
+    let comb: [Float]          // 5 x H
+    let ttsEos: [Float]        // H
+    let padRow: [Float]        // codec_pad row, added to every text row
+    let refTextIds: [Int]
+    let refRows: [Float]       // nRef x H
+    let codecIcl: [Float]      // (Tref + 1) x H
+    /// role + comb + refRows: the rows every line of this voice starts with.
+    let prefix: [Float]
+    var prefixRows: Int { prefix.count / Self.H }
+    /// Talker KV for the leading `kv.rows` rows (a multiple of the prefill chunk). Touched under the engine's lock.
+    var kv: KVPrefix? = nil
+
+    init(host: HostTables, voice: QwenVoiceFiles) {
+        let c = host.cfg
+        let H = Self.H
+        let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
+        let rs = min(3, refIds.count), re = max(rs, refIds.count - 2)
+        refTextIds = Array(refIds[rs..<re])
+        // The first three ids of "<|im_start|>assistant\n<line>": the role rows. (A line that begins with a
+        // newline can merge with the third id, so `buildICLPrompt` checks them against `roleIds` per line.)
+        roleIds = Array(host.tok.encode("<|im_start|>assistant\nx<|im_end|>\n<|im_start|>assistant\n").prefix(3))
+        let tts = host.textProj([c.ttsBos, c.ttsEos, c.ttsPad])
+        let ttsBos = Array(tts[0..<H]), ttsPad = Array(tts[2 * H..<3 * H])
+        ttsEos = Array(tts[H..<2 * H])
+        padRow = host.codecRow(c.codecPad)
+        var refRows = host.textProj(refTextIds)
+        for r in 0..<(refRows.count / H) { for j in 0..<H { refRows[r * H + j] += padRow[j] } }
+        self.refRows = refRows
+        // codec ICL: [codec_bos ; ref codec sum] + tts_pad
+        let Tref = voice.refCodes[0].count
+        var codecIcl = [Float](repeating: 0, count: (Tref + 1) * H)
+        let bosRow = host.codecRow(c.codecBos)
+        for j in 0..<H { codecIcl[j] = bosRow[j] }
+        for t in 0..<Tref {
+            let r0 = host.codecRow(voice.refCodes[0][t])
+            for j in 0..<H { codecIcl[(t + 1) * H + j] = r0[j] }
+        }
+        for i in 0..<(c.groups - 1) where i + 1 < voice.refCodes.count {
+            for t in 0..<Tref {
+                let row = host.cpRow(i, voice.refCodes[i + 1][t])
+                for j in 0..<H { codecIcl[(t + 1) * H + j] += row[j] }
+            }
+        }
+        for r in 0..<(Tref + 1) { for j in 0..<H { codecIcl[r * H + j] += ttsPad[j] } }
+        self.codecIcl = codecIcl
+        // prefix: think rows, speaker, pad, bos
+        var prefix: [Float] = []
+        for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += host.codecRow(id) }
+        prefix += voice.spkEmbedding
+        for id in [c.codecPad, c.codecBos] { prefix += host.codecRow(id) }
+        let pRows = prefix.count / H                       // 6
+        role = host.textProj(roleIds)                      // 3 x H
+        let padCount = pRows - 2
+        var comb = [Float](repeating: 0, count: (padCount + 1) * H)
+        for r in 0..<padCount { for j in 0..<H { comb[r * H + j] = ttsPad[j] + prefix[r * H + j] } }
+        for j in 0..<H { comb[padCount * H + j] = ttsBos[j] + prefix[padCount * H + j] }
+        self.comb = comb
+        self.prefix = role + comb + refRows
+    }
+}
+
+/// Port of qonnx.build_icl_prompt (language auto). `voicePrompt` supplies the voice's cached rows (built here,
+/// not kept, when nil). The embeddings equal the uncached construction bit for bit.
+func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, voicePrompt: VoicePrompt? = nil,
+                    keepVoicePrompt: Bool = false) -> Prompt {
     let H = 1024
-    let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
-    let rs = min(3, refIds.count), re = max(rs, refIds.count - 2)
-    let refTextIds = Array(refIds[rs..<re])
+    let vp = voicePrompt ?? VoicePrompt(host: host, voice: voice)
     let tgtIds = host.tok.encode("<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n")
     let ts = min(3, tgtIds.count), te = max(ts, tgtIds.count - 5)
     let textIds = Array(tgtIds[ts..<te])
-    let tts = host.textProj([c.ttsBos, c.ttsEos, c.ttsPad])
-    let ttsBos = Array(tts[0..<H]), ttsEos = Array(tts[H..<2 * H]), ttsPad = Array(tts[2 * H..<3 * H])
-    var textEmbed = host.textProj(refTextIds + textIds) + ttsEos          // (n+1) x H
-    let nT = textEmbed.count / H
-    let padRow = host.codecRow(c.codecPad)
-    for r in 0..<nT { for j in 0..<H { textEmbed[r * H + j] += padRow[j] } }
-    // codec ICL: [codec_bos ; ref codec sum] + tts_pad
-    let Tref = voice.refCodes[0].count
-    var codecIcl = [Float](repeating: 0, count: (Tref + 1) * H)
-    let bosRow = host.codecRow(c.codecBos)
-    for j in 0..<H { codecIcl[j] = bosRow[j] }
-    for t in 0..<Tref {
-        let r0 = host.codecRow(voice.refCodes[0][t])
-        for j in 0..<H { codecIcl[(t + 1) * H + j] = r0[j] }
-    }
-    for i in 0..<(c.groups - 1) where i + 1 < voice.refCodes.count {
-        for t in 0..<Tref {
-            let row = host.cpRow(i, voice.refCodes[i + 1][t])
-            for j in 0..<H { codecIcl[(t + 1) * H + j] += row[j] }
-        }
-    }
-    for r in 0..<(Tref + 1) { for j in 0..<H { codecIcl[r * H + j] += ttsPad[j] } }
-    // prefix: think rows, speaker, pad, bos
-    var prefix: [Float] = []
-    for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += host.codecRow(id) }
-    prefix += voice.spkEmbedding
-    for id in [c.codecPad, c.codecBos] { prefix += host.codecRow(id) }
-    let pRows = prefix.count / H                       // 6
-    let role = host.textProj(Array(tgtIds[0..<3]))     // 3 x H
-    let padCount = pRows - 2
-    var comb = [Float](repeating: 0, count: (padCount + 1) * H)
-    for r in 0..<padCount { for j in 0..<H { comb[r * H + j] = ttsPad[j] + prefix[r * H + j] } }
-    for j in 0..<H { comb[padCount * H + j] = ttsBos[j] + prefix[padCount * H + j] }
-    let full = role + comb + textEmbed + codecIcl
+    // a line whose first token merged with the role's last one has other role rows: build it whole
+    let role = Array(tgtIds.prefix(3)) == vp.roleIds ? vp.role : host.textProj(Array(tgtIds.prefix(3)))
+    var lineRows = host.textProj(textIds) + vp.ttsEos          // (nText + 1) x H
+    for r in 0..<(lineRows.count / H) { for j in 0..<H { lineRows[r * H + j] += vp.padRow[j] } }
+    let prefixIsShared = role.count == vp.role.count && role == vp.role
+    let full = (prefixIsShared ? vp.prefix : role + vp.comb + vp.refRows) + lineRows + vp.codecIcl
     return Prompt(embeds: full, T: full.count / H, nTextTokens: host.tok.encode(text).count,
-                  textIds: textIds, refTextIds: refTextIds, targetIds: tgtIds)
+                  textIds: textIds, refTextIds: vp.refTextIds, targetIds: tgtIds,
+                  prefixRows: prefixIsShared ? vp.prefixRows : 0,
+                  voice: keepVoicePrompt && prefixIsShared ? vp : nil)
 }

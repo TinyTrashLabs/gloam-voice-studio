@@ -69,6 +69,11 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// audio, today's behaviour. Applied post-`SpeedAdjust` so a preset's
     /// tuning is not silently altered by an unrelated `speed` value.
     public var fx: FXPreset?
+    /// qwen3-0.6b-ane streaming only: frames (80 ms each, 1...12) in the first vocoder chunk. nil = the default 12.
+    /// A smaller first chunk puts the first audio out sooner (4 saves about half a second) but leaves less audio
+    /// buffered ahead of playback, so the stream only plays without gaps while the render stays faster than real
+    /// time. The samples are the same up to Neural Engine rounding (below -40 dBFS).
+    public var firstChunkFrames: Int?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -82,7 +87,9 @@ public struct SynthesisRequest: Sendable, Equatable {
                 cfgScaleOverride: Float? = nil,
                 referenceGuidanceOverride: Float? = nil, seed: UInt64? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
-                fx: FXPreset? = nil) {
+                fx: FXPreset? = nil,
+                firstChunkFrames: Int? = nil) {
+        self.firstChunkFrames = firstChunkFrames
         self.dialoguePrefix = dialoguePrefix
         self.fx = fx
         self.text = text
@@ -149,6 +156,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var tShift: Float?
     /// LuxTTS only: dual-path 48k output toggle (nil = model default true).
     public var returnSmooth: Bool?
+    /// qwen3-0.6b-ane only: frames in the first streamed vocoder chunk (nil = 12).
+    public var firstChunkFrames: Int?
     /// Breeze only: classifier-free guidance scale (nil = model default 4).
     public var cfgScale: Float?
     /// Breeze only: identity strength (nil = off).
@@ -163,7 +172,8 @@ public struct ProviderRequest: Sendable, Equatable {
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
                 tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil,
-                referenceGuidance: Float? = nil, seed: UInt64? = nil) {
+                referenceGuidance: Float? = nil, seed: UInt64? = nil, firstChunkFrames: Int? = nil) {
+        self.firstChunkFrames = firstChunkFrames
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
@@ -356,7 +366,8 @@ enum RequestPlanner {
                     .map { min(max($0, range.lowerBound), range.upperBound) }
                     .flatMap { $0 > 1 ? $0 : nil }
             },
-            seed: knobs.seed == true ? request.seed : nil
+            seed: knobs.seed == true ? request.seed : nil,
+            firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil
         )
     }
 }
