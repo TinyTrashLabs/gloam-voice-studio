@@ -70,7 +70,9 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
                 #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]
             XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
-                           ["list_voices", "listen", "speak", "transcribe", "unload_models"])
+                           ["add_language_take", "create_voice", "delete_voice", "design_voice",
+                            "export_voice", "import_voice", "list_voices", "listen", "set_avatar",
+                            "speak", "transcribe", "unload_models", "update_voice"])
         }
     }
 
@@ -85,9 +87,12 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
                 #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]
             XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
-                           ["lab_delete_clip", "lab_delete_group", "lab_list",
+                           ["add_language_take", "create_voice", "delete_voice", "design_voice",
+                            "export_voice", "import_voice",
+                            "lab_delete_clip", "lab_delete_group", "lab_list",
                             "lab_put_clip", "lab_read_feedback", "lab_set_group",
-                            "list_voices", "listen", "speak", "transcribe", "unload_models"])
+                            "list_voices", "listen", "set_avatar", "speak", "transcribe",
+                            "unload_models", "update_voice"])
         }
     }
 
