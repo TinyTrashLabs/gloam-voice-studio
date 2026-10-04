@@ -12,6 +12,12 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     /// one fixed precision, so it has no Precision picker (`availableQuants` is
     /// empty) and its weights live in a bare folder.
     case qwen06BMobile = "qwen3-0.6b-mobile"
+    /// Qwen3-TTS 0.6B Base on the Apple Neural Engine (Core ML, macOS 15+), no MLX and no GPU:
+    /// the model for realtime use beside a GPU-bound LLM, and the only one that STREAMS the first
+    /// words of a line while the rest renders. Needs a model set that is not on Hugging Face yet
+    /// (see `QwenANEModelLocation`), so it is API-server only: not in the Studio picker and not
+    /// downloadable in-app. It is not `isQwen`: that flag means "MLX Qwen, repo + quant folders".
+    case qwen06BANE = "qwen3-0.6b-ane"
     case qwen17B = "qwen3-1.7b"
     case qwenDesign = "qwen3-design"
     case qwenCustom = "qwen3-custom"
@@ -71,6 +77,7 @@ extension BackendID {
         switch self {
         case .qwen06B: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-"
         case .qwen06BMobile: nil   // ours, fixed precision — see `spec.modelRepo`
+        case .qwen06BANE: nil      // not an MLX repo
         case .qwen17B: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-"
         case .qwenDesign: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-"
         case .qwenCustom: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-"
@@ -284,6 +291,10 @@ extension BackendID {
 
     public var controls: ControlSurface {
         switch self {
+        case .qwen06BANE:
+            // Clone-only (no unconditioned mode on the ANE build), and the on-device sampler
+            // exposes no knobs, so there are none to offer.
+            ControlSurface(voiceClone: .required, instruct: .none, language: false, knobs: Knobs())
         case .qwen06B, .qwen06BMobile, .qwen17B:
             // Base is a voice-cloning model (text + reference audio). It does NOT
             // take a natural-language instruct — that's VoiceDesign/CustomVoice only.
@@ -353,7 +364,7 @@ extension BackendID {
     /// so their voices must keep working without one.
     public var needsRefText: Bool {
         switch self {
-        case .qwen06B, .qwen06BMobile, .qwen17B, .luxTTS: true
+        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17B, .luxTTS: true
         case .dia2: false   // optional reference clip is prefix conditioning, not a transcript pair
         default: false
         }
@@ -364,7 +375,7 @@ extension BackendID {
     /// How this backend expresses emotion. See `EmotionMechanism`.
     public var emotionMechanism: EmotionMechanism {
         switch self {
-        case .qwen06B, .qwen06BMobile, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
+        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
         case .chatterbox: .liveKnob(.exaggeration)
@@ -405,6 +416,13 @@ extension BackendID {
             BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-4bit-mobile",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,
+                        minRAMBytes: 8_000_000_000)
+        case .qwen06BANE:
+            // No HF repo yet: `modelRepo` is the name the set will publish under, never fetched
+            // (`surfaces` has no `.downloadable`). RAM floor is lower than the MLX bakes: ~1.3 GB of Core ML models.
+            BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-ane",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 8_000_000_000)
         case .qwen17B:
             BackendSpec(modelRepo: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
@@ -534,6 +552,10 @@ extension BackendID {
             // neither be the Studio speak-backend nor answer chat unattended.
             // Still offered to the API, where a caller always sends `instruct`.
             [.creation, .apiServer, .downloadable]
+        case .qwen06BANE:
+            // Its model set is installed by hand for now (QwenANEModelLocation), so there is nothing
+            // to download or to offer in the picker; the HTTP API serves it (and streams).
+            [.apiServer]
         case .luxTTS:
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .kokoro, .supertonic, .pocketTTS:
@@ -553,6 +575,11 @@ extension BackendID {
             [.dialogue, .downloadable]
         }
     }
+
+    /// True for a backend whose model files are put on disk by hand (or by a build step), not
+    /// fetched by the in-app downloader, so it is exempt from "selectable implies downloadable".
+    /// Its loader reports a missing model set with `EngineError.modelNotInstalled`.
+    public var installsManually: Bool { self == .qwen06BANE }
 
     /// Backends appearing on `surface`, in declaration order.
     public static func on(_ surface: BackendSurfaces) -> [BackendID] {

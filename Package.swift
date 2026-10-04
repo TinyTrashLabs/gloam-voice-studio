@@ -168,6 +168,8 @@ let package = Package(
                 // ReferenceStandard / ReferenceTail live in GVoiceKit now;
                 // EngineKit re-exports it so existing callers compile unchanged.
                 "GVoiceKit",
+                // qwen3-0.6b-ane: Qwen3-TTS on the Neural Engine (Core ML only).
+                "QwenANE",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
