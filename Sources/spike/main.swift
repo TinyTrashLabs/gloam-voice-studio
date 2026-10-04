@@ -580,7 +580,8 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
 
 // MARK: - serve-tts subcommand
 //
-// `spike serve-tts [port] [--voices <dir>] [--models <dir>] [--default <backend-id>]` runs the local
+// `spike serve-tts [port] [--voices <dir>] [--models <dir>] [--default <backend-id>] [--prewarm <voice-slug>]
+// [--single-lane]` runs the local
 // OpenAI-compatible server headlessly with the real MLX provider (and the Neural Engine backend,
 // `qwen3-0.6b-ane`, via QwenANEModelLocation), so `/v1/audio/speech` can be measured with curl,
 // streamed or not. Voices and models default to the shared Gloam group container the Studio app uses.
@@ -591,9 +592,14 @@ if CommandLine.arguments.dropFirst().first == "serve-tts" {
     var voicesDir = home.appendingPathComponent("Voices")
     var modelsDir = home.appendingPathComponent("Models")
     var defaultBackend: BackendID = .qwen06BMobile
+    var prewarmVoice: String? = nil
+    var singleLane = false
+    setvbuf(stdout, nil, _IOLBF, 0)      // line-buffer so a redirected log shows the "ready" lines as they happen
     var it = CommandLine.arguments.dropFirst(2).makeIterator()
     while let a = it.next() {
         switch a {
+        case "--prewarm": prewarmVoice = it.next()
+        case "--single-lane": singleLane = true
         case "--voices": voicesDir = URL(fileURLWithPath: it.next() ?? "")
         case "--models": modelsDir = URL(fileURLWithPath: it.next() ?? "")
         case "--default":
@@ -609,13 +615,31 @@ if CommandLine.arguments.dropFirst().first == "serve-tts" {
         let dir = modelsRoot.appendingPathComponent(backend.diskFolder(quantRaw: nil))
         return FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) ? dir.path : nil
     })
+    // The Neural Engine lane (its own engine and gate) is what lets a qwen3-0.6b-ane request and a GPU
+    // request render at once; --single-lane serves everything through one engine, as before.
+    let neural = singleLane ? nil : GloamEngine(provider: provider)
+    let voiceLibrary = VoiceLibrary(directory: voicesDir)
     let deps = APIDependencies(
         engine: GloamEngine(provider: provider),
-        voices: VoiceLibrary(directory: voicesDir),
-        defaultBackend: defaultBackend)
+        voices: voiceLibrary,
+        defaultBackend: defaultBackend,
+        neuralEngine: neural)
     let server = LocalAPIServer(deps: deps)
     do {
         try await server.start(port: port)
+        if let slug = prewarmVoice {
+            // Same as the app's launch prewarm: load the Neural Engine voice and prepare `slug`, in the background.
+            let lane = deps.speechLane(for: .qwen06BANE).engine
+            Task.detached(priority: .background) {
+                let t0 = Date()
+                var request = SynthesisRequest(text: "Ready.")
+                if let found = try? voiceLibrary.get(slug) { request.refAudioPath = found.refURL.path; request.refText = found.meta.refText }
+                do {
+                    try await lane.warm(backend: .qwen06BANE, request: request)
+                    print(String(format: "prewarm: qwen3-0.6b-ane + voice %@ ready in %.1fs", slug, Date().timeIntervalSince(t0)))
+                } catch { print("prewarm failed: \(error)") }
+            }
+        }
         try await Task.sleep(for: .milliseconds(700))
         print("serving /v1/audio/speech on http://127.0.0.1:\(port)  voices: \(voicesDir.path)  default model: \(defaultBackend.rawValue)")
         while true { try await Task.sleep(for: .seconds(86_400)) }

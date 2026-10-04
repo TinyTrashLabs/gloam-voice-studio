@@ -58,6 +58,10 @@ public struct QwenRender: Sendable {
     public var stopReason: QwenStopReason
     public var timings: QwenTimings
     /// Silence in the vocoder output, before `Options.capPauses` ran (`.empty` when cancelled).
+    /// Prompt rows whose talker KV came from the voice's cached prefix (0 on a voice's first line, or with
+    /// `Options.prefixCache` off); those rows were not prefilled again.
+    public var prefixRowsReused: Int = 0
+    /// Silence in the vocoder output, before `Options.capPauses` ran (`.empty` when cancelled).
     public var silenceBefore: SilenceReport = .empty
     /// Silence in `samples` as returned (equals `silenceBefore` when capping is off or nothing was cut).
     public var silence: SilenceReport = .empty
@@ -75,8 +79,20 @@ extension QwenANEEngine {
         /// Shorten dead air in the finished line (see `QwenSilence.cap`): internal pauses over 0.7 s down
         /// to 0.45 s, leading silence to 0.05 s, trailing to 0.1 s.
         public var capPauses = true
-        public init(overlapVocoder: Bool = true, capPauses: Bool = true) {
-            self.overlapVocoder = overlapVocoder; self.capPauses = capPauses
+        /// Keep each voice's prompt rows and the talker's KV for its leading prompt rows (the role, think and
+        /// speaker rows and the reference transcript), and reuse them on every later line of the voice. The
+        /// codes are identical to a render without it; off is the way to prove that.
+        public var prefixCache = true
+        /// Frames (80 ms each) in each vocoder chunk, in order, the last entry repeating; each is 1...12. The
+        /// default, whole 12-frame chunks, delivers the first audio after 12 frames. A short first chunk
+        /// (`[4, 8, 12]`) delivers it sooner, at the cost of a thinner audio buffer ahead of playback: it only
+        /// plays gaplessly while the render stays faster than real time (RTF < 1) and later chunks grow. The samples
+        /// are the same either way; only where the chunk boundaries fall changes.
+        public var chunkFrames: [Int] = [12]
+        public init(overlapVocoder: Bool = true, capPauses: Bool = true, prefixCache: Bool = true,
+                    chunkFrames: [Int] = [12]) {
+            self.overlapVocoder = overlapVocoder; self.capPauses = capPauses; self.prefixCache = prefixCache
+            self.chunkFrames = chunkFrames
         }
     }
 }
@@ -91,7 +107,7 @@ extension QwenANEEngine {
 /// real time), so call it from a background queue.
 @available(iOS 18.0, macOS 15.0, *)
 public final class QwenANEEngine: @unchecked Sendable {
-    private let host: HostTables
+    let host: HostTables
     let talker: ANETalkerEngine
     private let vocoder: ANEVocoder
     private let lock = NSLock()
@@ -112,6 +128,44 @@ public final class QwenANEEngine: @unchecked Sendable {
     public func dropCaches() {
         lock.lock(); defer { lock.unlock() }
         vocoder.dropCaches()
+        voicePrompts.removeAll(); voicePromptOrder.removeAll()
+    }
+
+    /// Voices whose prompt rows and talker KV prefix are kept (least recently used out).
+    public static let maxCachedVoices = 4
+    private struct VoiceKey: Hashable {
+        let refText: String, refCodes: [[Int]], spk: [Float]
+        init(_ v: QwenVoiceFiles) { refText = v.refText; refCodes = v.refCodes; spk = v.spkEmbedding }
+    }
+    private var voicePrompts: [VoiceKey: VoicePrompt] = [:]
+    private var voicePromptOrder: [VoiceKey] = []      // least recently used first
+    /// Number of voices with cached prompt rows (for tests and diagnostics).
+    public var cachedVoiceCount: Int { lock.lock(); defer { lock.unlock() }; return voicePrompts.count }
+    /// Caller holds `lock`.
+    private func voicePrompt(for voice: QwenVoiceFiles) -> VoicePrompt {
+        let key = VoiceKey(voice)
+        if let hit = voicePrompts[key] {
+            if let i = voicePromptOrder.firstIndex(of: key) { voicePromptOrder.remove(at: i) }
+            voicePromptOrder.append(key)
+            return hit
+        }
+        let vp = VoicePrompt(host: host, voice: voice)
+        voicePrompts[key] = vp; voicePromptOrder.append(key)
+        while voicePrompts.count > Self.maxCachedVoices, let old = voicePromptOrder.first {
+            voicePromptOrder.removeFirst(); voicePrompts[old] = nil
+        }
+        return vp
+    }
+
+    /// Gets `voice` ready so its next line starts fast: builds its prompt rows, primes the vocoder with its
+    /// reference, fills the talker KV prefix, and runs a few frames so every Core ML function (prefill, decode,
+    /// code predictor, vocoder) has been through its first, slow, call. Renders no audio the caller sees.
+    /// Returns the seconds it took. Blocks like `render`; honors `cancelled`.
+    @discardableResult
+    public func warm(voice: QwenVoiceFiles, cancelled: () -> Bool = { false }) throws -> Double {
+        let t0 = Date()
+        _ = try render(text: "Ready.", voice: voice, seed: 1, maxFrames: 3, cancelled: cancelled)
+        return Date().timeIntervalSince(t0)
     }
 
     /// Read at the start of each `render`; set between renders.
@@ -137,6 +191,7 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///   - seed: sampler seed. The same seed draws numpy's `default_rng(seed)` stream, which makes
     ///     a render reproducible and comparable to the Python reference. `nil` picks a random one.
     ///   - maxFrames: optional cap on generated frames (80 ms each), below the built-in cap.
+    ///   - chunkFrames: this line's vocoder chunk schedule (see `Options.chunkFrames`); nil uses the option.
     ///   - cancelled: polled once per frame; return true to stop. The render then returns no samples.
     ///   - pace: called between stages and after every frame, on the rendering thread. A host app
     ///     can sleep in it to hold a duty cycle (thermal / battery); a sleep adds directly to wall time.
@@ -148,6 +203,7 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///     a contiguous slice, bit for bit, of the un-capped line; `QwenRender.samples` is unchanged by
     ///     this hook (it still gets `Options.capPauses`). Nothing is delivered for a cancelled render.
     public func render(text: String, voice: QwenVoiceFiles, seed: UInt64? = nil, maxFrames: Int? = nil,
+                       chunkFrames: [Int]? = nil,
                        cancelled: () -> Bool = { false }, pace: () -> Void = {},
                        onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
@@ -157,11 +213,16 @@ public final class QwenANEEngine: @unchecked Sendable {
         }
         var sampler = Sampler(vocab: host.cfg.vocab, eos: host.cfg.codecEos, seed: seed ?? UInt64.random(in: 0...UInt64.max))
         let t0 = Date()
-        let prompt = buildICLPrompt(host: host, voice: voice, text: text)
+        talker.usePrefixCache = options.prefixCache
+        let prompt = buildICLPrompt(host: host, voice: voice, text: text,
+                                    voicePrompt: options.prefixCache ? voicePrompt(for: voice) : nil,
+                                    keepVoicePrompt: options.prefixCache)
         let promptS = Date().timeIntervalSince(t0)
         pace()
         let voc = vocoder
         voc.overlap = options.overlapVocoder
+        let schedule = chunkFrames ?? options.chunkFrames
+        voc.chunkSchedule = schedule.isEmpty ? [12] : schedule
         let overlapped = voc.overlap
         voc.resetStats()
         let trimmer = onAudio.map { _ in QwenStreamTrimmer(sampleRate: sampleRate) }
@@ -196,6 +257,7 @@ public final class QwenANEEngine: @unchecked Sendable {
             if stop != .contextFull { stop = .trailingSilence }
         }
         var out = result(wav, stop, codes)
+        out.prefixRowsReused = g.prefixRowsReused
         out.silenceBefore = QwenSilence.analyze(samples: wav, sampleRate: sampleRate)
         out.silence = out.silenceBefore
         if options.capPauses {

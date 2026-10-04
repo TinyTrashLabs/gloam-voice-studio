@@ -9,6 +9,8 @@ struct GenResult {
     var promptLen: Int
     var prefillWall: Double
     var loopWall: Double
+    /// Prompt rows whose KV came from the voice's cached prefix instead of a prefill.
+    var prefixRowsReused: Int = 0
 }
 
 /// Talker + code predictor on the Neural Engine, a Swift port of tools/qcoreml.py.
@@ -40,6 +42,8 @@ final class ANETalkerEngine {
     /// only meaningful when both sides see the same history.
     var forced: [[Int]]? = nil
     private(set) var forcedPicks: [[Int]] = []
+    /// Restore / fill the voice's KV prefix (see `KVPrefix`). Off = every line prefills from row 0.
+    var usePrefixCache = true
 
     init(coreMLDirectory dir: URL, host: HostTables) throws {
         self.host = host
@@ -103,10 +107,22 @@ final class ANETalkerEngine {
         return out
     }
 
-    private func prefill(_ p: Prompt) throws {
+    /// Whole prefill chunks that lie inside the prompt's voice-only prefix (the rows cannot be reused at a
+    /// finer grain: the chunk grid is what keeps a restored prefix bit-identical to a fresh prefill).
+    static func cacheableRows(_ p: Prompt) -> Int { min(p.prefixRows, p.T - 1) / P * P }
+
+    /// Prefills rows 0..<T-1. With a usable cached prefix (`kv`) the first `kv.rows` rows are restored
+    /// instead of computed; returns how many rows that was, and, when `p.voice` has none yet, a fresh
+    /// snapshot of them for the caller to keep once the line proves finite.
+    private func prefill(_ p: Prompt) throws -> (reused: Int, fresh: KVPrefix?) {
         let H = Self.H, L = Self.LMAX, P = Self.P, HD = Self.HD
         let n = p.T - 1                                   // the last row goes through decode
+        let aligned = usePrefixCache && p.voice != nil ? Self.cacheableRows(p) : 0
         var s = 0
+        var reused = 0
+        if aligned > 0, let hit = p.voice?.kv, hit.rows == aligned, hit.matches(p.embeds), restoreKV(hit) {
+            s = aligned; reused = aligned
+        }
         while s < n {
             let rows = min(P, n - s)
             let xp = Self.p16(px), mp = Self.p16(pmask), pl = Self.p16(pplace), kp = Self.p16(pkeep)
@@ -124,6 +140,66 @@ final class ANETalkerEngine {
             _ = try runChunks(pre, ["x": px, "cos": pcos, "sin": psin, "mask": pmask, "place": pplace, "keep": pkeep])
             s += P
         }
+        var fresh: KVPrefix? = nil
+        if aligned > 0, reused == 0 {
+            // Rows < aligned are never rewritten by later chunks (their one-hot `place` is 0 there), so the
+            // state still holds exactly what the first chunks produced.
+            fresh = snapshotKV(rows: aligned, embeds: Array(p.embeds[0..<(aligned * H)]))
+        }
+        return (reused, fresh)
+    }
+
+    // MARK: KV prefix snapshots (MLState read/write)
+
+    private static func stateNames() -> [(chunk: Int, name: String)] {
+        (0..<28).flatMap { i in ["k", "v"].map { (chunk: i / 14, name: "\($0)\(i)") } }
+    }
+
+    /// Copies rows 0..<rows of every k/v state buffer into compact blocks; nil when a buffer's layout is not the
+    /// expected fp16 (heads, slots, head dim) with a contiguous head dimension (the cache is then simply off).
+    private func snapshotKV(rows: Int, embeds: [Float]) -> KVPrefix? {
+        var blocks: [Data] = []
+        for (c, name) in Self.stateNames() {
+            let block: Data? = states[c].withMultiArray(for: name) { a in
+                let nd = a.shape.count
+                guard nd >= 3, a.dataType == .float16 else { return nil }
+                let heads = a.shape[nd - 3].intValue, slots = a.shape[nd - 2].intValue, hd = a.shape[nd - 1].intValue
+                let sh = a.strides[nd - 3].intValue, sr = a.strides[nd - 2].intValue
+                guard a.strides[nd - 1].intValue == 1, a.count == heads * slots * hd, rows <= slots else { return nil }
+                var d = Data(count: heads * rows * hd * 2)
+                d.withUnsafeMutableBytes { dst in
+                    let out = dst.bindMemory(to: Float16.self).baseAddress!, src = Self.p16(a)
+                    for h in 0..<heads { for r in 0..<rows { memcpy(out + (h * rows + r) * hd, src + h * sh + r * sr, hd * 2) } }
+                }
+                return d
+            }
+            guard let block else { return nil }
+            blocks.append(block)
+        }
+        return KVPrefix(rows: rows, embeds: embeds, buffers: blocks)
+    }
+
+    /// Writes a snapshot back into rows 0..<rows of the state buffers. False (and nothing trusted) on a layout surprise.
+    private func restoreKV(_ kv: KVPrefix) -> Bool {
+        let names = Self.stateNames()
+        guard kv.buffers.count == names.count else { return false }
+        for (i, (c, name)) in names.enumerated() {
+            let ok: Bool = states[c].withMultiArray(for: name) { a in
+                let nd = a.shape.count
+                guard nd >= 3, a.dataType == .float16 else { return false }
+                let heads = a.shape[nd - 3].intValue, slots = a.shape[nd - 2].intValue, hd = a.shape[nd - 1].intValue
+                let sh = a.strides[nd - 3].intValue, sr = a.strides[nd - 2].intValue
+                guard a.strides[nd - 1].intValue == 1, a.count == heads * slots * hd, kv.rows <= slots,
+                      kv.buffers[i].count == heads * kv.rows * hd * 2 else { return false }
+                kv.buffers[i].withUnsafeBytes { src in
+                    let inp = src.bindMemory(to: Float16.self).baseAddress!, dst = Self.p16(a)
+                    for h in 0..<heads { for r in 0..<kv.rows { memcpy(dst + h * sh + r * sr, inp + (h * kv.rows + r) * hd, hd * 2) } }
+                }
+                return true
+            }
+            if !ok { return false }
+        }
+        return true
     }
 
     /// One decode step of the row in `x` at position `pos`; fills `logits`, returns the hidden array.
@@ -197,7 +273,7 @@ final class ANETalkerEngine {
         let window = Self.windowFrames(promptRows: T)
         let cap = min(requested, window)
         let t0 = Date()
-        try prefill(prompt)
+        let (reused, freshPrefix) = try prefill(prompt)
         // decode mask: rows 0..T-2 visible, the rest hidden until written
         let mp = Self.p16(mask), pl = Self.p16(place), kp = Self.p16(keep)
         for j in 0..<L { mp[j] = j < T - 1 ? 0 : -10000; pl[j] = 0; kp[j] = 1 }
@@ -205,6 +281,7 @@ final class ANETalkerEngine {
         var hidden = try step(T - 1, nil)
         let prefillWall = Date().timeIntervalSince(t0)
         guard Self.allFinite(logits) else { throw QwenANEError.nonFinite("talker logits after prefill") }
+        if let freshPrefix { prompt.voice?.kv = freshPrefix }      // only a prefix that produced finite logits is kept
 
         var pos = T
         var codes: [Int64] = []; codes.reserveCapacity(cap * 16)
@@ -258,7 +335,7 @@ final class ANETalkerEngine {
         }
         if stop == .maxTokens && forced == nil && cap < requested { stop = .contextFull }   // the KV window, not the token cap, ended it
         return GenResult(codes: codes, frames: frames, stop: stop, promptLen: T,
-                         prefillWall: prefillWall, loopWall: Date().timeIntervalSince(t1))
+                         prefillWall: prefillWall, loopWall: Date().timeIntervalSince(t1), prefixRowsReused: reused)
     }
 }
 #else
@@ -272,12 +349,14 @@ final class ANETalkerEngine {
     private(set) var forcedPicks: [[Int]] = []
     var injectNaNLogitsAtFrame: Int? = nil
     var injectNaNSubCodesAtFrame: Int? = nil
+    var usePrefixCache = true
     init(coreMLDirectory dir: URL, host: HostTables) throws {
         throw QwenANEError.invalid("the Neural Engine voice needs a Mac with Apple silicon")
     }
     static func allFinite(_ v: [Float]) -> Bool { v.allSatisfy { $0.isFinite } }
     func resetStates() {}
     static func windowFrames(promptRows T: Int) -> Int { max(0, LMAX - T) }
+    static func cacheableRows(_ p: Prompt) -> Int { 0 }
     func generate(prompt: Prompt, sampler: inout Sampler, eos: Int, maxNew: Int?,
                   cancelled: () -> Bool, onFrame: (Int, ArraySlice<Int64>) throws -> Void) throws -> GenResult {
         throw QwenANEError.invalid("the Neural Engine voice needs a Mac with Apple silicon")

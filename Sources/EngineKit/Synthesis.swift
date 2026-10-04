@@ -59,6 +59,11 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// audio, today's behaviour. Applied post-`SpeedAdjust` so a preset's
     /// tuning is not silently altered by an unrelated `speed` value.
     public var fx: FXPreset?
+    /// qwen3-0.6b-ane streaming only: frames (80 ms each, 1...12) in the first vocoder chunk. nil = the default 12.
+    /// A smaller first chunk puts the first audio out sooner (4 saves about half a second) but leaves less audio
+    /// buffered ahead of playback, so the stream only plays without gaps while the render stays faster than real
+    /// time. The samples are the same up to Neural Engine rounding (below -40 dBFS).
+    public var firstChunkFrames: Int?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -70,7 +75,9 @@ public struct SynthesisRequest: Sendable, Equatable {
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
-                fx: FXPreset? = nil) {
+                fx: FXPreset? = nil,
+                firstChunkFrames: Int? = nil) {
+        self.firstChunkFrames = firstChunkFrames
         self.dialoguePrefix = dialoguePrefix
         self.fx = fx
         self.text = text
@@ -133,6 +140,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var tShift: Float?
     /// LuxTTS only: dual-path 48k output toggle (nil = model default true).
     public var returnSmooth: Bool?
+    /// qwen3-0.6b-ane only: frames in the first streamed vocoder chunk (nil = 12).
+    public var firstChunkFrames: Int?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
@@ -140,7 +149,8 @@ public struct ProviderRequest: Sendable, Equatable {
                 language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
-                tShift: Float? = nil, returnSmooth: Bool? = nil) {
+                tShift: Float? = nil, returnSmooth: Bool? = nil, firstChunkFrames: Int? = nil) {
+        self.firstChunkFrames = firstChunkFrames
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
@@ -305,7 +315,8 @@ enum RequestPlanner {
             guidanceScale: knobs.guidanceScale != nil ? request.guidanceScaleOverride : nil,
             tShift: knobs.tShift != nil ? request.tShiftOverride : nil,
             returnSmooth: knobs.returnSmooth != nil
-                ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil
+                ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil,
+            firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil
         )
     }
 }

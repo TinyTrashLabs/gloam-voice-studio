@@ -415,7 +415,8 @@ public enum APIRouter {
                     topP: req.top_p, topK: req.top_k,
                     repetitionPenalty: req.repetition_penalty,
                     dialoguePrefix: speechPrefix,
-                    fx: fxPreset)
+                    fx: fxPreset,
+                    firstChunkFrames: req.first_chunk_frames)
                 if wantsStream {
                     let gainDb = trimSlug.map { deps.voices.gainDb(for: $0) } ?? 0
                     let response = try await streamedSpeech(
@@ -432,13 +433,14 @@ public enum APIRouter {
                     // note there and gloam-dj #297. Synthesis is the measured
                     // starver (a sustained generation stalled MusicKit
                     // mid-song on the gloam.fm shell).
+                    let lane = deps.speechLane(for: backend)
                     result = try await Task(priority: GloamEngine.modelWorkPriority) {
-                        try await deps.gate.run {
-                            await deps.prepareTTS()
+                        try await lane.gate.run {
+                            await lane.prepare()
                             // Interleaved: with a chat stream in flight this runs
                             // between its deltas (speak-while-generating); with
                             // none it is exactly `synthesize`.
-                            return try await deps.engine.synthesizeInterleaved(
+                            return try await lane.engine.synthesizeInterleaved(
                                 backend: backend, request: synthRequest)
                         }
                     }.value
@@ -470,6 +472,54 @@ public enum APIRouter {
                 throw APIError(status: .badRequest, detail: "\(b.rawValue) requires 'instruct'")
             } catch EngineError.speakerRequired(let b) {
                 throw APIError(status: .badRequest, detail: "\(b.rawValue) requires a preset 'speaker'")
+            } catch let error as EngineError {
+                throw speechAPIError(error)
+            }
+        }
+
+        // Warmup: load a model and prepare a voice ahead of the first line. A client that knows what it will
+        // speak next (Furby, before a conversation) calls this; on qwen3-0.6b-ane it removes the ~44 s a cold
+        // first request pays (Core ML load, voice preparation, first-call compilation, per-voice caches).
+        // Runs in the same lane as speech for the model, so it queues behind a render on that lane only.
+        router.post("v1/audio/warmup") { request, context in
+            let req = try await request.decode(as: WarmupRequest.self, context: context)
+            let backend = req.model.flatMap(BackendID.init(rawValue:))
+                ?? BackendID.migrating(rawValue: deps.defaultModel())
+                ?? deps.defaultBackend
+            let controls = backend.controls
+            let defaultVoice = deps.defaultVoice()
+            let slug = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            var refPath: String? = nil, refText: String? = nil
+            if controls.voiceClone != .none {
+                guard let slug else {
+                    throw APIError(status: .badRequest, detail: "\(backend.rawValue) requires a 'voice'")
+                }
+                guard let found = try? deps.voices.get(slug) else {
+                    throw APIError(status: .badRequest, detail: "voice '\(slug)' not found")
+                }
+                refPath = found.refURL.path
+                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+            }
+            let warmRequest = SynthesisRequest(
+                text: "Ready.", refAudioPath: refPath, refText: refText, emotion: .neutral, speed: 1.0,
+                speaker: controls.presetSpeakers.first)
+            let lane = deps.speechLane(for: backend)
+            do {
+                let seconds = try await Task(priority: GloamEngine.modelWorkPriority) {
+                    try await lane.gate.run {
+                        await lane.prepare()
+                        return try await lane.engine.warm(backend: backend, request: warmRequest)
+                    }
+                }.value
+                var json: [String: Any] = ["model": backend.rawValue, "seconds": seconds]
+                if let slug { json["voice"] = slug }
+                let body = try JSONSerialization.data(withJSONObject: json)
+                return Response(status: .ok, headers: [.contentType: "application/json"],
+                                body: .init(byteBuffer: ByteBuffer(data: body)))
+            } catch is RequestGate.Busy {
+                throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+            } catch EngineError.licenseAckRequired(let b) {
+                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
             } catch let error as EngineError {
                 throw speechAPIError(error)
             }
@@ -835,11 +885,12 @@ private final class SpeechPieces: @unchecked Sendable {
 private func streamedSpeech(backend: BackendID, request: SynthesisRequest, gainDb: Double,
                             deps: APIDependencies) async throws -> Response {
     let (pieces, continuation) = AsyncThrowingStream<SpeechPiece, Error>.makeStream()
+    let lane = deps.speechLane(for: backend)
     let work = Task(priority: GloamEngine.modelWorkPriority) {
         do {
-            try await deps.gate.run {
-                await deps.prepareTTS()
-                for try await chunk in await deps.engine.synthesizeStreamInterleaved(
+            try await lane.gate.run {
+                await lane.prepare()
+                for try await chunk in await lane.engine.synthesizeStreamInterleaved(
                     backend: backend, request: request)
                 {
                     let samples = AudioAssembler.applyGain(floats: chunk.samples, db: gainDb)

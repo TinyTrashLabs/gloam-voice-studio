@@ -154,6 +154,15 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
 
     var sampleRate: Int { model.sampleRate }
 
+    /// Qwen clone voices: render one short word so the first real line does not pay the Metal kernel compile
+    /// and the reference context (speaker embedding + codec tokens, cached per reference below). The audio is dropped.
+    func warm(_ request: ProviderRequest) async throws {
+        guard backend.isQwen, request.refAudioPath != nil else { return }
+        var r = request
+        r.text = "Ready."
+        _ = try await synthesize(r)
+    }
+
     private func referenceAudio(for path: String) throws -> MLXArray {
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate]
             as? Date) ?? .distantPast

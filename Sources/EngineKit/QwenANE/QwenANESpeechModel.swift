@@ -39,6 +39,8 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         self.cacheRoot = cacheRoot
         do { engine = try QwenANEEngine(modelsDirectory: modelsDirectory) }
         catch { throw EngineError.generationFailed(backend: .qwen06BANE, message: "loading the model set at \(modelsDirectory.path): \(error)") }
+        // A/B switch for measurements: GLOAM_QWEN_ANE_PREFIX_CACHE=0 renders every line from row 0 (same audio, slower).
+        engine.options.prefixCache = ProcessInfo.processInfo.environment["GLOAM_QWEN_ANE_PREFIX_CACHE"] != "0"
     }
 
     public static func load(cacheRoot: URL = QwenANESpeechModel.defaultCacheRoot()) async throws -> QwenANESpeechModel {
@@ -119,19 +121,46 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         }
     }
 
+    /// Prepares the request's voice (reference encoding, cached on disk), the engine's per-voice prompt rows,
+    /// talker KV prefix and vocoder priming, and runs three frames through every Core ML function, so the
+    /// first real line of the voice skips all of it. A request without a reference voice has nothing to prepare.
+    public func warm(_ request: ProviderRequest) async throws {
+        guard request.refAudioPath != nil else { return }
+        let stopped = StopFlag()
+        let engine = engine
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                queue.async { [self] in
+                    do {
+                        if stopped.value { cont.resume(returning: ()); return }
+                        let voice = try voice(for: request)
+                        try engine.warm(voice: voice, cancelled: { stopped.value })
+                        cont.resume(returning: ())
+                    } catch let e as EngineError {
+                        cont.resume(throwing: e)
+                    } catch {
+                        cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
+                    }
+                }
+            }
+        } onCancel: { stopped.set() }
+    }
+
     public func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {
         AsyncThrowingStream { continuation in
             let stopped = StopFlag()
             continuation.onTermination = { _ in stopped.set() }
             let engine = engine
             let text = request.text
+            // [n, 2n, 12]: a short first chunk that grows back to whole chunks
+            let schedule: [Int]? = request.firstChunkFrames.map { n in n >= 12 ? [12] : [n, min(12, 2 * n), 12] }
             // Voice prep can be slow on a voice's first line (encoders on the CPU), so it runs on the queue
             // too, and an error there reaches the consumer before any audio.
             queue.async { [self] in
                 do {
                     let voice = try voice(for: request)
-                    let r = try engine.render(text: text, voice: voice, cancelled: { stopped.value },
-                                              onAudio: { continuation.yield($0) })
+                    let r = try engine.render(text: text, voice: voice, chunkFrames: schedule,
+                                              cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
                     if r.stopReason == .contextFull {
                         NSLog("qwen3-0.6b-ane: line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
                     }
