@@ -80,6 +80,11 @@ public enum AvatarImage {
         data.count >= pngSignature.count && data.prefix(pngSignature.count).elementsEqual(pngSignature)
     }
 
+    /// Whether `data` starts with the JPEG signature (SOI marker).
+    public static func isJPEG(_ data: Data) -> Bool {
+        data.count >= 3 && data.prefix(3).elementsEqual([0xFF, 0xD8, 0xFF])
+    }
+
     /// Pixel dimensions of an encoded image, without decoding its pixels.
     public static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),

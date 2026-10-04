@@ -106,21 +106,30 @@ struct APIVoice: Codable, ResponseEncodable {
     /// The takes inside this voice's folder (`nova` → `["excited"]`), each
     /// addressable as `"<slug>-<key>"`. Additive: older clients ignore it.
     let variants: [String]
+    /// Every language the voice speaks (its own plus its takes'), as written. Additive.
+    let languages: [String]
+    /// Whether the voice carries an avatar (`GET /voices/<slug>/avatar`). Additive.
+    let hasAvatar: Bool
 
-    init(meta: VoiceMeta, capabilities: VoiceCapabilities, variants: [String] = []) {
+    init(meta: VoiceMeta, capabilities: VoiceCapabilities, variants: [String] = [],
+         languages: [String] = [], hasAvatar: Bool = false) {
         self.meta = meta
         self.hasSource = capabilities.hasSource
         self.engines = capabilities.engines.sorted()
         self.variants = variants
+        self.languages = languages
+        self.hasAvatar = hasAvatar
     }
 
-    enum ExtraKeys: String, CodingKey { case hasSource, engines, variants }
+    enum ExtraKeys: String, CodingKey { case hasSource, engines, variants, languages, hasAvatar }
     func encode(to encoder: Encoder) throws {
         try meta.encode(to: encoder)
         var c = encoder.container(keyedBy: ExtraKeys.self)
         try c.encode(hasSource, forKey: .hasSource)
         try c.encode(engines, forKey: .engines)
         try c.encode(variants, forKey: .variants)
+        try c.encode(languages, forKey: .languages)
+        try c.encode(hasAvatar, forKey: .hasAvatar)
     }
     init(from decoder: Decoder) throws {
         meta = try VoiceMeta(from: decoder)
@@ -128,6 +137,8 @@ struct APIVoice: Codable, ResponseEncodable {
         hasSource = try c.decodeIfPresent(Bool.self, forKey: .hasSource) ?? false
         engines = try c.decodeIfPresent([String].self, forKey: .engines) ?? []
         variants = try c.decodeIfPresent([String].self, forKey: .variants) ?? []
+        languages = try c.decodeIfPresent([String].self, forKey: .languages) ?? []
+        hasAvatar = try c.decodeIfPresent(Bool.self, forKey: .hasAvatar) ?? false
     }
 }
 
@@ -159,14 +170,48 @@ struct VoiceCreateRequest: Codable {
     let refText: String?
 }
 
-struct VoiceUpdateRequest: Codable {
+struct VoiceUpdateRequest: Decodable {
     let name: String?
     let refAudio: String?         // base64 wav, replaces ref.wav
     let refText: String?
+    /// Free-form description; "" clears it.
+    let notes: String?
+    /// Absent leaves the persona alone; a full object sets it; `null` clears it.
+    let persona: Persona??
+
+    enum CodingKeys: String, CodingKey { case name, refAudio, refText, notes, persona }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        refAudio = try c.decodeIfPresent(String.self, forKey: .refAudio)
+        refText = try c.decodeIfPresent(String.self, forKey: .refText)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        // `decodeIfPresent` is nil for both a missing key and `null`, so presence is read off the key.
+        persona = c.contains(.persona) ? .some(try c.decodeIfPresent(Persona.self, forKey: .persona)) : nil
+    }
 }
 
 struct VoiceImportRequest: Codable {
     let data: String              // base64 .gvoice zip
+    /// Replace the local voice when the pack is a newer version of it (same `id`, higher `revision`).
+    /// Default false: a known id is kept alongside as a copy with a new id.
+    let update: Bool?
+}
+
+/// `POST /voices/<slug>/variants` — a take that speaks another language.
+struct VariantCreateRequest: Codable {
+    let language: String          // BCP-47 ("es", "en-US")
+    let refAudio: String          // base64 wav
+    let refText: String           // what the reference says, in that language
+}
+
+/// `POST /voices/design` — design a voice from a description and keep it.
+struct VoiceDesignRequest: Codable {
+    let name: String
+    let instruct: String          // the voice, described
+    let script: String            // what it says in the saved reference
+    let language: String?
+    let persona: Persona?
 }
 
 struct ListenRequest: Codable {

@@ -87,7 +87,9 @@ public enum APIRouter {
         router.get("voices") { _, _ in
             VoicesResponse(voices: deps.voices.list().map {
                 APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug),
-                         variants: deps.voices.layout.variantKeys(of: $0.slug))
+                         variants: deps.voices.layout.variantKeys(of: $0.slug),
+                         languages: deps.voices.languages(of: $0.slug),
+                         hasAvatar: deps.voices.avatarURL($0.slug) != nil)
             })
         }
 
@@ -116,9 +118,13 @@ public enum APIRouter {
             }
             let name = req.name?.trimmingCharacters(in: .whitespacesAndNewlines)
             return try mapStoreErrors {
-                try deps.voices.update(slug,
-                                       name: (name?.isEmpty == false) ? name : nil,
-                                       refText: req.refText, refWav: raw)
+                var meta = try deps.voices.update(slug,
+                                                  name: (name?.isEmpty == false) ? name : nil,
+                                                  refText: req.refText, refWav: raw, notes: req.notes)
+                if let persona = req.persona {
+                    meta = try deps.voices.setPersona(meta.slug, persona: persona)
+                }
+                return meta
             }
         }
 
@@ -128,6 +134,86 @@ public enum APIRouter {
                 try deps.voices.delete(slug)
                 return OkResponse(ok: true)
             }
+        }
+
+        // Avatar: the voice's picture. PUT takes a raw PNG or JPEG body and stores the pack's
+        // conforming 256x256 PNG (AvatarImage), so what is served back is always that PNG.
+        router.get("voices/:slug/avatar") { _, context -> Response in
+            let slug = try context.parameters.require("slug")
+            let url = try mapStoreErrors { () -> URL in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                guard let url = deps.voices.avatarURL(slug) else {
+                    throw APIError(status: .notFound, detail: "voice '\(slug)' has no avatar")
+                }
+                return url
+            }
+            let data = try Data(contentsOf: url)
+            var headers = HTTPFields()
+            headers[.contentType] = "image/png"
+            headers[.contentLength] = String(data.count)
+            return Response(status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(data: data)))
+        }
+
+        router.put("voices/:slug/avatar") { request, context in
+            let slug = try context.parameters.require("slug")
+            var buffer = try await request.body.collect(upTo: 16 * 1024 * 1024)
+            let body = buffer.readData(length: buffer.readableBytes) ?? Data()
+            guard AvatarImage.isPNG(body) || AvatarImage.isJPEG(body),
+                  let png = AvatarImage.png(from: body) else {
+                throw APIError(status: .badRequest, detail: "body is not a PNG or JPEG image")
+            }
+            return try mapStoreErrors { () -> VoiceMeta in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                try deps.voices.saveAvatar(slug, pngData: png)
+                return try deps.voices.meta(slug)
+            }
+        }
+
+        router.delete("voices/:slug/avatar") { _, context in
+            let slug = try context.parameters.require("slug")
+            return try mapStoreErrors { () -> OkResponse in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                try deps.voices.removeAvatar(slug)
+                return OkResponse(ok: true)
+            }
+        }
+
+        // Language takes: a take of the voice that speaks another language, tagged so a render in
+        // that language (`language` on /v1/audio/speech) uses its reference.
+        router.post("voices/:slug/variants") { request, context in
+            let slug = try context.parameters.require("slug")
+            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            guard let data = buffer.readData(length: buffer.readableBytes),
+                  let req = try? JSONDecoder().decode(VariantCreateRequest.self, from: data) else {
+                throw APIError(status: .badRequest,
+                               detail: "body must be {language, refAudio, refText}")
+            }
+            guard VoiceLibrary.languageKey(req.language) != nil else {
+                throw APIError(status: .badRequest,
+                               detail: "language must be a BCP-47 tag such as 'es' or 'en-US'")
+            }
+            guard let raw = Data(base64Encoded: req.refAudio), !raw.isEmpty else {
+                throw APIError(status: .badRequest, detail: "refAudio is not valid base64")
+            }
+            guard !req.refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw APIError(status: .badRequest, detail: "refText is empty")
+            }
+            return try mapStoreErrors {
+                try deps.voices.addLanguageTake(slug, language: req.language, refWav: raw,
+                                                refText: req.refText)
+            }
+        }
+
+        // Design and keep: render `script` on qwen3-design from `instruct`, save the result as a voice.
+        router.post("voices/design") { request, context in
+            let req = try await request.decode(as: VoiceDesignRequest.self, context: context)
+            return try await designVoice(req, deps: deps)
         }
 
         router.get("voices/:slug/export") { _, context in
@@ -148,12 +234,8 @@ public enum APIRouter {
             guard let raw = Data(base64Encoded: req.data) else {
                 throw APIError(status: .badRequest, detail: "data is not valid base64")
             }
-            return try mapStoreErrors { () -> VoiceMeta in
-                let meta = try GVoice.import(raw, into: deps.voices)
-                // Sync can deliver a take's old standalone pack before its
-                // voice; once the voice is here, fold the take into it.
-                try? deps.voices.foldLegacyVariants(log: { _ in })
-                return meta
+            return try mapStoreErrors {
+                try deps.voices.importPack(raw, update: req.update ?? false)
             }
         }
 
@@ -365,6 +447,12 @@ public enum APIRouter {
                     // An emotion-variant miss still falls back to the base voice —
                     // only a base miss is fatal.
                     resolved = (voice, found.meta, found.refURL)
+                }
+                // A `language` the voice has a take for renders from THAT take's reference (a bilingual
+                // voice: Benson's `es`), unless an emotion take already stands in for the voice.
+                if clones, !usedVariant, let base = resolved,
+                   let take = deps.voices.take(of: base.slug, language: req.language) {
+                    resolved = (take.meta.slug, take.meta, take.refURL)
                 }
                 if let resolved {
                     // An empty transcript is the same failure wearing a disguise on
@@ -740,6 +828,49 @@ public enum APIRouter {
         }
 
         return router
+    }
+
+    /// Renders `script` on qwen3-design from `instruct` and saves it as a new voice — the one call behind
+    /// `POST /voices/design` and the `design_voice` MCP tool. The saved reference is the render itself
+    /// (script as its transcript), the instruct is kept in `engines/qwen3-design/voice.json`.
+    static func designVoice(_ req: VoiceDesignRequest, deps: APIDependencies) async throws -> VoiceMeta {
+        func blank(_ s: String) -> Bool { s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !blank(req.name) else { throw APIError(status: .badRequest, detail: "name is empty") }
+        guard !blank(req.instruct) else { throw APIError(status: .badRequest, detail: "instruct is empty") }
+        guard !blank(req.script) else { throw APIError(status: .badRequest, detail: "script is empty") }
+        // Fail on a taken name before spending a render on it.
+        let slug = try mapStoreErrors { try Slug.slugify(req.name) }
+        guard deps.voices.locate(slug) == nil else {
+            throw APIError(status: .conflict, detail: "voice '\(slug)' already exists")
+        }
+        let backend = BackendID.qwenDesign
+        let synth = SynthesisRequest(text: req.script, refAudioPath: nil, refText: nil,
+                                     emotion: .neutral, speed: 1.0,
+                                     instruct: req.instruct, language: req.language)
+        let result: SynthesisResult
+        do {
+            let lane = deps.speechLane(for: backend)
+            result = try await Task(priority: GloamEngine.modelWorkPriority) {
+                try await lane.gate.run {
+                    await lane.prepare()
+                    return try await lane.engine.synthesize(backend: backend, request: synth)
+                }
+            }.value
+        } catch is RequestGate.Busy {
+            throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+        } catch EngineError.licenseAckRequired(let b) {
+            throw APIError(status: .forbidden, detail: licenseNotice(for: b))
+        } catch let error as EngineError {
+            throw speechAPIError(error)
+        }
+        let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples), sampleRate: result.sampleRate)
+        let direction = try JSONEncoder().encode(["instruct": req.instruct])
+        return try mapStoreErrors {
+            var meta = try deps.voices.save(name: req.name, refWav: wav, refText: req.script,
+                                            engines: [backend.rawValue: ["voice.json": direction]])
+            if let persona = req.persona { meta = try deps.voices.setPersona(meta.slug, persona: persona) }
+            return meta
+        }
     }
 
     /// Evicts the resident models `target` names from the server's engine and
