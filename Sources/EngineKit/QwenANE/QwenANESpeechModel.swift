@@ -145,11 +145,12 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     public func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         let voice = try voice(for: request)
         let text = request.text
+        let language = request.language
         let engine = engine
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 do {
-                    let r = try engine.render(text: text, voice: voice)
+                    let r = try engine.render(text: text, voice: voice, language: language)
                     cont.resume(returning: r.samples)
                 } catch {
                     cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
@@ -189,6 +190,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
             continuation.onTermination = { _ in stopped.set() }
             let engine = engine
             let text = request.text
+            let language = request.language
             // [n, 2n, 12]: a short first chunk that grows back to whole chunks
             let schedule: [Int]? = request.firstChunkFrames.map { n in n >= 12 ? [12] : [n, min(12, 2 * n), 12] }
             // Voice prep can be slow on a voice's first line (encoders on the CPU), so it runs on the queue
@@ -196,7 +198,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
             queue.async { [self] in
                 do {
                     let voice = try voice(for: request)
-                    let r = try engine.render(text: text, voice: voice, chunkFrames: schedule,
+                    let r = try engine.render(text: text, voice: voice, chunkFrames: schedule, language: language,
                                               cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
                     if r.stopReason == .contextFull {
                         NSLog("qwen3-0.6b-ane: line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
