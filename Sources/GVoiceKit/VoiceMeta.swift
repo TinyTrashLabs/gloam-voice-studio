@@ -9,11 +9,22 @@ import Foundation
 /// Chat persona attached to a voice. Kept as its own struct so it can later be
 /// lifted into a standalone Character entity (spec: personas now, characters later).
 public struct Persona: Codable, Equatable, Sendable {
+    /// Who this voice is, written for an LLM ("You are Benson, a warm late-night bartender…").
     public var systemPrompt: String
     public var greeting: String?
-    public init(systemPrompt: String, greeting: String? = nil) {
+    /// One line under the name ("late-night bartender from Mendoza").
+    public var tagline: String?
+    /// Short lines the character says now and then.
+    public var catchphrases: [String]?
+    /// Signature color as "#RRGGBB".
+    public var color: String?
+    public init(systemPrompt: String, greeting: String? = nil, tagline: String? = nil,
+                catchphrases: [String]? = nil, color: String? = nil) {
         self.systemPrompt = systemPrompt
         self.greeting = greeting
+        self.tagline = tagline
+        self.catchphrases = catchphrases
+        self.color = color
     }
 }
 
