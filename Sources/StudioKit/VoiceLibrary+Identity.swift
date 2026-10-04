@@ -105,8 +105,15 @@ extension VoiceLibrary {
     static func primaryLanguage(_ language: String?) -> String? {
         guard let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty
         else { return nil }
-        return raw.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init)
+        let primary = raw.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init)
+        // Studio's picker speaks language names ("spanish"); takes are tagged with codes ("es").
+        return primary.map { languageNames[$0] ?? $0 }
     }
+
+    private static let languageNames = [
+        "english": "en", "chinese": "zh", "japanese": "ja", "korean": "ko", "german": "de",
+        "french": "fr", "russian": "ru", "portuguese": "pt", "spanish": "es", "italian": "it",
+    ]
 
     /// Imports a `.gvoice` keeping its identity. A pack whose `id` a voice here already has and whose
     /// `revision` is higher is an update: with `update`, the local voice is replaced by it; otherwise

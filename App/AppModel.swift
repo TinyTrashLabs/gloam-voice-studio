@@ -1455,7 +1455,11 @@ final class AppModel {
         // rule as the API's `usedVariant`: never direct a performance twice.
         var requestEmotion = emotion
         if let slug = voiceSlug {
-            if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
+            // A neutral render in a language the voice has a take for clones that take (a bilingual
+            // voice's Spanish recording for Spanish text), same as the API.
+            let languageTake = resolveEmotion == .neutral && controls.language
+                ? voices.take(of: slug, language: language) : nil
+            if let found = languageTake ?? (try? voices.resolve(slug, emotion: resolveEmotion)) {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug

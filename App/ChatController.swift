@@ -447,8 +447,11 @@ final class ChatController {
 
     private func makeRequest(for convo: Conversation) -> ChatRequest {
         let meta = try? app.voices.meta(convo.voiceSlug)
-        let system = PersonaPromptBuilder.systemPrompt(
+        var system = PersonaPromptBuilder.systemPrompt(
             voiceName: meta?.name ?? convo.voiceSlug, persona: meta?.persona)
+        if let name = StudioView.languages.first(where: { $0.0 == app.language && $0.0 != "auto" })?.1 {
+            system += "\n\nAlways reply in \(name), whatever language the user writes in."
+        }
         var turns = [ChatTurn(role: .system, content: system)]
         turns += convo.messages.map {
             ChatTurn(role: $0.role == "user" ? .user : .assistant, content: $0.text)
