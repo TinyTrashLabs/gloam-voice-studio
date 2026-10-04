@@ -16,7 +16,7 @@ enum MCPRoute {
 
     static func add(to router: Router<BasicRequestContext>, deps: APIDependencies) {
         router.post("mcp") { request, context -> Response in
-            var buffer = try await request.body.collect(upTo: 4 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: APIRouter.maxLibraryBodyBytes)
             guard let data = buffer.readData(length: buffer.readableBytes),
                   let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {

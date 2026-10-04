@@ -220,6 +220,41 @@ final class VoiceIdentityAPITests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    /// A real pack is a few MB (3.5 MB measured), so its base64 JSON is past the framework's 2 MB
+    /// `request.decode` default: import, create and patch must take it, not answer 413.
+    func testLibraryRoutesAcceptBodiesPastTheDefaultLimit() async throws {
+        var rng = SystemRandomNumberGenerator()
+        let big = Data((0..<(5 * 1024 * 1024)).map { _ in UInt8.random(in: 0...255, using: &rng) })
+        _ = try voices.save(name: "Big", refWav: big, refText: "hi")
+        let pack = try GVoice.export("big", from: voices)
+        XCTAssertGreaterThan(pack.count, 4 * 1024 * 1024)
+        try await app().test(.router) { client in
+            _ = try await self.send(client, "/voices/big", .delete)
+            var r = try await self.send(client, "/voices/import", .post, ["data": pack.base64EncodedString()])
+            XCTAssertEqual(r.status, .ok, "\(r.body)")
+            XCTAssertEqual(r.body["slug"] as? String, "big")
+            r = try await self.send(client, "/voices", .post,
+                ["name": "Big Two", "refAudio": big.base64EncodedString(), "refText": "hi"])
+            XCTAssertEqual(r.status, .ok, "\(r.body)")
+            r = try await self.send(client, "/voices/big", .patch,
+                ["refAudio": big.base64EncodedString()])
+            XCTAssertEqual(r.status, .ok, "\(r.body)")
+            // Not JSON at all is still a clean 400.
+            try await client.execute(uri: "/voices/import", method: .post,
+                                     body: ByteBuffer(string: "nope")) { resp in
+                XCTAssertEqual(resp.status, .badRequest)
+            }
+            // MCP: the same size of base64 audio goes through transcribe's `audio`.
+            let rpc = try JSONSerialization.data(withJSONObject: [
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": ["name": "list_voices", "arguments": ["pad": big.base64EncodedString()]],
+            ] as [String: Any])
+            try await client.execute(uri: "/mcp", method: .post, body: ByteBuffer(data: rpc)) { resp in
+                XCTAssertEqual(resp.status, .ok)
+            }
+        }
+    }
+
     // MARK: MCP
 
     private func call(_ client: some TestClientProtocol, _ tool: String,

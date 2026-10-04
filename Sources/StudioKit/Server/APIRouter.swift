@@ -94,7 +94,7 @@ public enum APIRouter {
         }
 
         router.post("voices") { request, context in
-            let req = try await request.decode(as: VoiceCreateRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceCreateRequest.self, from: request)
             guard !req.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw APIError(status: .badRequest, detail: "name is empty")
             }
@@ -108,7 +108,7 @@ public enum APIRouter {
 
         router.patch("voices/:slug") { request, context in
             let slug = try context.parameters.require("slug")
-            let req = try await request.decode(as: VoiceUpdateRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceUpdateRequest.self, from: request)
             var raw: Data? = nil
             if let b64 = req.refAudio, !b64.isEmpty {
                 guard let decoded = Data(base64Encoded: b64) else {
@@ -158,7 +158,7 @@ public enum APIRouter {
 
         router.put("voices/:slug/avatar") { request, context in
             let slug = try context.parameters.require("slug")
-            var buffer = try await request.body.collect(upTo: 16 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
             let body = buffer.readData(length: buffer.readableBytes) ?? Data()
             guard AvatarImage.isPNG(body) || AvatarImage.isJPEG(body),
                   let png = AvatarImage.png(from: body) else {
@@ -188,7 +188,7 @@ public enum APIRouter {
         // that language (`language` on /v1/audio/speech) uses its reference.
         router.post("voices/:slug/variants") { request, context in
             let slug = try context.parameters.require("slug")
-            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
             guard let data = buffer.readData(length: buffer.readableBytes),
                   let req = try? JSONDecoder().decode(VariantCreateRequest.self, from: data) else {
                 throw APIError(status: .badRequest,
@@ -212,7 +212,7 @@ public enum APIRouter {
 
         // Design and keep: render `script` on qwen3-design from `instruct`, save the result as a voice.
         router.post("voices/design") { request, context in
-            let req = try await request.decode(as: VoiceDesignRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceDesignRequest.self, from: request)
             return try await designVoice(req, deps: deps)
         }
 
@@ -230,7 +230,7 @@ public enum APIRouter {
         }
 
         router.post("voices/import") { request, context in
-            let req = try await request.decode(as: VoiceImportRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceImportRequest.self, from: request)
             guard let raw = Data(base64Encoded: req.data) else {
                 throw APIError(status: .badRequest, detail: "data is not valid base64")
             }
@@ -775,7 +775,7 @@ public enum APIRouter {
             // default 2 MB body cap rejects real audio. Collect the body
             // directly at a Lab-sized limit (this is a local dev tool) the way
             // the MCP route does, then decode from the buffer.
-            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
             guard let data = buffer.readData(length: buffer.readableBytes),
                   let req = try? JSONDecoder().decode(LabClipRequest.self, from: data)
             else {
@@ -828,6 +828,20 @@ public enum APIRouter {
         }
 
         return router
+    }
+
+    /// Library bodies carry whole recordings and packs as base64 (a normal 3.5 MB pack is 4.7 MB of JSON),
+    /// and `request.decode` stops at the framework's 2 MB default, so they are collected at this ceiling
+    /// instead — the same one the Lab and variant routes use. A local tool, not an upload endpoint.
+    static let maxLibraryBodyBytes = 64 * 1024 * 1024
+
+    static func decodeLargeBody<T: Decodable>(_ type: T.Type, from request: Request) async throws -> T {
+        var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
+        guard let data = buffer.readData(length: buffer.readableBytes),
+              let value = try? JSONDecoder().decode(type, from: data) else {
+            throw APIError(status: .badRequest, detail: "request body is not valid JSON for this route")
+        }
+        return value
     }
 
     /// Renders `script` on qwen3-design from `instruct` and saves it as a new voice — the one call behind
