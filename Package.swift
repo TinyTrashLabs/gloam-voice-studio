@@ -11,11 +11,24 @@ let package = Package(
         // without dragging in MLX, ONNX, WhisperKit or an HTTP server. This is
         // what gloam-voice-studio-ios depends on.
         .library(name: "GVoiceKit", targets: ["GVoiceKit"]),
+        .library(name: "GVoiceProductionKit", targets: ["GVoiceProductionKit"]),
+        .library(name: "GVoiceDemucsKit", targets: ["GVoiceDemucsKit"]),
         .library(name: "SpeechKit", targets: ["SpeechKit"]),
+        // Qwen3-TTS 0.6B on the Neural Engine (Core ML). Foundation + CoreML +
+        // Accelerate ONLY: no MLX, no ONNX Runtime, so the iOS radio app and
+        // the Studio apps can link it alone.
+        .library(name: "QwenANE", targets: ["QwenANE"]),
         // Character-voice effects. Foundation + Accelerate + one C shim ONLY —
         // deliberately no EngineKit, so the Furby control app (and anything
         // else) can get a voice changer without linking a TTS stack.
         .library(name: "VoiceFXKit", targets: ["VoiceFXKit"]),
+        // The voice editor, shared by the Studio app and (later) the radio app:
+        // detail/advanced screens, takes, reference window, avatar, pack share,
+        // and the pure rules behind them. Reads and writes a `VoiceLibraryStore`
+        // the host implements; app-specific work (engine render, ASR) arrives as
+        // optional `VoiceEditorCapabilities`. GVoiceKit + SwiftUI only -- no
+        // EngineKit, so it links on iOS and macOS without MLX.
+        .library(name: "GloamVoiceUI", targets: ["GloamVoiceUI"]),
     ],
     dependencies: [
         // Vendored fork of Blaizzy/mlx-audio-swift with the Chatterbox regular-model
@@ -74,15 +87,18 @@ let package = Package(
         // `breeze-tts-2` backend — with an adjustable CFG scale
         // (BreezeTTSModel.cfgScaleOverride), a cached reference prefix,
         // static sampler defaults and tested guidance rules. No other model
-        // touched. Repin to the merge commit once that branch lands.
+        // touched.
         // eac586e (2026-10-03, feat/breeze-tts) defaults Breeze's repetition
         // penalty to upstream's 1.1: at 1.0 a take could loop on a silent
         // frame and leave 10 s+ of dead air at a "(clears throat)".
         // b4c683a (2026-10-03, feat/breeze-tts) adds identity strength
         // (BreezeTTSModel.referenceGuidanceOverride, upstream's dual CFG).
+        // cf35145 (2026-10-03) is the fork's main merging #13 (Breeze, all of
+        // the above) onto 60c05fe, #14's fix for the first-word crack in
+        // streamed Qwen (the decoder is primed with the ICL reference codes).
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "b4c683a37c971a5ea608b25bcf2ce960f1473b14"),
+            revision: "cf35145d3cd02ada01d34037f6e34b2a72c4edde"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -163,9 +179,11 @@ let package = Package(
         .target(
             name: "EngineKit",
             dependencies: [
-                // WAV parsing for ReferenceTail (RefLoudness.dataChunk);
-                // Foundation + ZIPFoundation only, so no cycle.
+                // ReferenceStandard / ReferenceTail live in GVoiceKit now;
+                // EngineKit re-exports it so existing callers compile unchanged.
                 "GVoiceKit",
+                // qwen3-0.6b-ane: Qwen3-TTS on the Neural Engine (Core ML only).
+                "QwenANE",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
@@ -224,7 +242,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
@@ -238,6 +256,58 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .target(
+            name: "GloamVoiceUI",
+            dependencies: ["GVoiceKit"],
+            path: "Sources/GloamVoiceUI",
+            // Swift 5 mode, as the apps that host it build: the moved code was
+            // written under it (global statics, non-Sendable captures).
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "GloamVoiceUITests",
+            dependencies: ["GloamVoiceUI", "GVoiceKit"],
+            path: "Tests/GloamVoiceUITests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .target(
+            name: "GVoiceProductionKit",
+            dependencies: [
+                "GVoiceKit",
+            ],
+            path: "Sources/GVoiceProductionKit"
+        ),
+        // The in-process MLX Demucs adapter for VoiceStemSeparating. macOS
+        // tooling only; an MLX-free iOS app links GVoiceProductionKit alone.
+        .target(
+            name: "GVoiceDemucsKit",
+            dependencies: ["GVoiceProductionKit", "SwiftDemucs"],
+            path: "Sources/GVoiceDemucsKit"
+        ),
+        // MIT-licensed native HTDemucs v4 implementation, vendored from
+        // xocialize/demucs-mlx-swift at b490cc1. Compiled here so the portable
+        // package keeps its macOS 14 deployment floor (upstream's manifest
+        // unnecessarily declares macOS 15; the source uses no 15-only API).
+        .target(
+            name: "SwiftDemucs",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ],
+            path: "Sources/SwiftDemucs"
+        ),
+        .testTarget(
+            name: "GVoiceProductionKitTests",
+            dependencies: ["GVoiceProductionKit", "GVoiceKit"],
+            path: "Tests/GVoiceProductionKitTests"
+        ),
+        .testTarget(
+            name: "GVoiceDemucsKitTests",
+            dependencies: ["GVoiceDemucsKit", "GVoiceProductionKit"],
+            path: "Tests/GVoiceDemucsKitTests"
         ),
         .target(
             name: "StudioKit",
@@ -290,6 +360,21 @@ let package = Package(
                 .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources/SpeechKit"
+        ),
+        .target(
+            name: "QwenANE",
+            // Voice prep: ReferenceTail (GVoiceKit) and the cleanup pipeline's
+            // PreparedReference (GVoiceProductionKit). Both are MLX-free.
+            dependencies: ["GVoiceKit", "GVoiceProductionKit"],
+            path: "Sources/QwenANE",
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "QwenANETests",
+            dependencies: ["QwenANE"],
+            path: "Tests/QwenANETests",
+            exclude: ["make_reference.py", "make_voice_prep_reference.py"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "SpeechKitTests",

@@ -5,6 +5,16 @@ import MLX
 import MLXFFT
 import StudioKit
 import SpeechKit
+import GVoiceProductionKit
+
+if CommandLine.arguments.dropFirst().first == "gvoice-prepare" {
+    do {
+        try await runGVoicePrepare(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("gvoice-prepare failed: \(error)")
+    }
+}
 
 // Times a Dia2 render of one script through the SAME path the app uses, so
 // "is MLX faster than the CPU reference" is a measurement and not a belief.
@@ -568,6 +578,52 @@ if CommandLine.arguments.dropFirst().first == "serve-llm" {
     }
 }
 
+// MARK: - serve-tts subcommand
+//
+// `spike serve-tts [port] [--voices <dir>] [--models <dir>] [--default <backend-id>]` runs the local
+// OpenAI-compatible server headlessly with the real MLX provider (and the Neural Engine backend,
+// `qwen3-0.6b-ane`, via QwenANEModelLocation), so `/v1/audio/speech` can be measured with curl,
+// streamed or not. Voices and models default to the shared Gloam group container the Studio app uses.
+if CommandLine.arguments.dropFirst().first == "serve-tts" {
+    var port = 8791
+    var home = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Group Containers/UT233385J9.fm.gloam")
+    var voicesDir = home.appendingPathComponent("Voices")
+    var modelsDir = home.appendingPathComponent("Models")
+    var defaultBackend: BackendID = .qwen06BMobile
+    var it = CommandLine.arguments.dropFirst(2).makeIterator()
+    while let a = it.next() {
+        switch a {
+        case "--voices": voicesDir = URL(fileURLWithPath: it.next() ?? "")
+        case "--models": modelsDir = URL(fileURLWithPath: it.next() ?? "")
+        case "--default":
+            guard let raw = it.next(), let b = BackendID(rawValue: raw) else { die("--default needs a backend id") }
+            defaultBackend = b
+        default:
+            guard let p = Int(a) else { die("unexpected argument '\(a)'") }
+            port = p
+        }
+    }
+    let modelsRoot = modelsDir
+    let provider = MLXModelProvider(modelPathResolver: { backend in
+        let dir = modelsRoot.appendingPathComponent(backend.diskFolder(quantRaw: nil))
+        return FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path) ? dir.path : nil
+    })
+    let deps = APIDependencies(
+        engine: GloamEngine(provider: provider),
+        voices: VoiceLibrary(directory: voicesDir),
+        defaultBackend: defaultBackend)
+    let server = LocalAPIServer(deps: deps)
+    do {
+        try await server.start(port: port)
+        try await Task.sleep(for: .milliseconds(700))
+        print("serving /v1/audio/speech on http://127.0.0.1:\(port)  voices: \(voicesDir.path)  default model: \(defaultBackend.rawValue)")
+        while true { try await Task.sleep(for: .seconds(86_400)) }
+    } catch {
+        die("serve-tts failed: \(error)")
+    }
+}
+
 // MARK: - lux-phonemes subcommand
 //
 // `spike lux-phonemes "some text"` — dev aid for the MisakiPhonemizer remap
@@ -1058,7 +1114,8 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
     func gvoiceBuildUsage() -> Never {
         die("""
             usage: spike gvoice-build --name <name> --slug <slug> --out <path.gvoice>
-                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--strip-comment-lines]
+                     [--ref-wav <path>] [--ref-text <text> | --ref-text-file <path>] [--provenance-file <path>]
+                     [--strip-comment-lines]
                      [--engine <engineId>:<filename>=<value>]...  [--no-source]
                    <value> is @<path> to read a file's raw bytes, or a literal string written as UTF-8.
             """)
@@ -1070,6 +1127,7 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
     var refWavPath: String?
     var refText: String?
     var refTextFile: String?
+    var provenanceFile: String?
     var stripCommentLines = false
     var includeSource = true
     var engineSpecs: [String] = []
@@ -1083,6 +1141,7 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         case "--ref-wav": refWavPath = it.next()
         case "--ref-text": refText = it.next()
         case "--ref-text-file": refTextFile = it.next()
+        case "--provenance-file": provenanceFile = it.next()
         case "--strip-comment-lines": stripCommentLines = true
         case "--no-source": includeSource = false
         case "--engine":
@@ -1124,6 +1183,9 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         }
 
         let refWav: Data? = try refWavPath.map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+        let provenance: JSONValue? = try provenanceFile.map {
+            try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: $0)))
+        }
 
         // "engineId:filename=value", repeatable.
         var engines: [String: [String: Data]] = [:]
@@ -1150,7 +1212,8 @@ if CommandLine.arguments.dropFirst().first == "gvoice-build" {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let lib = VoiceLibrary(directory: tempDir)
-        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText, engines: engines)
+        try lib.saveAt(slug: slug, name: name, refWav: refWav, refText: resolvedRefText,
+                       provenance: provenance, engines: engines)
         let packData = try GVoice.export(slug, from: lib, includeSource: includeSource)
         try packData.write(to: URL(fileURLWithPath: out))
         print("wrote \(out) (\(packData.count) bytes)")

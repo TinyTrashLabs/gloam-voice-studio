@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 14)
+        XCTAssertEqual(BackendID.allCases.count, 15)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 14)
+        XCTAssertEqual(BackendID.allCases.count, 15)
     }
 
     func testQwenFamilyFlag() {
@@ -189,7 +189,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 14)
+        XCTAssertEqual(BackendID.allCases.count, 15)
     }
 
     func testKokoroSpec() {

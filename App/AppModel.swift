@@ -2055,6 +2055,8 @@ final class AppModel {
             return "Pick a preset speaker for this model."
         case .languageProviderUnavailable:
             return "The model is still loading — try again in a moment."
+        case .modelNotInstalled(let backend, let detail):
+            return "\(backend.rawValue) is not installed: \(detail)"
         case .referenceTooLong(_, let seconds, let maxSeconds):
             return String(
                 format: "This voice's reference clip is %.0fs and could not be trimmed "

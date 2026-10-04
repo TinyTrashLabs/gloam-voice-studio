@@ -72,6 +72,14 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
                 backend: .luxTTS, message: "lux-tts ONNX runs through EngineKit on macOS only")
             #endif
         }
+        if backend == .qwen06BANE {
+            // Core ML on the Neural Engine: nothing here touches MLX or the GPU, so it can run
+            // beside a GPU-bound LLM. The model set is resolved from QwenANEModelLocation.
+            guard #available(macOS 15.0, iOS 18.0, *) else {
+                throw EngineError.generationFailed(backend: backend, message: "qwen3-0.6b-ane needs macOS 15 or iOS 18")
+            }
+            return try await QwenANESpeechModel.load()
+        }
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go
             // through TTS.loadModel like every other case here. It needs a
@@ -180,6 +188,56 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
     /// package default is 2.0. Also the granularity of the trailing-silence
     /// stop, which only runs on this path.
     static let qwenStreamingInterval: Double = 1.0
+
+    /// Qwen Base (0.6B, mobile, 1.7B) streams: each `streamingInterval`-second codec chunk is yielded as
+    /// mlx-audio-swift's `generateStream` produces it, so a client hears the first words after one chunk
+    /// instead of after the whole line. The chunks are the same samples `synthesize` concatenates (raw: no
+    /// silence trimming on either path). Every other model renders whole and arrives as one chunk.
+    func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {
+        guard backend.isQwen, backend != .qwenCustom, let qwen = model as? Qwen3TTSModel else {
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        continuation.yield(try await self.synthesize(request))
+                        continuation.finish()
+                    } catch { continuation.finish(throwing: error) }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var refAudio: MLXArray?
+                    if let path = request.refAudioPath { refAudio = try self.referenceAudio(for: path) }
+                    var params = qwen.defaultGenerationParameters
+                    if let temperature = request.temperature { params.temperature = temperature }
+                    if let topP = request.topP { params.topP = topP }
+                    if let topK = request.topK { params.topK = topK }
+                    if let rep = request.repetitionPenalty { params.repetitionPenalty = rep }
+                    let stream = qwen.generateStream(
+                        text: request.text, voice: request.instruct, refAudio: refAudio,
+                        refText: request.refText, language: request.language,
+                        generationParameters: params, streamingInterval: Self.qwenStreamingInterval)
+                    for try await event in stream {
+                        try Task.checkCancellation()
+                        // The streaming path ends with a 1-sample placeholder.
+                        guard case .audio(let chunk) = event, chunk.size > 1 else { continue }
+                        continuation.yield(chunk.asArray(Float.self))
+                    }
+                    Memory.clearCache()
+                    continuation.finish()
+                } catch let error as EngineError {
+                    Memory.clearCache()
+                    continuation.finish(throwing: error)
+                } catch {
+                    Memory.clearCache()
+                    continuation.finish(throwing: EngineError.generationFailed(backend: self.backend, message: "\(error)"))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         do {
