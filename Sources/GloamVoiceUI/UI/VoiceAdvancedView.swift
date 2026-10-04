@@ -84,7 +84,7 @@ public struct VoiceAdvancedView: View {
         if let seconds = store.masterSeconds(of: voice.slug), seconds > ReferenceWindowRule.adviseAboveSeconds || voice.hasWindow {
             Section {
                 NavigationLink {
-                    ReferenceWindowEditor(voice: voice)
+                    ReferenceWindowEditor(voice: voice).voiceEditorHost(host)
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         if let w = store.window(of: voice.slug) {

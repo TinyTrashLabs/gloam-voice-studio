@@ -465,7 +465,9 @@ public struct VoiceDetailView<Extra: View>: View {
         // On the Form, not the row: a destination inside a lazy container
         // is ignored.
         .navigationDestination(isPresented: $showingAdvanced) {
-            VoiceAdvancedView(slug: slug, takes: takes)
+            // A pushed page inherits environment from the NavigationStack, not from this view: hand it
+            // the host explicitly, or a host app that scopes the host to the editor traps on push.
+            VoiceAdvancedView(slug: slug, takes: takes).voiceEditorHost(host)
         }
         #if os(iOS)
         .photosPicker(isPresented: $choosingPhoto, selection: $pickedPhoto, matching: .images)
