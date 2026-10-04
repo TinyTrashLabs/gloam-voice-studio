@@ -210,7 +210,11 @@ public enum GVoice {
             // Sorted: dictionary order varies between runs, and it decides both
             // the zip's entry order and each member list — byte-stable export.
             for (engine, files) in entry.engines.sorted(by: { $0.key < $1.key })
-            where Self.shareable(engine: engine, packHasSource: packHasSource) {
+            where Self.shareable(engine: engine, packHasSource: packHasSource)
+                && !(engine == QwenEngineFiles.engineID && !packHasSource) {
+                // The qwen3-0.6b codes + speaker embedding clone the voice as surely as
+                // source/ does, so they stay home whenever source/ does.
+
                 for (filename, url) in files.sorted(by: { $0.key < $1.key }) {
                     let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
                     entries.append((member, try Data(contentsOf: url)))
@@ -334,7 +338,7 @@ public enum GVoice {
         /// nil (not throw) for a member that is missing, unsafe to normalize,
         /// or oversized — callers treat that as "skip this one asset."
         func readOptional(_ member: String) -> Data? {
-            let normalized = normalizeMember(member)
+            let normalized = normalizedMember(member)
             guard let entry = archive[normalized] else { return nil }
             guard entry.uncompressedSize <= maxEntryBytes else { return nil }
             return try? extract(entry, from: archive)
@@ -358,7 +362,7 @@ public enum GVoice {
                 for member in members {
                     // Audio-driven engines may point back into source/, which
                     // is already read above as the reference.
-                    guard !normalizeMember(member).lowercased().hasPrefix("source/") else { continue }
+                    guard !normalizedMember(member).lowercased().hasPrefix("source/") else { continue }
                     let filename = try safeComponent((member as NSString).lastPathComponent)
                     guard let blob = readOptional(member) else { continue }
                     assets[engineID, default: [:]][unstem(filename, key: key)] = blob
@@ -436,7 +440,7 @@ public enum GVoice {
 
     /// Strips a leading "./" (some writers emit pack-relative paths this way);
     /// zip member lookup is otherwise exact-match.
-    private static func normalizeMember(_ path: String) -> String {
+    static func normalizedMember(_ path: String) -> String {
         var p = path
         while p.hasPrefix("./") { p.removeFirst(2) }
         return p
