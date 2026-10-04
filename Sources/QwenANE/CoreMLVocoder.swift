@@ -101,13 +101,38 @@ final class ANEVocoder {
 
     /// Starts a line. `context` is the voice's reference codes, frame-major (T x 16). With `overlap`
     /// the (possibly slow, first-line) priming runs on the vocoder queue, ahead of the first chunk.
-    func begin(context: [Int64]?) {
+    ///
+    /// `continuation` (frame-major codes, the part just before this line in the same break) is streamed through
+    /// the head after the voice's primed state, its audio dropped: the line then decodes as the next frames of
+    /// what was just played, the way upstream decodes a continuation [reference ; previous ; line] in one pass.
+    func begin(context: [Int64]?, continuation: [Int64]? = nil) {
         drain(); _ = takeError()
         pending = []; pending.reserveCapacity(Self.C * 16)
         chunkIndex = 0
-        unprimedFirstChunk = (context?.count ?? 0) / 16 < Self.L
+        unprimedFirstChunk = (context?.count ?? 0) / 16 + (continuation?.count ?? 0) / 16 < Self.L
         waitWall = 0
-        submit { [self] in beginOnQueue(context: context) }
+        submit { [self] in
+            beginOnQueue(context: context)
+            if let cont = continuation, cont.count >= 16 { continueOnQueue(cont) }
+        }
+    }
+
+    /// Runs `codes` through the head from the current state and makes their last hidden frames the upsampler's
+    /// left context. Their audio is never produced.
+    private func continueOnQueue(_ codes: [Int64]) {
+        let T = codes.count / 16, L = Self.L
+        if first && T < L { return }      // no primed history to extend: the line starts cold, as without it
+        let h = codes.withUnsafeBufferPointer { head.process(codes: $0.baseAddress!, frames: T) }
+        if T >= L {
+            for c in 0..<1024 { for j in 0..<L { hist[c * L + j] = h[(T - L + j) * 1024 + c] } }
+        } else {
+            // fewer than 8 new frames: shift the history left and append them
+            for c in 0..<1024 {
+                for j in 0..<(L - T) { hist[c * L + j] = hist[c * L + j + T] }
+                for j in 0..<T { hist[c * L + L - T + j] = h[j * 1024 + c] }
+            }
+        }
+        first = false
     }
 
     private func beginOnQueue(context: [Int64]?) {

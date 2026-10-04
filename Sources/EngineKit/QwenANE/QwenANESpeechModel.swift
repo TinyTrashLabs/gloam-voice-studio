@@ -92,7 +92,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 box.result = .success(try await QwenVoicePrep.prepareEngineFolder(
                     voiceDir: voiceDir, masterWAV: master, transcript: transcript, modelsDirectory: modelsDirectory,
                     cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
-                    transcribe: { await LuxReferenceWindow.transcribeWAV($0) }).files)
+                    transcribe: ReferenceSections.sectionTranscriber(language: nil)).files)
             } catch { box.result = .failure(error) }
             done.signal()
         }
