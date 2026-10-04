@@ -340,6 +340,33 @@ Required behavior:
 - keep model allocation bounded and release caches after completion; and
 - return a typed unavailable error on unsupported hardware.
 
+### Producing the weights
+
+The separator loads `<weightsDir>/htdemucs_ft_vocals.safetensors` (float16,
+MLX channels-last, fused Q/K/V split, DConv/transformer keys renamed; 573
+tensors, about 84 MB). The weights are not committed. Build them from the
+PyTorch `htdemucs_ft` bag member that produces vocals (`04573f0d`, the fourth
+model in `htdemucs_ft.yaml`):
+
+```sh
+huggingface-cli download adefossez/HTDemucs-ft   # or any copy of 04573f0d.safetensors
+uv run --with safetensors --with numpy scripts/convert_demucs_weights.py \
+    [--input path/to/04573f0d.safetensors] [--output-dir DIR]
+```
+
+The default output directory is
+`~/Library/Application Support/GloamVoiceStudio/Models/htdemucs-ft-vocals-mlx/`.
+No torch is needed. The model keeps all four source heads; `VocalSeparator`
+selects vocals. Because `Module.update(verify: .noUnusedKeys)` tolerates missing
+keys, verify by running the CLI and comparing against the Python reference
+(see below).
+
+Verification on a 32.4 s Spanish clip (`spike gvoice-prepare --mode
+isolate-vocals --weights <dir>`): Swift output correlates 0.993 with the Python
+`demucs` HTDemucs (CPU, shifts 0, overlap 0.5, same checkpoint) after the same
+band-limiting. The model rejects mono input (`stereoSourceRequired`); duplicate
+a mono source to stereo when testing.
+
 Standard cleanup remains available without model weights.
 
 ## Provenance schema

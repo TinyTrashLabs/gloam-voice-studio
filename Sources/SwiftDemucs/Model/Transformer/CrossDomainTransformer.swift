@@ -18,7 +18,7 @@ import MLXNN
 ///
 /// The self-attention layers (indices 0, 2, 4) are stored in `self_layers`/`self_layers_t`
 /// and cross-attention layers (indices 1, 3) in `cross_layers`/`cross_layers_t`.
-/// convert_weights.py remaps `layers.N.*` → `self_layers.M.*` or `cross_layers.M.*`.
+/// scripts/convert_demucs_weights.py remaps `layers.N.*` → `self_layers.M.*` or `cross_layers.M.*`.
 ///
 /// Input: spectral `[B, Fr, T, C]` channels-last, temporal `[B, T, C]` channels-last.
 /// Output: same shapes, with cross-domain information fused.
