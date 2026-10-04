@@ -105,10 +105,28 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// view happened to be showing it. Nil means unset, as for `pace`/`gain`.
     public var notes: String?
 
+    /// BCP-47 language of this voice's reference ("en", "es"). On a take it is the language that take
+    /// speaks -- a bilingual voice carries one take per language -- and on a base voice its default
+    /// language. Nil means unstated. Travels as the manifest's `language` / `source.<key>.language`.
+    public var language: String?
+
+    /// Stable identity of the voice across shares: a UUID minted when it is created and kept by every
+    /// export. Base voices only; nil on a take and on a voice made before ids existed (it is minted on the
+    /// first edit or export-time stamp). See docs/gvoice-format.md.
+    public var id: String?
+
+    /// Version of the voice, bumped whenever its audio, character or photo changes. With `id`, an importer
+    /// tells an update (higher revision) from a copy. Nil means unversioned, which compares as 0.
+    public var revision: Int?
+
     public init(name: String, slug: String, refText: String, createdAt: String,
                 persona: Persona? = nil, provenance: JSONValue? = nil, variantOf: String? = nil,
                 pace: Double? = nil, enginePace: [String: Double]? = nil,
-                gain: Double? = nil, notes: String? = nil) {
+                gain: Double? = nil, notes: String? = nil,
+                language: String? = nil, id: String? = nil, revision: Int? = nil) {
+        self.language = language
+        self.id = id
+        self.revision = revision
         self.name = name
         self.slug = slug
         self.refText = refText
@@ -139,5 +157,8 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         // Tolerant like every field above: a malformed trim must not break load.
         gain = (try? c.decodeIfPresent(Double.self, forKey: .gain)) ?? nil
         notes = (try? c.decodeIfPresent(String.self, forKey: .notes)) ?? nil
+        language = (try? c.decodeIfPresent(String.self, forKey: .language)) ?? nil
+        id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil
+        revision = (try? c.decodeIfPresent(Int.self, forKey: .revision)) ?? nil
     }
 }

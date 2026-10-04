@@ -125,7 +125,7 @@ public struct VoiceLibrary: Sendable {
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
                              pace: pace, enginePace: enginePace, gain: gain,
-                             notes: notes)
+                             notes: notes, id: UUID().uuidString, revision: 1)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -393,8 +393,10 @@ public struct VoiceLibrary: Sendable {
     /// re-slug must migrate their own references (chat, selection).
     public func update(_ slug: String, name: String? = nil,
                        refText: String? = nil, refWav: Data? = nil,
+                       notes: String? = nil,
                        variantSuffixes: Set<String> = []) throws -> VoiceMeta {
         var meta = try self.meta(slug)
+        var changed = name != nil && name != meta.name
         var voiceDir = try folder(slug)
         let isVoice = layout.locate(slug) == .voice(slug)
         if let name, name != meta.name, !isVoice {
@@ -421,8 +423,18 @@ public struct VoiceLibrary: Sendable {
             meta.name = name
             meta.slug = newSlug
         }
-        if let refText { meta.refText = refText }
+        if let refText {
+            changed = changed || refText != meta.refText
+            meta.refText = refText
+        }
+        // An empty string clears the description, as nil on the model means "unset".
+        if let notes {
+            let next = notes.isEmpty ? nil : notes
+            changed = changed || next != meta.notes
+            meta.notes = next
+        }
         if let refWav, !refWav.isEmpty {
+            changed = true
             // The standard applies HERE too. This is the third write site for a
             // reference and it was the one that missed — re-recording a voice
             // through `update` dropped it back to whatever level the microphone
@@ -432,7 +444,7 @@ public struct VoiceLibrary: Sendable {
                 .write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
-        return meta
+        return changed ? try touchRevision(meta.slug) : meta
     }
 
     /// Resolved loudness trim for a slug, in dB: its own trim, else the trim of
@@ -520,7 +532,7 @@ public struct VoiceLibrary: Sendable {
         var meta = try self.meta(slug)
         meta.persona = persona
         try write(meta, to: try folder(slug))
-        return meta
+        return try touchRevision(slug)
     }
 
     public func avatarURL(_ slug: String) -> URL? {
@@ -530,12 +542,14 @@ public struct VoiceLibrary: Sendable {
 
     public func saveAvatar(_ slug: String, pngData: Data) throws {
         try pngData.write(to: try folder(slug).appendingPathComponent("avatar.png"))
+        try touchRevision(slug)
     }
 
     public func removeAvatar(_ slug: String) throws {
         guard let url = layout.folder(for: slug)?.appendingPathComponent("avatar.png") else { return }
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
+            try touchRevision(slug)
         }
     }
 

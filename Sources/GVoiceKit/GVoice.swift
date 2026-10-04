@@ -220,7 +220,9 @@ public enum GVoice {
             pace: base.meta.pace, enginePace: base.meta.enginePace,
             gain: base.meta.gain,
             source: [:], engines: [:], provenance: base.meta.provenance,
-            persona: base.meta.persona, notes: base.meta.notes)
+            persona: base.meta.persona, notes: base.meta.notes,
+            id: base.meta.id, revision: base.meta.revision)
+        manifest.language = base.meta.language
         var entries: [(name: String, data: Data)] = []
 
         for key in manifest.variants ?? [] {
@@ -230,7 +232,8 @@ public enum GVoice {
             if includeSource, let refURL = entry.refURL {
                 let member = "source/ref\(suffix).wav"
                 entries.append((member, try Data(contentsOf: refURL)))
-                manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText)
+                manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText,
+                                                         language: entry.meta.language)
             }
             let packHasSource = includeSource && entry.refURL != nil
             // Sorted: dictionary order varies between runs, and it decides both
@@ -325,22 +328,7 @@ public enum GVoice {
     /// (that ordering is attacker-controlled and must not be trusted to put
     /// "base" first).
     public static func `import`(_ data: Data, into library: some GVoicePackStore) throws -> VoiceMeta {
-        let archive: Archive
-        let manifest: Manifest
-        do {
-            archive = try Archive(data: data, accessMode: .read)
-            guard archive.reduce(0, { count, _ in count + 1 }) <= maxEntries else {
-                throw StudioError.invalidArchive("pack has too many entries")
-            }
-            guard let entry = archive["manifest.json"] else {
-                throw StudioError.invalidArchive("not a .gvoice pack (no manifest.json)")
-            }
-            manifest = try JSONDecoder().decode(Manifest.self, from: try extract(entry, from: archive))
-        } catch let error as StudioError {
-            throw error
-        } catch {
-            throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
-        }
+        let (archive, manifest) = try open(data)
 
         // Readers reject only versions newer than they understand (Rule:
         // additive changes never bump `gvoice`), with one floor: version 1
@@ -425,6 +413,9 @@ public enum GVoice {
                                         pace: manifest.pace, enginePace: manifest.enginePace,
                                         gain: manifest.gain, notes: manifest.notes)
         if let persona = manifest.persona { try library.setPersona(baseMeta.slug, persona) }
+        if let language = manifest.language ?? sources["base"]?.language {
+            try library.setLanguage(baseMeta.slug, language)
+        }
 
         // Rule 1 applies to the avatar as to any other member: missing,
         // oversized, or not actually a PNG means no avatar, never a failed
@@ -443,8 +434,39 @@ public enum GVoice {
                                refWav: ref, refText: sources[key]?.text ?? "",
                                provenance: manifest.provenance, variantOf: baseMeta.slug,
                                engines: assets, notes: nil)
+            if let language = sources[key]?.language {
+                try library.setLanguage("\(baseMeta.slug)-\(safeKey)", language)
+            }
         }
-        return baseMeta
+        // Last, because the setters above (persona, avatar, languages) each bump a store's revision:
+        // the pack's own identity is what the imported voice must end up with.
+        if let id = manifest.id, !id.isEmpty {
+            try library.setIdentity(baseMeta.slug, id: id, revision: manifest.revision)
+        }
+        return (try? library.entry(baseMeta.slug).meta) ?? baseMeta
+    }
+
+    /// Reads just the manifest of a pack: what an importer needs to compare its `id` and `revision`
+    /// against the library before deciding to install.
+    public static func manifest(of data: Data) throws -> Manifest {
+        try open(data).manifest
+    }
+
+    private static func open(_ data: Data) throws -> (archive: Archive, manifest: Manifest) {
+        do {
+            let archive = try Archive(data: data, accessMode: .read)
+            guard archive.reduce(0, { count, _ in count + 1 }) <= maxEntries else {
+                throw StudioError.invalidArchive("pack has too many entries")
+            }
+            guard let entry = archive["manifest.json"] else {
+                throw StudioError.invalidArchive("not a .gvoice pack (no manifest.json)")
+            }
+            return (archive, try JSONDecoder().decode(Manifest.self, from: try extract(entry, from: archive)))
+        } catch let error as StudioError {
+            throw error
+        } catch {
+            throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
+        }
     }
 
     /// The voice (and take key) a standalone pack slugged `slug` and named
