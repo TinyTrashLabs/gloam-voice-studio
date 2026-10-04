@@ -34,6 +34,18 @@ earlier, longer take of the same voice (`supertonic-mlx-spike/refs/`), not
 from the `source/ref.wav` now in the pack. Same voice, different read. Rebake
 the style from `source/` if you ever need the two to be strictly derived.
 
+## Prepared Qwen voice
+
+Each pack also carries `engines/qwen3-0.6b/` (`ref_codes.npy`, `spk_embed.npy`, `voice.json`;
+see "The `qwen3-0.6b` prepared voice" in `docs/gvoice-format.md`), so a device running Qwen3-TTS
+0.6B skips the on-device voice prep. It is derived from `source/ref.wav` and carries that file's
+sha256, so it must be refreshed whenever the reference changes (readers ignore a stale one):
+
+```sh
+QWEN_ANE_MODELS=<models dir> $SPIKE gvoice-qwen-prep packs/*.gvoice          # add / refresh
+QWEN_ANE_MODELS=<models dir> $SPIKE gvoice-qwen-prep packs/*.gvoice --check  # report only
+```
+
 ## Consumers
 
 `gloam-dj` imports both with `scripts/unpack-gvoice.py`, which writes

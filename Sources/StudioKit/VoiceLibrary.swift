@@ -33,7 +33,9 @@ public struct VoiceCapabilities: Sendable, Equatable {
     /// than speaking stored ones, so no library voice ever enables it.
     public func supports(_ backend: BackendID) -> Bool {
         guard backend != .qwenDesign else { return false }
-        if engines.contains(backend.rawValue) { return true }
+        // engines/qwen3-0.6b/ is a prepared-voice CACHE derived from source/ (docs/gvoice-format.md),
+        // not a rendition: without source the codes cannot drive any backend here, so it never counts.
+        if engines.contains(backend.rawValue), backend != .qwen06B { return true }
         // Dia2 conditions on a word-aligned prefix, not on raw audio. It used
         // to be excluded here, because a pack without the alignment cache in
         // engines/dia2/ had no prefix and would generate unconditioned — a

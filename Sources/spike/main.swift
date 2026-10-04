@@ -7,6 +7,15 @@ import StudioKit
 import SpeechKit
 import GVoiceProductionKit
 
+if CommandLine.arguments.dropFirst().first == "gvoice-qwen-prep" {
+    do {
+        try runGVoiceQwenPrep(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("gvoice-qwen-prep failed: \(error)")
+    }
+}
+
 if CommandLine.arguments.dropFirst().first == "gvoice-prepare" {
     do {
         try await runGVoicePrepare(Array(CommandLine.arguments.dropFirst(2)))
