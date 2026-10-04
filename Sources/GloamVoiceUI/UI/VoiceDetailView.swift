@@ -292,6 +292,10 @@ public struct VoiceDetailView<Extra: View>: View {
                 .listRowBackground(t.panel)
             }
             if features.contains(.persona) { characterSection }
+            if features.contains(.languages), let voice {
+                LanguagesSection(voice: voice, player: player, defaultLanguage: $language,
+                                 showsDefaultPicker: features.contains(.persona))
+            }
             if let voice {
                 Section {
                     LabeledContent {
@@ -621,7 +625,7 @@ public struct VoiceDetailView<Extra: View>: View {
                        language: language.isEmpty ? nil : language)
     }
 
-    private static func languageName(_ code: String) -> String {
+    static func languageName(_ code: String) -> String {
         Locale(identifier: code).localizedString(forLanguageCode: code)?.capitalized ?? code
     }
 
@@ -649,7 +653,7 @@ public struct VoiceDetailView<Extra: View>: View {
             }
             .padding(.vertical, 4)
             let langs = store.languages(of: slug)
-            if langs.count > 1 {
+            if langs.count > 1, !features.contains(.languages) {
                 Picker("Language", selection: $language) {
                     Text("Automatic").tag("")
                     ForEach(langs, id: \.self) { Text(Self.languageName($0)).tag($0) }

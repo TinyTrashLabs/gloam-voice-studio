@@ -16,13 +16,18 @@ struct EmotionVersionsSection: View {
     @State private var errorText: String?
 
     private var store: any VoiceLibraryStore { host.store }
+    /// Language references are not emotions: never listed here, whatever the store's variant keys say.
+    private var emotionKeys: [String] {
+        let langs = Set(store.languageReferences(of: voice.slug).map(\.language))
+        return voice.variantKeys.filter { !langs.contains($0) }
+    }
     private var available: [EmotionOption] {
-        EmotionVersions.available(existingKeys: voice.variantKeys, options: store.emotionOptions)
+        EmotionVersions.available(existingKeys: emotionKeys, options: store.emotionOptions)
     }
 
     var body: some View {
         Section {
-            ForEach(voice.variantKeys, id: \.self) { key in
+            ForEach(emotionKeys, id: \.self) { key in
                 row(key)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {

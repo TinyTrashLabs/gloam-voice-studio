@@ -35,12 +35,29 @@ public struct VoiceLibraryFeatures: OptionSet, Sendable {
     /// The voice's character (`VoiceMeta.persona`): who it is, tagline, catchphrases, color. Apps
     /// interpret it (radio: the host). Opt-in, not in `.all`, so a library without hosts never shows it.
     public static let persona = VoiceLibraryFeatures(rawValue: 1 << 11)
+    /// Per-language references (`languageReferences` / `addLanguageReference` / `removeLanguageReference`):
+    /// each language is its own reference, not an emotion. Opt-in, not in `.all`.
+    public static let languages = VoiceLibraryFeatures(rawValue: 1 << 12)
 
     /// What the Studio app's store backs: everything.
     public static let all: VoiceLibraryFeatures = [
         .notes, .avatars, .takes, .cleanup, .referenceWindow, .emotionVersions,
         .pace, .gain, .packShare, .renditions, .provenance,
     ]
+}
+
+/// One language's own reference (`source.<code>` in the pack): not an emotion.
+public struct LanguageReference: Identifiable, Hashable, Sendable {
+    /// Language code ("es").
+    public let language: String
+    /// The words the reference says.
+    public let text: String
+    /// The reference audio, when it can be played.
+    public let url: URL?
+    public var id: String { language }
+    public init(language: String, text: String, url: URL?) {
+        self.language = language; self.text = text; self.url = url
+    }
 }
 
 /// A store that cannot do what the editor asked. Thrown by the default
@@ -146,6 +163,13 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
     func addVariant(of voice: Voice, key: String, clip: URL, transcript: String) throws -> String
     func deleteVariant(of voice: Voice, key: String)
 
+    // Languages
+    /// The voice's per-language references, excluding the master (its default language).
+    func languageReferences(of slug: String) -> [LanguageReference]
+    /// Add or replace the reference for `language` (a code such as "es").
+    func addLanguageReference(_ slug: String, language: String, wav: Data, transcript: String) throws
+    func removeLanguageReference(_ slug: String, language: String) throws
+
     // Sharing
     /// Builds the voice's `.gvoice` off the main actor: the returned closure
     /// runs on a background task. Nil when the voice cannot be shared.
@@ -201,6 +225,14 @@ extension VoiceLibraryStore {
         throw VoiceEditorUnsupported("add an emotion version")
     }
     public func deleteVariant(of voice: Voice, key: String) {}
+
+    public func languageReferences(of slug: String) -> [LanguageReference] { [] }
+    public func addLanguageReference(_ slug: String, language: String, wav: Data, transcript: String) throws {
+        throw VoiceEditorUnsupported("add a language")
+    }
+    public func removeLanguageReference(_ slug: String, language: String) throws {
+        throw VoiceEditorUnsupported("remove a language")
+    }
 
     public func packExport(for voice: Voice, includeSource: Bool) -> (@Sendable () throws -> Data)? { nil }
 }
