@@ -41,11 +41,15 @@ public struct QwenEngineFiles: Equatable, Sendable {
         public var by: String
         public var prepVersion: Int
         public var mel: String
+        /// SHA-256 of the master's bytes (`source/ref.wav`) the section was cut from; only with a window.
+        /// A section whose master no longer hashes to this is stale. Absent: not checked.
+        public var sourceSha256: String?
 
         public init(audio: String, sha256: String, startSeconds: Double? = nil, endSeconds: Double? = nil,
-                    by: String, prepVersion: Int, mel: String) {
+                    by: String, prepVersion: Int, mel: String, sourceSha256: String? = nil) {
             self.audio = audio; self.sha256 = sha256; self.startSeconds = startSeconds
             self.endSeconds = endSeconds; self.by = by; self.prepVersion = prepVersion; self.mel = mel
+            self.sourceSha256 = sourceSha256
         }
     }
 

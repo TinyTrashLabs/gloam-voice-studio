@@ -39,7 +39,6 @@ final class ClipImportTests: XCTestCase {
     func testAGoodClipComesBackWithItsSamplesAndNoProblem() throws {
         let imported = try ClipImport.prepare(try wav(speech(seconds: 8)))
         XCTAssertEqual(imported.seconds, 8, accuracy: 0.3)
-        XCTAssertFalse(imported.trimmed)
         XCTAssertEqual(Double(imported.samples.count) / Double(sr), imported.seconds, accuracy: 0.01)
         XCTAssertNil(imported.quality.fileProblem, "\(imported.quality)")
     }
@@ -52,10 +51,11 @@ final class ClipImportTests: XCTestCase {
         }
     }
 
-    func testALongClipIsCutToTheWindowAndOnlyTheHeadIsDecoded() throws {
-        let imported = try ClipImport.prepare(try wav(speech(seconds: ClipImport.maxDecodeSeconds + 30)))
-        XCTAssertTrue(imported.trimmed)
-        XCTAssertLessThanOrEqual(imported.seconds, ClipImport.luxWindowSeconds + 0.01)
+    func testALongClipIsKeptWhole() throws {
+        // The master is the whole clip; each engine picks its own section later.
+        let imported = try ClipImport.prepare(try wav(speech(seconds: 150)))
+        XCTAssertEqual(imported.seconds, 150, accuracy: 0.5)
+        XCTAssertEqual(Double(imported.samples.count) / Double(sr), imported.seconds, accuracy: 0.01)
     }
 
     func testAQuietClipIsFlaggedInFileWords() throws {

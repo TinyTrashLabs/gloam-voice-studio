@@ -13,9 +13,10 @@ import QwenANE
 /// ready; see `QwenANEEngine.render(onAudio:)` for what is trimmed (leading silence only, internal pauses
 /// are left alone on the stream).
 ///
-/// References: the speech encoder takes at most 40 s (20 s on older model sets). A longer reference uses the voice's own `lux-tts`
-/// window (`engines/lux-tts/ref.wav` + the transcript of that window) when that fits; otherwise the request
-/// fails with `EngineError.referenceTooLong`. The audio is never cut without a matching transcript.
+/// References: the speech encoder takes at most 40 s (20 s on older model sets; read from the model files). A longer
+/// master is never refused and never cut while rendering: its section (`engines/qwen3-0.6b/ref.wav`, its exact
+/// transcript and span, the codes computed from it) is chosen once at prep time (`QwenVoicePrep.prepareEngineFolder`)
+/// and stored in the voice's pack folder; a render reads the stored folder.
 @available(macOS 15.0, iOS 18.0, *)
 public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     public let sampleRate = 24000
@@ -75,70 +76,39 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         return prepared
     }
 
-    /// Reference + transcript -> voice, windowing a too-long reference through the voice's `lux-tts` rendition.
-    /// Every failure leaves as an `EngineError`.
+    /// Reference + transcript -> voice, through the shared folder prep (`QwenVoicePrep.prepareEngineFolder`):
+    /// a complete `engines/qwen3-0.6b/` is read as it is; a voice without one (an older pack) gets its
+    /// section chosen and stored now, then used. A render never cuts anything itself. Every failure
+    /// leaves as an `EngineError`. Runs on the render queue, never the main thread (the recognizer
+    /// reports back on the main queue).
     static func prepare(reference refURL: URL, transcript: String, modelsDirectory: URL, cacheRoot: URL) throws -> QwenVoiceFiles {
-        // The voice folder's own `engines/qwen3-0.6b/` (docs/gvoice-format.md): a pack that carried a
-        // prepared voice lands here on import, and a voice prepared on this Mac is written back so the
-        // next export carries it. Used only when it matches the audio about to be prepared.
+        let key = SHA256.hash(data: Data(refURL.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         let voiceDir = refURL.deletingLastPathComponent()
-        func prep(_ url: URL, _ text: String, audioMember: String) throws -> QwenVoiceFiles {
-            let key = SHA256.hash(data: Data(url.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-            let wav = try Data(contentsOf: url)
-            let r = try QwenVoicePrep.prepared(fromPack: Self.storedPackFiles(in: voiceDir), referenceWAV: wav, transcript: text,
-                                               cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
-                                               modelsDirectory: modelsDirectory)
-            if r.origin == .computed { Self.storePackFiles(r, audio: audioMember, in: voiceDir) }
-            return r.files
-        }
-        do {
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
             do {
-                return try prep(refURL, transcript, audioMember: "source/ref.wav")
-            } catch QwenVoicePrepError.referenceTooLong(let seconds) {
-                if let window = LuxReferenceWindow.storedRendition(forReference: refURL) {
-                    let windowURL = refURL.deletingLastPathComponent().appendingPathComponent("engines/lux-tts")
-                        .appendingPathComponent((window.audio as NSString).lastPathComponent)
-                    if FileManager.default.fileExists(atPath: windowURL.path) {
-                        do { return try prep(windowURL, window.text, audioMember: "engines/lux-tts/" + windowURL.lastPathComponent) }
-                        catch QwenVoicePrepError.referenceTooLong {}   // the lux window is allowed up to 30 s
-                    }
-                }
-                throw EngineError.referenceTooLong(backend: .qwen06BANE, seconds: seconds, maxSeconds: maxReferenceSeconds)
-            }
-        } catch let error as QwenVoicePrepError {
+                let master = try Data(contentsOf: refURL)
+                box.result = .success(try await QwenVoicePrep.prepareEngineFolder(
+                    voiceDir: voiceDir, masterWAV: master, transcript: transcript, modelsDirectory: modelsDirectory,
+                    cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
+                    transcribe: { await LuxReferenceWindow.transcribeWAV($0) }).files)
+            } catch { box.result = .failure(error) }
+            done.signal()
+        }
+        done.wait()
+        switch box.result {
+        case .success(let files)?: return files
+        case .failure(let error as QwenVoicePrepError)?:
             throw EngineError.generationFailed(backend: .qwen06BANE, message: error.localizedDescription)
+        case .failure(let error)?:
+            throw EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)")
+        case nil:
+            throw EngineError.generationFailed(backend: .qwen06BANE, message: "voice prep returned nothing")
         }
     }
 
-    /// The voice folder's `engines/qwen3-0.6b/` files, or nil when absent or unusable (the caller then
-    /// prepares as usual).
-    static func storedPackFiles(in voiceDir: URL) -> QwenEngineFiles? {
-        let dir = voiceDir.appendingPathComponent(QwenEngineFiles.directory, isDirectory: true)
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
-        var files: [String: Data] = [:]
-        for n in names {
-            guard let d = try? Data(contentsOf: dir.appendingPathComponent(n)), d.count <= QwenEngineFiles.maxNPYBytes else { continue }
-            files[n] = d
-        }
-        return try? QwenEngineFiles.decode(files: files)
-    }
-
-    /// Writes a freshly computed voice next to the reference so exports include it. Best effort, and
-    /// base voices only: a take's files carry a `-<key>` suffix on export that this plain layout does not.
-    static func storePackFiles(_ r: QwenVoicePrep.Prepared, audio: String, in voiceDir: URL) {
-        guard !voiceDir.pathComponents.contains("variants"),
-              let payload = try? r.enginePayload(audio: audio), let files = try? payload.files() else { return }
-        let dir = voiceDir.appendingPathComponent(QwenEngineFiles.directory, isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // voice.json is the commit marker: gone first, written last.
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent(QwenEngineFiles.voiceFile))
-        for (name, data) in files where name != QwenEngineFiles.voiceFile {
-            try? data.write(to: dir.appendingPathComponent(name), options: .atomic)
-        }
-        if let voice = files[QwenEngineFiles.voiceFile] {
-            try? voice.write(to: dir.appendingPathComponent(QwenEngineFiles.voiceFile), options: .atomic)
-        }
-    }
+    private final class Box: @unchecked Sendable { var result: Result<QwenVoiceFiles, Error>? }
 
     // MARK: synthesis
 

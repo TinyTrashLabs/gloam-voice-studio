@@ -698,12 +698,11 @@ if CommandLine.arguments.dropFirst().first == "lux-window" {
                 SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
             }
         }
-        guard let w = await LuxReferenceWindow.fit(
+        guard let w = await LuxReferenceWindow.pick(
             samples: samples, sampleRate: LuxOnnx.sampleRate,
             refText: "", maxSeconds: maxSeconds)
         else {
-            die("lux-window: could not establish a window (no on-device recognizer, "
-                + "or the transcript density gate rejected it)")
+            die("lux-window: the reference already fits in \(maxSeconds)s; nothing to window")
         }
         try WAVWriter.write(samples: w.samples, sampleRate: LuxOnnx.sampleRate,
                             to: URL(fileURLWithPath: outBase + ".wav"))

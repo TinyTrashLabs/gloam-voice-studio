@@ -101,9 +101,12 @@ public enum APIRouter {
             guard let raw = Data(base64Encoded: req.refAudio) else {
                 throw APIError(status: .badRequest, detail: "refAudio is not valid base64")
             }
-            return try mapStoreErrors {
+            let saved = try mapStoreErrors {
                 try deps.voices.save(name: req.name, refWav: raw, refText: req.refText ?? "")
             }
+            // Section(s) for the engines that take a shorter reference are chosen now, once, and stored in the pack.
+            await deps.voices.prepareSections(saved.slug)
+            return saved
         }
 
         router.patch("voices/:slug") { request, context in
@@ -117,7 +120,7 @@ public enum APIRouter {
                 raw = decoded
             }
             let name = req.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return try mapStoreErrors {
+            let updated = try mapStoreErrors {
                 var meta = try deps.voices.update(slug,
                                                   name: (name?.isEmpty == false) ? name : nil,
                                                   refText: req.refText, refWav: raw, notes: req.notes)
@@ -126,6 +129,9 @@ public enum APIRouter {
                 }
                 return meta
             }
+            // A replaced master or transcript: sections cut from the old one are stale by hash and are re-chosen here.
+            if raw != nil || req.refText != nil { await deps.voices.prepareSections(updated.slug) }
+            return updated
         }
 
         router.delete("voices/:slug") { _, context in
@@ -1059,14 +1065,11 @@ private func dialoguePrefixes(_ voices: [String?],
 }
 
 /// How an `EngineError` from the speech route reaches the client: a missing
-/// model set is a 503 (the server cannot serve it right now), a voice whose
-/// reference cannot be used is a 400, everything else a 500 with its reason.
+/// model set is a 503 (the server cannot serve it right now), everything else a 500 with its reason.
 func speechAPIError(_ error: EngineError) -> APIError {
     switch error {
     case .modelNotInstalled:
         return APIError(status: .serviceUnavailable, detail: error.localizedDescription)
-    case .referenceTooLong:
-        return APIError(status: .badRequest, detail: error.localizedDescription)
     default:
         return APIError(status: .internalServerError, detail: "\(error)")
     }

@@ -17,7 +17,6 @@ public enum VoiceStoreError: Error, Equatable {
     case noTakes
     /// `clearWindow` on a master past the engine's cap: without a window
     /// the voice could not render.
-    case masterTooLongForNoWindow
 }
 
 /// Turns an error from the import/save path into one plain sentence for an
@@ -61,8 +60,6 @@ public func userMessage(for error: Error) -> String {
             return "The reference needs its words — type what the recording says."
         case .noTakes:
             return "Add a take before building the master."
-        case .masterTooLongForNoWindow:
-            return String(format: "The master is longer than %.0f seconds, so the voice needs a reference window.", ReferenceWindowRule.maxSeconds)
         }
     }
     return error.localizedDescription
