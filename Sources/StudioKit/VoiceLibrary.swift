@@ -511,6 +511,9 @@ public struct VoiceLibrary: Sendable {
                              data: try encoder.encode(direction))
     }
 
+    /// Import hook (GVoicePackStore): a pack's persona lands on the imported voice.
+    public func setPersona(_ slug: String, _ persona: Persona) throws { try setPersona(slug, persona: persona) }
+
     /// Sets (or clears, with nil) the chat persona on a stored voice.
     @discardableResult
     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {

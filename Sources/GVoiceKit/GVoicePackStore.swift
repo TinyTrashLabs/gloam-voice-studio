@@ -53,8 +53,13 @@ public protocol GVoicePackStore {
     /// calls this after the base voice is saved; the bytes are already
     /// checked to be a PNG under `AvatarImage.maxBytes`.
     func saveAvatar(_ slug: String, pngData: Data) throws
+
+    /// Store the pack's persona on an imported voice (default: a store without personas ignores it).
+    func setPersona(_ slug: String, _ persona: Persona) throws
 }
 
 public extension GVoicePackStore {
     func locate(_ address: String) -> PackFolderLayout.Location? { nil }
+    /// Store the pack's persona on an imported voice. A store with no persona does nothing.
+    func setPersona(_ slug: String, _ persona: Persona) throws {}
 }

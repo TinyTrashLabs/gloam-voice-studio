@@ -32,6 +32,9 @@ public struct VoiceLibraryFeatures: OptionSet, Sendable {
     public static let renditions = VoiceLibraryFeatures(rawValue: 1 << 9)
     /// Read-only: the pack's provenance.
     public static let provenance = VoiceLibraryFeatures(rawValue: 1 << 10)
+    /// The voice's character (`VoiceMeta.persona`): who it is, tagline, catchphrases, color. Apps
+    /// interpret it (radio: the host). Opt-in, not in `.all`, so a library without hosts never shows it.
+    public static let persona = VoiceLibraryFeatures(rawValue: 1 << 11)
 
     /// What the Studio app's store backs: everything.
     public static let all: VoiceLibraryFeatures = [
@@ -80,6 +83,9 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
 
     /// Edit the stored metadata (name, notes) and republish.
     func update(_ slug: String, _ mutate: (inout VoiceMeta) -> Void) throws
+    /// Languages the voice speaks (BCP-47), its default first. The Character section offers a
+    /// language picker when there is more than one.
+    func languages(of slug: String) -> [String]
     /// The words the reference says, corrected in the editor.
     func updateTranscript(of voice: Voice, _ text: String) throws
 
@@ -144,6 +150,10 @@ public protocol VoiceLibraryStore: ObservableObject where ObjectWillChangePublis
     /// Builds the voice's `.gvoice` off the main actor: the returned closure
     /// runs on a background task. Nil when the voice cannot be shared.
     func packExport(for voice: Voice, includeSource: Bool) -> (@Sendable () throws -> Data)?
+}
+
+public extension VoiceLibraryStore {
+    func languages(of slug: String) -> [String] { ["en"] }
 }
 
 extension VoiceLibraryStore {

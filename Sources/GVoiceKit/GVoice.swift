@@ -118,6 +118,11 @@ public enum GVoice {
         /// exactly as before, so adding it did NOT bump `gvoice`. Shared by
         /// every variant — the picture is of the person, not of a mood.
         public var avatar: String?
+        /// The voice's character, generic: each app interprets it (the radio app as a host, the party
+        /// app as a DJ, Studio as a chat character). See "The persona" in docs/gvoice-format.md.
+        public var persona: Persona?
+        /// Free-form description of the voice.
+        public var notes: String?
 
         /// Spelled out because a public struct's memberwise init is internal.
         /// It went unnoticed while the only caller was in this module; a client
@@ -127,8 +132,11 @@ public enum GVoice {
                     pace: Double? = nil, enginePace: [String: Double]? = nil,
                     gain: Double? = nil, source: [String: Source]? = nil,
                     engines: [String: [String: [String]]]? = nil,
-                    provenance: JSONValue? = nil, avatar: String? = nil, language: String? = nil) {
+                    provenance: JSONValue? = nil, avatar: String? = nil, language: String? = nil,
+                    persona: Persona? = nil, notes: String? = nil) {
             self.language = language
+            self.persona = persona
+            self.notes = notes
             self.gvoice = gvoice
             self.name = name
             self.slug = slug
@@ -203,7 +211,8 @@ public enum GVoice {
             variants: orderedKeys(variants.keys),
             pace: base.meta.pace, enginePace: base.meta.enginePace,
             gain: base.meta.gain,
-            source: [:], engines: [:], provenance: base.meta.provenance)
+            source: [:], engines: [:], provenance: base.meta.provenance,
+            persona: base.meta.persona, notes: base.meta.notes)
         var entries: [(name: String, data: Data)] = []
 
         for key in manifest.variants ?? [] {
@@ -406,7 +415,8 @@ public enum GVoice {
                                         refText: sources["base"]?.text ?? "",
                                         provenance: manifest.provenance, engines: baseAssets,
                                         pace: manifest.pace, enginePace: manifest.enginePace,
-                                        gain: manifest.gain, notes: nil)
+                                        gain: manifest.gain, notes: manifest.notes)
+        if let persona = manifest.persona { try library.setPersona(baseMeta.slug, persona) }
 
         // Rule 1 applies to the avatar as to any other member: missing,
         // oversized, or not actually a PNG means no avatar, never a failed

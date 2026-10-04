@@ -386,6 +386,7 @@ key. The canonical member is `avatar.png` at the pack root.
 | `pace` | no | Delivery pace, `1.0` = the reference's own pace. Absent means `1.0`. A property of the VOICE: a slow, deliberate reference needs ~1.7 to sound like radio while a brisk one is right at 1.0, so no single app-wide setting serves both. A reader that ignores it renders at the reference's own pace, which is always a valid reading. |
 | `gain` | no | Per-voice loudness trim in **dB**, applied to rendered OUTPUT. Absent means 0 — the voice sits exactly where the reference loudness standard put it. Readers MUST clamp to ±12 dB and MUST treat a non-finite value as absent. Exists because the standard makes every reference MEASURE the same (−17.0 LUFS, K-weighted) but cannot settle how a voice SITS in a mix: two references at an identical level still differ by timbre and delivery. It belongs to the voice rather than the listener for the same reason `pace` does — so a recipient hears it at the level its maker chose instead of re-dialling it. Applied to output, never baked into `ref.wav`: baking would move the asset off the standard, so the next measurement would "correct" it straight back. A reader that ignores this key gets the standard's level, which is a valid reading, so adding it does NOT bump `gvoice`. |
 | `notes` | no | Free-form human description of the voice — what it sounds like, where it came from. A property of the VOICE, so it travels with the pack rather than living in whichever app happens to display it. Readers that ignore it lose nothing renderable, so adding it does NOT bump `gvoice`. |
+| `persona` | no | The voice's character, generic: `{ systemPrompt, greeting?, tagline?, catchphrases?, color? }`. `systemPrompt` describes who the voice is for an LLM; `color` is `#RRGGBB`. Apps interpret it in their own terms — the radio app as a host, the party app as a DJ, Studio as a chat character — together with `name`, `avatar` and `language`. A voice without one gets the app's default character for its name. Added 2026-10-04 (it was previously kept local to each library); readers that ignore it lose nothing renderable, so it did NOT bump `gvoice`. |
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
 | `source` | no | Variant key → `{ audio, text, language? }`. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
@@ -509,12 +510,6 @@ producer metadata, not a local identifier this library owns.
 
 ## Known gaps
 
-- **`persona` is app-level metadata, not voice-identity data, and is not
-  currently packed.** A `.gvoice` pack carries what's needed to *render* the
-  voice plus its picture (see "The avatar"); the chat persona stays local to
-  each library. If that changes, it's an additive manifest/layout extension
-  under the Versioning policy above, not a `gvoice` bump — exactly how the
-  avatar was added on 2026-09-08.
 - **Cross-implementation zip edge cases are untested.** Duplicate member
   names and directory-entry case sensitivity are handled however each zip
   library's reader happens to handle them (Swift's `ZIPFoundation` vs.
