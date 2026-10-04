@@ -6,6 +6,8 @@ struct HostConfig {
     let codecBos, codecEos, codecPad, codecThink, codecNothink, codecThinkBos, codecThinkEos: Int
     let vocab: Int
     let groups: Int
+    /// `codec_language_id`: lower-case language name -> codec token id ("spanish" -> 2054).
+    let codecLanguageIDs: [String: Int]
     init(path: String) throws {
         guard let j = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any] else {
             throw QwenANEError.invalid("bad host config")
@@ -16,6 +18,9 @@ struct HostConfig {
         codecThink = i("codec_think"); codecNothink = i("codec_nothink")
         codecThinkBos = i("codec_think_bos"); codecThinkEos = i("codec_think_eos")
         vocab = i("vocab"); groups = i("num_code_groups")
+        var langs: [String: Int] = [:]
+        for (k, v) in (j["codec_language_id"] as? [String: Any]) ?? [:] { if let id = v as? Int { langs[k.lowercased()] = id } }
+        codecLanguageIDs = langs
     }
 }
 
@@ -88,8 +93,28 @@ struct Prompt {
     var targetIds: [Int]
 }
 
-/// Port of qonnx.build_icl_prompt (language auto).
-func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String) -> Prompt {
+/// Language of a render, as the Qwen3-TTS codec names it (`config.json` `codec_language_id`).
+public enum QwenLanguage {
+    /// BCP-47 primary subtag -> the codec's language name.
+    static let names: [String: String] = [
+        "en": "english", "es": "spanish", "zh": "chinese", "de": "german", "it": "italian",
+        "pt": "portuguese", "ja": "japanese", "ko": "korean", "fr": "french", "ru": "russian",
+    ]
+
+    /// The codec language name for a BCP-47 tag ("es", "es-MX", "en_US") or a codec name ("spanish");
+    /// nil for nil, "auto", blank or a language Qwen has no token for. Nil means auto-detect.
+    public static func codecName(for language: String?) -> String? {
+        guard let raw = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty, raw != "auto" else { return nil }
+        let primary = raw.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? raw
+        if let n = names[primary] { return n }
+        return names.values.contains(raw) ? raw : nil
+    }
+}
+
+/// Port of qonnx.build_icl_prompt. `language` nil (or "auto", or one Qwen has no token for) is
+/// language auto: the prefix is [nothink, think_bos, think_eos], exactly as before the parameter existed.
+/// A known language prefixes [think, think_bos, <language id>, think_eos], like the reference.
+func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, language: String? = nil) -> Prompt {
     let c = host.cfg
     let H = 1024
     let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
@@ -122,10 +147,12 @@ func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String) -> Pr
     for r in 0..<(Tref + 1) { for j in 0..<H { codecIcl[r * H + j] += ttsPad[j] } }
     // prefix: think rows, speaker, pad, bos
     var prefix: [Float] = []
-    for id in [c.codecNothink, c.codecThinkBos, c.codecThinkEos] { prefix += host.codecRow(id) }
+    let langID = QwenLanguage.codecName(for: language).flatMap { host.cfg.codecLanguageIDs[$0] }
+    let think = langID.map { [c.codecThink, c.codecThinkBos, $0, c.codecThinkEos] } ?? [c.codecNothink, c.codecThinkBos, c.codecThinkEos]
+    for id in think { prefix += host.codecRow(id) }
     prefix += voice.spkEmbedding
     for id in [c.codecPad, c.codecBos] { prefix += host.codecRow(id) }
-    let pRows = prefix.count / H                       // 6
+    let pRows = prefix.count / H                       // 6 (7 with a language)
     let role = host.textProj(Array(tgtIds[0..<3]))     // 3 x H
     let padCount = pRows - 2
     var comb = [Float](repeating: 0, count: (padCount + 1) * H)

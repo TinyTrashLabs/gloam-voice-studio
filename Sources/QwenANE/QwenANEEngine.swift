@@ -101,9 +101,9 @@ public final class QwenANEEngine: @unchecked Sendable {
     /// smaller of the 6-frames-per-token cap and the window left after the prompt (reference + text).
     /// A line that hits the window ends with `.contextFull`; hosts split text so this stays above the
     /// frames the line needs. Throws for a voice that fails validation.
-    public func maxFrames(text: String, voice: QwenVoiceFiles) throws -> Int {
+    public func maxFrames(text: String, voice: QwenVoiceFiles, language: String? = nil) throws -> Int {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
-        let p = buildICLPrompt(host: host, voice: voice, text: text)
+        let p = buildICLPrompt(host: host, voice: voice, text: text, language: language)
         return min(effectiveMaxTokens(p.nTextTokens), ANETalkerEngine.windowFrames(promptRows: p.T))
     }
 
@@ -137,6 +137,8 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///   - seed: sampler seed. The same seed draws numpy's `default_rng(seed)` stream, which makes
     ///     a render reproducible and comparable to the Python reference. `nil` picks a random one.
     ///   - maxFrames: optional cap on generated frames (80 ms each), below the built-in cap.
+    ///   - language: BCP-47 tag ("es", "es-MX", "en-US") that sets Qwen's codec language token. Nil (the
+    ///     default) or "auto" is language auto-detect, bit-identical to a render without the parameter.
     ///   - cancelled: polled once per frame; return true to stop. The render then returns no samples.
     ///   - pace: called between stages and after every frame, on the rendering thread. A host app
     ///     can sleep in it to hold a duty cycle (thermal / battery); a sleep adds directly to wall time.
@@ -148,6 +150,7 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///     a contiguous slice, bit for bit, of the un-capped line; `QwenRender.samples` is unchanged by
     ///     this hook (it still gets `Options.capPauses`). Nothing is delivered for a cancelled render.
     public func render(text: String, voice: QwenVoiceFiles, seed: UInt64? = nil, maxFrames: Int? = nil,
+                       language: String? = nil,
                        cancelled: () -> Bool = { false }, pace: () -> Void = {},
                        onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
@@ -157,7 +160,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         }
         var sampler = Sampler(vocab: host.cfg.vocab, eos: host.cfg.codecEos, seed: seed ?? UInt64.random(in: 0...UInt64.max))
         let t0 = Date()
-        let prompt = buildICLPrompt(host: host, voice: voice, text: text)
+        let prompt = buildICLPrompt(host: host, voice: voice, text: text, language: language)
         let promptS = Date().timeIntervalSince(t0)
         pace()
         let voc = vocoder
