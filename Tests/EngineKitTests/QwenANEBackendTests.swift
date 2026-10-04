@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import EngineKit
 
@@ -115,35 +116,29 @@ final class QwenANEBackendTests: XCTestCase {
     }
 
     @available(macOS 15.0, iOS 18.0, *)
-    func testReferenceOverTwentySecondsWithoutAWindowIsRefusedNotGuessed() throws {
+    func testReferenceOverTheEncoderInputGetsAWindowInsteadOfARefusal() async throws {
         let dir = try tempDir()
         let ref = dir.appendingPathComponent("ref.wav")
-        try wav(seconds: 25).write(to: ref)
-        XCTAssertThrowsError(try QwenANESpeechModel.prepare(reference: ref, transcript: "some words",
-                                                            modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))) { error in
-            guard case EngineError.referenceTooLong(let b, let seconds, let max) = error else { return XCTFail("\(error)") }
-            XCTAssertEqual(b, .qwen06BANE)
-            XCTAssertEqual(seconds, 25, accuracy: 0.6)
-            XCTAssertEqual(max, 20)
-        }
-    }
-
-    @available(macOS 15.0, iOS 18.0, *)
-    func testLongReferenceUsesTheVoicesLuxWindowAndItsTranscript() throws {
-        let dir = try tempDir()
-        let ref = dir.appendingPathComponent("ref.wav")
-        try wav(seconds: 40).write(to: ref)
-        let engines = dir.appendingPathComponent("engines/lux-tts")
-        try FileManager.default.createDirectory(at: engines, withIntermediateDirectories: true)
-        try wav(seconds: 12).write(to: engines.appendingPathComponent("ref.wav"))
-        let meta = #"{"audio":"engines/lux-tts/ref.wav","text":"the words of the window"}"#
-        try Data(meta.utf8).write(to: engines.appendingPathComponent("voice.json"))
-        // The window is accepted (it fits), so prep moves on to the encoders, which this empty set lacks.
-        XCTAssertThrowsError(try QwenANESpeechModel.prepare(reference: ref, transcript: "text of the whole 40 s master",
-                                                            modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))) { error in
-            guard case EngineError.generationFailed(_, let message) = error else { return XCTFail("\(error)") }
+        try wav(seconds: 50).write(to: ref)
+        // A 50 s master with no stored window: a section of it is picked, and prep moves on to the encoders,
+        // which this empty set lacks. A refusal for length would be a different error. Off the main thread,
+        // as the render queue is: the recognizer reports back on the main queue, which prep blocks on.
+        do {
+            _ = try await Task.detached {
+                try QwenANESpeechModel.prepare(reference: ref, transcript: "some words of the master",
+                                               modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))
+            }.value
+            XCTFail("an empty model set cannot prepare a voice")
+        } catch EngineError.generationFailed(_, let message) {
             XCTAssertTrue(message.contains("QwenSpeechEncoder"), message)
         }
+        // The section was chosen at prep time and stored in the voice's own qwen3-0.6b folder.
+        let window = dir.appendingPathComponent("engines/qwen3-0.6b/ref.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: window.path))
+        let file = try AVAudioFile(forReading: window)
+        let seconds = Double(file.length) / file.processingFormat.sampleRate
+        XCTAssertLessThanOrEqual(seconds, 30.0)
+        XCTAssertGreaterThan(seconds, 15.0)
     }
 }
 

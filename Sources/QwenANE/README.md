@@ -52,7 +52,7 @@ Preparing a voice on the device (`QwenVoicePrep`) needs two more compiled models
 run on the CPU only (`.cpuOnly`; never CPU_AND_NE, it hung the ANE compiler):
 
 ```
-<models>/coreml/  QwenSpeechEncoder.mlmodelc    (speech tokenizer, fixed 20 s input + valid length)
+<models>/coreml/  QwenSpeechEncoder.mlmodelc    (speech tokenizer, fixed 40 s input + valid length; 20 s on older sets)
                   QwenSpeakerEncoder.mlmodelc   (x-vector ECAPA-TDNN, mel input + valid length)
 ```
 
@@ -70,10 +70,26 @@ let voice = try QwenVoicePrep.prepared(referenceWAV: wav, transcript: text,
                                        cacheDirectory: voiceDir, modelsDirectory: modelsURL)
 ```
 
-It trims a cut-off tail (`ReferenceTail`), throws `referenceTooLong(seconds:)` past 20 s (the caller
-supplies a window), and caches `voice.json` / `ref_codes.npy` / `spk_embed.npy` keyed by source
+It trims a cut-off tail (`ReferenceTail`), signals `referenceTooLong(seconds:)` past the encoder's input (40 s; `encoderLimitSamples` reads the real
+limit from the model) so the caller can cut a window (`QwenANESpeechModel.prepare` does, automatically), and caches `voice.json` / `ref_codes.npy` / `spk_embed.npy` keyed by source
 sha256 + transcript + prep version. The speaker mel is the upstream one (magnitude, Slaney, reflect
 pad 384), not the mlx-audio-swift fork's. Parity tests: `QWEN_ANE_MODELS=... swift test --filter QwenVoicePrepTests`.
+
+## Per-voice caches and chunk schedule
+
+Every line of a voice builds the same ICL prompt rows for the voice (role, think/speaker rows, the reference
+transcript's text rows and the reference's codec rows), so the engine keeps them per voice (`VoicePrompt`, four
+voices, least recently used out, dropped by `dropCaches()`). The ICL layout is `[text rows ; codec rows]`, so the
+line's own text sits BETWEEN the transcript and the reference codec rows: only the first `8 + n_transcript_tokens`
+rows are identical across lines, and their talker KV can be reused (`KVPrefix`, MLState read/write through
+`withMultiArray`) in whole 64-row prefill chunks. That is one chunk (about 35 ms) for a ~60-token transcript and
+nothing for a short one, so the saving is small; the reused KV is bit-identical (`Options.prefixCache` off renders the
+same codes, proven in `QwenPrefixCacheTests`). `warm(voice:)` builds all of it and runs three frames through every
+Core ML graph.
+
+`Options.chunkFrames` / `render(chunkFrames:)` sets the vocoder chunk schedule (default whole 12-frame chunks).
+`[4, 8, 12]` delivers the first audio about 0.5 s sooner; the codes are unchanged and the samples agree to ANE
+fp16 rounding (above 47 dB SNR in the tests). It only plays gaplessly while the render is faster than real time.
 
 ## Notes
 

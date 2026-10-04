@@ -98,6 +98,15 @@ struct ChatInspectorView: View {
             Toggle("Speak replies", isOn: $appModel.chatAutoSpeak)
                 .toggleStyle(.switch).controlSize(.small)
                 .font(.caption).foregroundStyle(Brand.fgDim)
+            // Same setting as Studio's Direct panel: the language replies are written and spoken in.
+            HStack {
+                Text("Language").font(.caption).foregroundStyle(Brand.fgDim)
+                Picker("", selection: $appModel.language) {
+                    ForEach(StudioView.languages, id: \.0) { Text($0.1).tag($0.0) }
+                }.labelsHidden().frame(maxWidth: 160)
+                    .accessibilityIdentifier("chat-language-picker")
+                    .help("Language the character replies and speaks in. Auto follows your messages.")
+            }
             // Speed labels are MEASURED on this machine (audio seconds per
             // wall second, EMA). >1× keeps up with playback = gapless chat.
             // Engines gate on the CONVERSATION's voice pack: a preset engine

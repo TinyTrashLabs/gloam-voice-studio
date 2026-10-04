@@ -2,19 +2,20 @@ import CoreML
 import CryptoKit
 import Foundation
 import GVoiceKit
+import GVoiceProductionKit
 
 public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
-    /// The trimmed reference is longer than the speech encoder's fixed 20 s input; the caller picks a window.
+    /// The trimmed reference is longer than the speech encoder's fixed input (40 s; 20 s on older model sets). Internal signal, not a refusal: `QwenANESpeechModel.prepare` answers it by picking a window of the master.
     case referenceTooLong(seconds: Double)
     case referenceTooShort(seconds: Double)
-    /// Not mono 24 kHz PCM16/float32 WAV (run it through ReferenceStandard / the cleanup pipeline first).
+    /// Not audio at all (any rate, channel count or sample format AVFoundation reads is converted).
     case unsupportedWAV(String)
     case modelMissing(String)
     case modelFailed(String)
 
     public var errorDescription: String? {
         switch self {
-        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, the encoder takes at most 20 s"
+        case .referenceTooLong(let s): return "QwenVoicePrep: reference is \(s) s, longer than the encoder's input; a window of it is needed"
         case .referenceTooShort(let s): return "QwenVoicePrep: reference is \(s) s, too short to clone from"
         case .unsupportedWAV(let m): return "QwenVoicePrep: \(m)"
         case .modelMissing(let m): return "QwenVoicePrep: missing model \(m)"
@@ -34,9 +35,11 @@ public enum QwenVoicePrep {
     /// Bump when the recipe changes (mel, tail rule, encoders): cached voices are recomputed.
     public static let prepVersion = 1
     public static let melKind = "upstream"
-    public static let maxSamples = 480_000          // the speech encoder's fixed 20 s input
+    /// The shipped speech encoder's fixed input (40 s since 2026-10-04; it was 20 s). The real limit is
+    /// read from the model file at prep time, so an older 20 s model set keeps working.
+    public static let maxSamples = 960_000
     public static let minSamples = 12_000           // 0.5 s
-    static let speakerFrames = 2048
+    static let speakerFrames = 4096
     static let sampleRate = 24_000
 
     // MARK: cache API
@@ -62,15 +65,35 @@ public enum QwenVoicePrep {
         let all = try samples(of: referenceWAV)
         let samples = Array(all[0..<ReferenceTail.end(of: all, sampleRate: sampleRate)])
         let seconds = Double(samples.count) / Double(sampleRate)
+        // Cheap check first (no model load): nothing past the largest encoder ever shipped.
         guard samples.count <= maxSamples else { throw QwenVoicePrepError.referenceTooLong(seconds: seconds) }
         guard samples.count >= minSamples else { throw QwenVoicePrepError.referenceTooShort(seconds: seconds) }
 
         let coreml = modelsDirectory.appendingPathComponent("coreml")
         let speech = try load(coreml.appendingPathComponent("QwenSpeechEncoder.mlmodelc"))
         let speaker = try load(coreml.appendingPathComponent("QwenSpeakerEncoder.mlmodelc"))
+        guard samples.count <= inputLength(speech, "wav", axis: 2, default: maxSamples) else {
+            throw QwenVoicePrepError.referenceTooLong(seconds: seconds)
+        }
         return QwenVoiceFiles(refText: text,
                               refCodes: try codes(speech, samples),
                               spkEmbedding: try embedding(speaker, samples))
+    }
+
+    /// The longest section a Qwen voice may store: the encoder's input, but never more than 256 codec
+    /// frames (20.48 s at 12.5 Hz) -- the pack format's ref_codes limit, which keeps the voice prefix
+    /// small enough to leave the ANE talker's 1024-slot KV for the speech it generates.
+    public static let maxRefFrames = 256
+    public static func sectionLimitSamples(modelsDirectory: URL) -> Int {
+        min(encoderLimitSamples(modelsDirectory: modelsDirectory), maxRefFrames * 1920)
+    }
+
+    /// The speech encoder's real input length in samples, read from the model file (40 s, or 20 s on an
+    /// older model set); `maxSamples` when the model can't be loaded (prep then reports that itself).
+    public static func encoderLimitSamples(modelsDirectory: URL) -> Int {
+        let url = modelsDirectory.appendingPathComponent("coreml").appendingPathComponent("QwenSpeechEncoder.mlmodelc")
+        guard let speech = try? load(url) else { return maxSamples }
+        return min(maxSamples, inputLength(speech, "wav", axis: 2, default: maxSamples))
     }
 
     // MARK: encoders
@@ -83,15 +106,22 @@ public enum QwenVoicePrep {
         catch { throw QwenVoicePrepError.modelFailed("loading \(url.lastPathComponent): \(error)") }
     }
 
+    /// Length of a fixed-shape model input along `axis` (the encoders are built for one padded size).
+    static func inputLength(_ model: MLModel, _ name: String, axis: Int, default d: Int) -> Int {
+        let shape = model.modelDescription.inputDescriptionsByName[name]?.multiArrayConstraint?.shape ?? []
+        return axis < shape.count ? shape[axis].intValue : d
+    }
+
     /// T = ceil(ceil(ceil(ceil(ceil(n/4)/5)/6)/8)/2)
     static func codeFrames(samples n: Int) -> Int {
         [4, 5, 6, 8, 2].reduce(n) { ($0 + $1 - 1) / $1 }
     }
 
     private static func codes(_ model: MLModel, _ x: [Float]) throws -> [[Int]] {
-        let wav = try MLMultiArray(shape: [1, 1, NSNumber(value: maxSamples)], dataType: .float32)
-        let p = wav.dataPointer.bindMemory(to: Float.self, capacity: maxSamples)
-        p.initialize(repeating: 0, count: maxSamples)
+        let N = inputLength(model, "wav", axis: 2, default: maxSamples)
+        let wav = try MLMultiArray(shape: [1, 1, NSNumber(value: N)], dataType: .float32)
+        let p = wav.dataPointer.bindMemory(to: Float.self, capacity: N)
+        p.initialize(repeating: 0, count: N)
         x.withUnsafeBufferPointer { p.update(from: $0.baseAddress!, count: x.count) }
         let n = try MLMultiArray(shape: [1], dataType: .int32)
         n[0] = NSNumber(value: x.count)
@@ -110,10 +140,11 @@ public enum QwenVoicePrep {
 
     private static func embedding(_ model: MLModel, _ x: [Float]) throws -> [Float] {
         let (mel, frames) = QwenMel.logMel(x)
-        guard frames <= speakerFrames else { throw QwenVoicePrepError.referenceTooLong(seconds: Double(x.count) / Double(sampleRate)) }
-        let arr = try MLMultiArray(shape: [1, NSNumber(value: speakerFrames), NSNumber(value: QwenMel.nMels)], dataType: .float32)
-        let p = arr.dataPointer.bindMemory(to: Float.self, capacity: speakerFrames * QwenMel.nMels)
-        p.initialize(repeating: 0, count: speakerFrames * QwenMel.nMels)
+        let F = inputLength(model, "mel", axis: 1, default: speakerFrames)
+        guard frames <= F else { throw QwenVoicePrepError.referenceTooLong(seconds: Double(x.count) / Double(sampleRate)) }
+        let arr = try MLMultiArray(shape: [1, NSNumber(value: F), NSNumber(value: QwenMel.nMels)], dataType: .float32)
+        let p = arr.dataPointer.bindMemory(to: Float.self, capacity: F * QwenMel.nMels)
+        p.initialize(repeating: 0, count: F * QwenMel.nMels)
         mel.withUnsafeBufferPointer { p.update(from: $0.baseAddress!, count: mel.count) }
         let n = try MLMultiArray(shape: [1], dataType: .int32)
         n[0] = NSNumber(value: frames)
@@ -129,23 +160,47 @@ public enum QwenVoicePrep {
 
     // MARK: WAV
 
-    /// Mono 24 kHz samples in [-1, 1) from PCM16 or float32 WAV bytes.
+    /// Mono 24 kHz samples in [-1, 1) from WAV bytes of ANY sample rate and channel count: other rates are
+    /// resampled (`NativeAudioProcessor`, AVAudioConverter at maximum quality) and channels averaged, so a
+    /// 48 kHz or stereo reference is prepared like any other and never refused for its format. PCM16 and
+    /// float32 are parsed directly; anything else AVFoundation reads is decoded through a temporary file.
     static func samples(of wav: Data) throws -> [Float] {
         let wav = Data(wav)   // zero-based indices
-        guard let c = RefLoudness.dataChunk(in: wav) else { throw QwenVoicePrepError.unsupportedWAV("not a readable WAV") }
-        guard c.channels == 1, c.sampleRate == sampleRate else {
-            throw QwenVoicePrepError.unsupportedWAV("need mono 24 kHz, got \(c.channels) ch at \(c.sampleRate) Hz")
-        }
+        guard let c = RefLoudness.dataChunk(in: wav) else { return try decodeThroughAVFoundation(wav) }
         let width = c.format == .pcm16 ? 2 : 4
+        let channels = max(1, c.channels)
         let count = c.length / width
-        guard count > 0 else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
-        return wav.withUnsafeBytes { raw -> [Float] in
+        guard count >= channels else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
+        let interleaved: [Float] = wav.withUnsafeBytes { raw -> [Float] in
             let base = raw.baseAddress!.advanced(by: c.offset)
             if c.format == .pcm16 {
                 return (0..<count).map { Float(base.loadUnaligned(fromByteOffset: $0 * 2, as: Int16.self).littleEndian) / 32768 }
             }
             return (0..<count).map { Float(bitPattern: base.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self).littleEndian) }
         }
+        if channels == 1, c.sampleRate == sampleRate { return interleaved }
+        let frames = count / channels
+        let planar = (0..<channels).map { ch in (0..<frames).map { interleaved[$0 * channels + ch] } }
+        return try mono24k(ReferenceAudioBuffer(sampleRate: c.sampleRate, channels: planar))
+    }
+
+    private static func mono24k(_ buffer: ReferenceAudioBuffer) throws -> [Float] {
+        do {
+            let out = try NativeAudioProcessor.resample(NativeAudioProcessor.mono(buffer), to: sampleRate)
+            guard let samples = out.channels.first, !samples.isEmpty else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
+            return samples
+        } catch let e as QwenVoicePrepError { throw e }
+        catch { throw QwenVoicePrepError.unsupportedWAV("could not convert to 24 kHz mono: \(error)") }
+    }
+
+    private static func decodeThroughAVFoundation(_ wav: Data) throws -> [Float] {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("qwen-prep-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        do {
+            try wav.write(to: tmp)
+            return try mono24k(NativeAudioProcessor.decode(tmp))
+        } catch let e as QwenVoicePrepError { throw e }
+        catch { throw QwenVoicePrepError.unsupportedWAV("not a readable WAV") }
     }
 
     // MARK: cache files

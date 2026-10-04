@@ -87,26 +87,31 @@ public enum APIRouter {
         router.get("voices") { _, _ in
             VoicesResponse(voices: deps.voices.list().map {
                 APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug),
-                         variants: deps.voices.layout.variantKeys(of: $0.slug))
+                         variants: deps.voices.layout.variantKeys(of: $0.slug),
+                         languages: deps.voices.languages(of: $0.slug),
+                         hasAvatar: deps.voices.avatarURL($0.slug) != nil)
             })
         }
 
         router.post("voices") { request, context in
-            let req = try await request.decode(as: VoiceCreateRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceCreateRequest.self, from: request)
             guard !req.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw APIError(status: .badRequest, detail: "name is empty")
             }
             guard let raw = Data(base64Encoded: req.refAudio) else {
                 throw APIError(status: .badRequest, detail: "refAudio is not valid base64")
             }
-            return try mapStoreErrors {
+            let saved = try mapStoreErrors {
                 try deps.voices.save(name: req.name, refWav: raw, refText: req.refText ?? "")
             }
+            // Section(s) for the engines that take a shorter reference are chosen now, once, and stored in the pack.
+            await deps.voices.prepareSections(saved.slug)
+            return saved
         }
 
         router.patch("voices/:slug") { request, context in
             let slug = try context.parameters.require("slug")
-            let req = try await request.decode(as: VoiceUpdateRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceUpdateRequest.self, from: request)
             var raw: Data? = nil
             if let b64 = req.refAudio, !b64.isEmpty {
                 guard let decoded = Data(base64Encoded: b64) else {
@@ -115,11 +120,18 @@ public enum APIRouter {
                 raw = decoded
             }
             let name = req.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return try mapStoreErrors {
-                try deps.voices.update(slug,
-                                       name: (name?.isEmpty == false) ? name : nil,
-                                       refText: req.refText, refWav: raw)
+            let updated = try mapStoreErrors {
+                var meta = try deps.voices.update(slug,
+                                                  name: (name?.isEmpty == false) ? name : nil,
+                                                  refText: req.refText, refWav: raw, notes: req.notes)
+                if let persona = req.persona {
+                    meta = try deps.voices.setPersona(meta.slug, persona: persona)
+                }
+                return meta
             }
+            // A replaced master or transcript: sections cut from the old one are stale by hash and are re-chosen here.
+            if raw != nil || req.refText != nil { await deps.voices.prepareSections(updated.slug) }
+            return updated
         }
 
         router.delete("voices/:slug") { _, context in
@@ -130,8 +142,89 @@ public enum APIRouter {
             }
         }
 
+        // Avatar: the voice's picture. PUT takes a raw PNG or JPEG body and stores the pack's
+        // conforming 256x256 PNG (AvatarImage), so what is served back is always that PNG.
+        router.get("voices/:slug/avatar") { _, context -> Response in
+            let slug = try context.parameters.require("slug")
+            let url = try mapStoreErrors { () -> URL in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                guard let url = deps.voices.avatarURL(slug) else {
+                    throw APIError(status: .notFound, detail: "voice '\(slug)' has no avatar")
+                }
+                return url
+            }
+            let data = try Data(contentsOf: url)
+            var headers = HTTPFields()
+            headers[.contentType] = "image/png"
+            headers[.contentLength] = String(data.count)
+            return Response(status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(data: data)))
+        }
+
+        router.put("voices/:slug/avatar") { request, context in
+            let slug = try context.parameters.require("slug")
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
+            let body = buffer.readData(length: buffer.readableBytes) ?? Data()
+            guard AvatarImage.isPNG(body) || AvatarImage.isJPEG(body),
+                  let png = AvatarImage.png(from: body) else {
+                throw APIError(status: .badRequest, detail: "body is not a PNG or JPEG image")
+            }
+            return try mapStoreErrors { () -> VoiceMeta in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                try deps.voices.saveAvatar(slug, pngData: png)
+                return try deps.voices.meta(slug)
+            }
+        }
+
+        router.delete("voices/:slug/avatar") { _, context in
+            let slug = try context.parameters.require("slug")
+            return try mapStoreErrors { () -> OkResponse in
+                guard deps.voices.locate(slug) == .voice(slug) else {
+                    throw StudioError.voiceNotFound(slug: slug)
+                }
+                try deps.voices.removeAvatar(slug)
+                return OkResponse(ok: true)
+            }
+        }
+
+        // Language takes: a take of the voice that speaks another language, tagged so a render in
+        // that language (`language` on /v1/audio/speech) uses its reference.
+        router.post("voices/:slug/variants") { request, context in
+            let slug = try context.parameters.require("slug")
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
+            guard let data = buffer.readData(length: buffer.readableBytes),
+                  let req = try? JSONDecoder().decode(VariantCreateRequest.self, from: data) else {
+                throw APIError(status: .badRequest,
+                               detail: "body must be {language, refAudio, refText}")
+            }
+            guard VoiceLibrary.languageKey(req.language) != nil else {
+                throw APIError(status: .badRequest,
+                               detail: "language must be a BCP-47 tag such as 'es' or 'en-US'")
+            }
+            guard let raw = Data(base64Encoded: req.refAudio), !raw.isEmpty else {
+                throw APIError(status: .badRequest, detail: "refAudio is not valid base64")
+            }
+            guard !req.refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw APIError(status: .badRequest, detail: "refText is empty")
+            }
+            return try mapStoreErrors {
+                try deps.voices.addLanguageTake(slug, language: req.language, refWav: raw,
+                                                refText: req.refText)
+            }
+        }
+
+        // Design and keep: render `script` on qwen3-design from `instruct`, save the result as a voice.
+        router.post("voices/design") { request, context in
+            let req = try await decodeLargeBody(VoiceDesignRequest.self, from: request)
+            return try await designVoice(req, deps: deps)
+        }
+
         router.get("voices/:slug/export") { _, context in
             let slug = try context.parameters.require("slug")
+            await deps.voices.prepareQwenSections(slug)
             let data = try mapStoreErrors { try GVoice.export(slug, from: deps.voices) }
             var headers = HTTPFields()
             headers[.contentType] = "application/zip"
@@ -144,16 +237,12 @@ public enum APIRouter {
         }
 
         router.post("voices/import") { request, context in
-            let req = try await request.decode(as: VoiceImportRequest.self, context: context)
+            let req = try await decodeLargeBody(VoiceImportRequest.self, from: request)
             guard let raw = Data(base64Encoded: req.data) else {
                 throw APIError(status: .badRequest, detail: "data is not valid base64")
             }
-            return try mapStoreErrors { () -> VoiceMeta in
-                let meta = try GVoice.import(raw, into: deps.voices)
-                // Sync can deliver a take's old standalone pack before its
-                // voice; once the voice is here, fold the take into it.
-                try? deps.voices.foldLegacyVariants(log: { _ in })
-                return meta
+            return try mapStoreErrors {
+                try deps.voices.importPack(raw, update: req.update ?? false)
             }
         }
 
@@ -366,6 +455,12 @@ public enum APIRouter {
                     // only a base miss is fatal.
                     resolved = (voice, found.meta, found.refURL)
                 }
+                // A `language` the voice has a take for renders from THAT take's reference (a bilingual
+                // voice: Benson's `es`), unless an emotion take already stands in for the voice.
+                if clones, !usedVariant, let base = resolved,
+                   let take = deps.voices.take(of: base.slug, language: req.language) {
+                    resolved = (take.meta.slug, take.meta, take.refURL)
+                }
                 if let resolved {
                     // An empty transcript is the same failure wearing a disguise on
                     // the backends whose clone path is conditioned on text as well as
@@ -465,7 +560,8 @@ public enum APIRouter {
                     referenceGuidanceOverride: req.reference_guidance,
                     seed: req.seed,
                     dialoguePrefix: speechPrefix,
-                    fx: fxPreset)
+                    fx: fxPreset,
+                    firstChunkFrames: req.first_chunk_frames)
                 if wantsStream {
                     let gainDb = trimSlug.map { deps.voices.gainDb(for: $0) } ?? 0
                     let response = try await streamedSpeech(
@@ -482,13 +578,14 @@ public enum APIRouter {
                     // note there and gloam-dj #297. Synthesis is the measured
                     // starver (a sustained generation stalled MusicKit
                     // mid-song on the gloam.fm shell).
+                    let lane = deps.speechLane(for: backend)
                     result = try await Task(priority: GloamEngine.modelWorkPriority) {
-                        try await deps.gate.run {
-                            await deps.prepareTTS()
+                        try await lane.gate.run {
+                            await lane.prepare()
                             // Interleaved: with a chat stream in flight this runs
                             // between its deltas (speak-while-generating); with
                             // none it is exactly `synthesize`.
-                            return try await deps.engine.synthesizeInterleaved(
+                            return try await lane.engine.synthesizeInterleaved(
                                 backend: backend, request: synthRequest)
                         }
                     }.value
@@ -520,6 +617,54 @@ public enum APIRouter {
                 throw APIError(status: .badRequest, detail: "\(b.rawValue) requires 'instruct'")
             } catch EngineError.speakerRequired(let b) {
                 throw APIError(status: .badRequest, detail: "\(b.rawValue) requires a preset 'speaker'")
+            } catch let error as EngineError {
+                throw speechAPIError(error)
+            }
+        }
+
+        // Warmup: load a model and prepare a voice ahead of the first line. A client that knows what it will
+        // speak next (Furby, before a conversation) calls this; on qwen3-0.6b-ane it removes the ~44 s a cold
+        // first request pays (Core ML load, voice preparation, first-call compilation, per-voice caches).
+        // Runs in the same lane as speech for the model, so it queues behind a render on that lane only.
+        router.post("v1/audio/warmup") { request, context in
+            let req = try await request.decode(as: WarmupRequest.self, context: context)
+            let backend = req.model.flatMap(BackendID.init(rawValue:))
+                ?? BackendID.migrating(rawValue: deps.defaultModel())
+                ?? deps.defaultBackend
+            let controls = backend.controls
+            let defaultVoice = deps.defaultVoice()
+            let slug = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            var refPath: String? = nil, refText: String? = nil
+            if controls.voiceClone != .none {
+                guard let slug else {
+                    throw APIError(status: .badRequest, detail: "\(backend.rawValue) requires a 'voice'")
+                }
+                guard let found = try? deps.voices.get(slug) else {
+                    throw APIError(status: .badRequest, detail: "voice '\(slug)' not found")
+                }
+                refPath = found.refURL.path
+                refText = found.meta.refText.isEmpty ? nil : found.meta.refText
+            }
+            let warmRequest = SynthesisRequest(
+                text: "Ready.", refAudioPath: refPath, refText: refText, emotion: .neutral, speed: 1.0,
+                speaker: controls.presetSpeakers.first)
+            let lane = deps.speechLane(for: backend)
+            do {
+                let seconds = try await Task(priority: GloamEngine.modelWorkPriority) {
+                    try await lane.gate.run {
+                        await lane.prepare()
+                        return try await lane.engine.warm(backend: backend, request: warmRequest)
+                    }
+                }.value
+                var json: [String: Any] = ["model": backend.rawValue, "seconds": seconds]
+                if let slug { json["voice"] = slug }
+                let body = try JSONSerialization.data(withJSONObject: json)
+                return Response(status: .ok, headers: [.contentType: "application/json"],
+                                body: .init(byteBuffer: ByteBuffer(data: body)))
+            } catch is RequestGate.Busy {
+                throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+            } catch EngineError.licenseAckRequired(let b) {
+                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
             } catch let error as EngineError {
                 throw speechAPIError(error)
             }
@@ -637,7 +782,7 @@ public enum APIRouter {
             // default 2 MB body cap rejects real audio. Collect the body
             // directly at a Lab-sized limit (this is a local dev tool) the way
             // the MCP route does, then decode from the buffer.
-            var buffer = try await request.body.collect(upTo: 64 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
             guard let data = buffer.readData(length: buffer.readableBytes),
                   let req = try? JSONDecoder().decode(LabClipRequest.self, from: data)
             else {
@@ -690,6 +835,63 @@ public enum APIRouter {
         }
 
         return router
+    }
+
+    /// Library bodies carry whole recordings and packs as base64 (a normal 3.5 MB pack is 4.7 MB of JSON),
+    /// and `request.decode` stops at the framework's 2 MB default, so they are collected at this ceiling
+    /// instead — the same one the Lab and variant routes use. A local tool, not an upload endpoint.
+    static let maxLibraryBodyBytes = 64 * 1024 * 1024
+
+    static func decodeLargeBody<T: Decodable>(_ type: T.Type, from request: Request) async throws -> T {
+        var buffer = try await request.body.collect(upTo: maxLibraryBodyBytes)
+        guard let data = buffer.readData(length: buffer.readableBytes),
+              let value = try? JSONDecoder().decode(type, from: data) else {
+            throw APIError(status: .badRequest, detail: "request body is not valid JSON for this route")
+        }
+        return value
+    }
+
+    /// Renders `script` on qwen3-design from `instruct` and saves it as a new voice — the one call behind
+    /// `POST /voices/design` and the `design_voice` MCP tool. The saved reference is the render itself
+    /// (script as its transcript), the instruct is kept in `engines/qwen3-design/voice.json`.
+    static func designVoice(_ req: VoiceDesignRequest, deps: APIDependencies) async throws -> VoiceMeta {
+        func blank(_ s: String) -> Bool { s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !blank(req.name) else { throw APIError(status: .badRequest, detail: "name is empty") }
+        guard !blank(req.instruct) else { throw APIError(status: .badRequest, detail: "instruct is empty") }
+        guard !blank(req.script) else { throw APIError(status: .badRequest, detail: "script is empty") }
+        // Fail on a taken name before spending a render on it.
+        let slug = try mapStoreErrors { try Slug.slugify(req.name) }
+        guard deps.voices.locate(slug) == nil else {
+            throw APIError(status: .conflict, detail: "voice '\(slug)' already exists")
+        }
+        let backend = BackendID.qwenDesign
+        let synth = SynthesisRequest(text: req.script, refAudioPath: nil, refText: nil,
+                                     emotion: .neutral, speed: 1.0,
+                                     instruct: req.instruct, language: req.language)
+        let result: SynthesisResult
+        do {
+            let lane = deps.speechLane(for: backend)
+            result = try await Task(priority: GloamEngine.modelWorkPriority) {
+                try await lane.gate.run {
+                    await lane.prepare()
+                    return try await lane.engine.synthesize(backend: backend, request: synth)
+                }
+            }.value
+        } catch is RequestGate.Busy {
+            throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+        } catch EngineError.licenseAckRequired(let b) {
+            throw APIError(status: .forbidden, detail: licenseNotice(for: b))
+        } catch let error as EngineError {
+            throw speechAPIError(error)
+        }
+        let wav = WAVEncoder.encode(pcm16: PCM16.data(from: result.samples), sampleRate: result.sampleRate)
+        let direction = try JSONEncoder().encode(["instruct": req.instruct])
+        return try mapStoreErrors {
+            var meta = try deps.voices.save(name: req.name, refWav: wav, refText: req.script,
+                                            engines: [backend.rawValue: ["voice.json": direction]])
+            if let persona = req.persona { meta = try deps.voices.setPersona(meta.slug, persona: persona) }
+            return meta
+        }
     }
 
     /// Evicts the resident models `target` names from the server's engine and
@@ -864,14 +1066,11 @@ private func dialoguePrefixes(_ voices: [String?],
 }
 
 /// How an `EngineError` from the speech route reaches the client: a missing
-/// model set is a 503 (the server cannot serve it right now), a voice whose
-/// reference cannot be used is a 400, everything else a 500 with its reason.
+/// model set is a 503 (the server cannot serve it right now), everything else a 500 with its reason.
 func speechAPIError(_ error: EngineError) -> APIError {
     switch error {
     case .modelNotInstalled:
         return APIError(status: .serviceUnavailable, detail: error.localizedDescription)
-    case .referenceTooLong:
-        return APIError(status: .badRequest, detail: error.localizedDescription)
     default:
         return APIError(status: .internalServerError, detail: "\(error)")
     }
@@ -907,11 +1106,12 @@ private final class SpeechPieces: @unchecked Sendable {
 private func streamedSpeech(backend: BackendID, request: SynthesisRequest, gainDb: Double,
                             deps: APIDependencies) async throws -> Response {
     let (pieces, continuation) = AsyncThrowingStream<SpeechPiece, Error>.makeStream()
+    let lane = deps.speechLane(for: backend)
     let work = Task(priority: GloamEngine.modelWorkPriority) {
         do {
-            try await deps.gate.run {
-                await deps.prepareTTS()
-                for try await chunk in await deps.engine.synthesizeStreamInterleaved(
+            try await lane.gate.run {
+                await lane.prepare()
+                for try await chunk in await lane.engine.synthesizeStreamInterleaved(
                     backend: backend, request: request)
                 {
                     let samples = AudioAssembler.applyGain(floats: chunk.samples, db: gainDb)

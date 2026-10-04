@@ -106,21 +106,30 @@ struct APIVoice: Codable, ResponseEncodable {
     /// The takes inside this voice's folder (`nova` → `["excited"]`), each
     /// addressable as `"<slug>-<key>"`. Additive: older clients ignore it.
     let variants: [String]
+    /// Every language the voice speaks (its own plus its takes'), as written. Additive.
+    let languages: [String]
+    /// Whether the voice carries an avatar (`GET /voices/<slug>/avatar`). Additive.
+    let hasAvatar: Bool
 
-    init(meta: VoiceMeta, capabilities: VoiceCapabilities, variants: [String] = []) {
+    init(meta: VoiceMeta, capabilities: VoiceCapabilities, variants: [String] = [],
+         languages: [String] = [], hasAvatar: Bool = false) {
         self.meta = meta
         self.hasSource = capabilities.hasSource
         self.engines = capabilities.engines.sorted()
         self.variants = variants
+        self.languages = languages
+        self.hasAvatar = hasAvatar
     }
 
-    enum ExtraKeys: String, CodingKey { case hasSource, engines, variants }
+    enum ExtraKeys: String, CodingKey { case hasSource, engines, variants, languages, hasAvatar }
     func encode(to encoder: Encoder) throws {
         try meta.encode(to: encoder)
         var c = encoder.container(keyedBy: ExtraKeys.self)
         try c.encode(hasSource, forKey: .hasSource)
         try c.encode(engines, forKey: .engines)
         try c.encode(variants, forKey: .variants)
+        try c.encode(languages, forKey: .languages)
+        try c.encode(hasAvatar, forKey: .hasAvatar)
     }
     init(from decoder: Decoder) throws {
         meta = try VoiceMeta(from: decoder)
@@ -128,6 +137,8 @@ struct APIVoice: Codable, ResponseEncodable {
         hasSource = try c.decodeIfPresent(Bool.self, forKey: .hasSource) ?? false
         engines = try c.decodeIfPresent([String].self, forKey: .engines) ?? []
         variants = try c.decodeIfPresent([String].self, forKey: .variants) ?? []
+        languages = try c.decodeIfPresent([String].self, forKey: .languages) ?? []
+        hasAvatar = try c.decodeIfPresent(Bool.self, forKey: .hasAvatar) ?? false
     }
 }
 
@@ -159,14 +170,48 @@ struct VoiceCreateRequest: Codable {
     let refText: String?
 }
 
-struct VoiceUpdateRequest: Codable {
+struct VoiceUpdateRequest: Decodable {
     let name: String?
     let refAudio: String?         // base64 wav, replaces ref.wav
     let refText: String?
+    /// Free-form description; "" clears it.
+    let notes: String?
+    /// Absent leaves the persona alone; a full object sets it; `null` clears it.
+    let persona: Persona??
+
+    enum CodingKeys: String, CodingKey { case name, refAudio, refText, notes, persona }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        refAudio = try c.decodeIfPresent(String.self, forKey: .refAudio)
+        refText = try c.decodeIfPresent(String.self, forKey: .refText)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        // `decodeIfPresent` is nil for both a missing key and `null`, so presence is read off the key.
+        persona = c.contains(.persona) ? .some(try c.decodeIfPresent(Persona.self, forKey: .persona)) : nil
+    }
 }
 
 struct VoiceImportRequest: Codable {
     let data: String              // base64 .gvoice zip
+    /// Replace the local voice when the pack is a newer version of it (same `id`, higher `revision`).
+    /// Default false: a known id is kept alongside as a copy with a new id.
+    let update: Bool?
+}
+
+/// `POST /voices/<slug>/variants` — a take that speaks another language.
+struct VariantCreateRequest: Codable {
+    let language: String          // BCP-47 ("es", "en-US")
+    let refAudio: String          // base64 wav
+    let refText: String           // what the reference says, in that language
+}
+
+/// `POST /voices/design` — design a voice from a description and keep it.
+struct VoiceDesignRequest: Codable {
+    let name: String
+    let instruct: String          // the voice, described
+    let script: String            // what it says in the saved reference
+    let language: String?
+    let persona: Persona?
 }
 
 struct ListenRequest: Codable {
@@ -255,6 +300,17 @@ struct SpeechRequest: Codable {
     /// OpenAI's `stream_format`. Only `"audio"` (the raw audio stream, which is what `stream: true`
     /// means here) is supported; `"sse"` is a 400. `"audio"` alone also turns streaming on.
     let stream_format: String?
+    /// qwen3-0.6b-ane streaming: frames (1...12, 80 ms each) in the first chunk. nil/12 = default. 4 puts the
+    /// first audio out about half a second sooner, with less audio buffered ahead of playback.
+    let first_chunk_frames: Int?
+}
+
+/// `POST /v1/audio/warmup`: get a model and a voice ready before the first line, so that line does not pay
+/// for the load and the voice preparation. Both fields fall back like `/v1/audio/speech` (Settings default
+/// model / default voice).
+struct WarmupRequest: Codable {
+    let model: String?
+    let voice: String?
 }
 
 /// Thrown by the default STT closures when the server was built without a
@@ -278,6 +334,12 @@ public struct APIDependencies: Sendable {
     public let defaultLLM: LLMBackendID?
     public let log: APILog
     public let gate: RequestGate
+    /// A second engine that renders only Neural Engine backends (`BackendID.speechFamily == .neuralEngine`),
+    /// with its own task chain and its own gate, so a `qwen3-0.6b-ane` request and a GPU request render at
+    /// the same time instead of queueing behind one another. nil = one lane: everything goes through `engine`
+    /// and `gate`, as before. Requests on the SAME family still queue (one render at a time per lane).
+    public let neuralEngine: GloamEngine?
+    public let neuralGate: RequestGate
     /// Slug of the library voice that answers `/v1/audio/speech` requests
     /// which don't name a `voice` ("" = none — today's raw-backend behavior).
     /// A closure, not a captured value, so flipping the Settings picker takes
@@ -324,6 +386,8 @@ public struct APIDependencies: Sendable {
                 defaultLLM: LLMBackendID? = nil,
                 log: APILog = APILog(),
                 gate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
+                neuralEngine: GloamEngine? = nil,
+                neuralGate: RequestGate = RequestGate(maxConcurrent: 1, maxQueued: 3),
                 defaultVoice: @escaping @Sendable () -> String = { "" },
                 defaultModel: @escaping @Sendable () -> String = { "" },
                 authToken: @escaping @Sendable () -> String? = { nil },
@@ -341,6 +405,8 @@ public struct APIDependencies: Sendable {
         self.defaultLLM = defaultLLM
         self.log = log
         self.gate = gate
+        self.neuralEngine = neuralEngine
+        self.neuralGate = neuralGate
         self.defaultVoice = defaultVoice
         self.defaultModel = defaultModel
         self.authToken = authToken
@@ -349,6 +415,27 @@ public struct APIDependencies: Sendable {
         self.prepareTTS = prepareTTS
         self.makeAligner = makeAligner
         self.lab = lab
+    }
+}
+
+/// Where one speech request renders: an engine, the gate that admits work to it, and the hook that runs
+/// before it (the app's TTS residency hand-off, which only the GPU lane needs).
+public struct SpeechLane: Sendable {
+    public let engine: GloamEngine
+    public let gate: RequestGate
+    public let prepare: @Sendable () async -> Void
+}
+
+extension APIDependencies {
+    /// The lane `backend` renders on: the Neural Engine lane (when the app supplied one) for Neural Engine
+    /// backends, the main lane for everything else. Different lanes run concurrently; one lane serializes.
+    public func speechLane(for backend: BackendID) -> SpeechLane {
+        if backend.speechFamily == .neuralEngine, let neuralEngine {
+            // No residency hand-off: the Neural Engine model lives in its own engine, which the residency policy
+            // (one resident GPU model across the main engines) neither evicts nor needs to evict for.
+            return SpeechLane(engine: neuralEngine, gate: neuralGate, prepare: {})
+        }
+        return SpeechLane(engine: engine, gate: gate, prepare: prepareTTS)
     }
 }
 

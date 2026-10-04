@@ -79,6 +79,12 @@ final class AppModel {
     /// Second engine holding only the chat voice: TTS here overlaps the main
     /// engine's LLM decode instead of interleaving with it. See init.
     let chatSpeechEngine: GloamEngine
+    /// Renders only Neural Engine backends (qwen3-0.6b-ane) for the local API, so those requests overlap GPU
+    /// renders instead of queueing behind them (and never evict the GPU engine's resident model). Not part of
+    /// the residency policy: it holds no GPU weights.
+    let neuralSpeechEngine: GloamEngine
+    /// The background warm-up of the Neural Engine voice (model load + voice preparation + caches); nil when idle.
+    @ObservationIgnored private var neuralPrewarm: Task<Void, Never>?
     let ttsResidency: TTSResidencyPolicy
     let downloads: ModelDownloadManager
     let speech: SpeechManager
@@ -797,6 +803,7 @@ final class AppModel {
             engine = GloamEngine(provider: UITestFakeProvider(),
                                  languageProvider: UITestFakeLanguageProvider())
             chatSpeechEngine = GloamEngine(provider: UITestFakeProvider())
+            neuralSpeechEngine = GloamEngine(provider: UITestFakeProvider())
         } else {
             // Cap MLX's Metal buffer-reuse pool. The default is ~0.95x physical
             // RAM, which let a Dia2 take strand ~10 GB of stale scratch and swap
@@ -848,6 +855,9 @@ final class AppModel {
                 provider: MLXModelProvider(modelPathResolver: ttsResolver,
                                            luxRuntime: luxRuntime,
                                            luxOnnxDirResolver: luxOnnxDir))
+            // The Neural Engine lane of the local API: only ever asked for qwen3-0.6b-ane, which loads from its
+            // own model set (QwenANEModelLocation), so the MLX resolvers are never consulted.
+            neuralSpeechEngine = GloamEngine(provider: MLXModelProvider(modelPathResolver: ttsResolver))
         }
         // One TTS model resident across BOTH engines: the two engines exist
         // for concurrency (TTS overlapping LLM decode), not so two models can
@@ -889,6 +899,7 @@ final class AppModel {
         // didSet observers don't fire during init — if the server was left on,
         // start it now (this is the whole point of persisting the toggle).
         if serverEnabled { scheduleServerSync() }
+        if !uiTest { prewarmNeuralSpeech() }
         foundryCandidates = foundryCandidateStore.list().compactMap { entry -> FoundryCandidate? in
             guard let url = try? foundryCandidateStore.wavURL(entry.id),
                   let wav = try? Data(contentsOf: url) else { return nil }
@@ -1444,7 +1455,11 @@ final class AppModel {
         // rule as the API's `usedVariant`: never direct a performance twice.
         var requestEmotion = emotion
         if let slug = voiceSlug {
-            if let found = try? voices.resolve(slug, emotion: resolveEmotion) {
+            // A neutral render in a language the voice has a take for clones that take (a bilingual
+            // voice's Spanish recording for Spanish text), same as the API.
+            let languageTake = resolveEmotion == .neutral && controls.language
+                ? voices.take(of: slug, language: language) : nil
+            if let found = languageTake ?? (try? voices.resolve(slug, emotion: resolveEmotion)) {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
@@ -2086,11 +2101,6 @@ final class AppModel {
             return "The model is still loading — try again in a moment."
         case .modelNotInstalled(let backend, let detail):
             return "\(backend.rawValue) is not installed: \(detail)"
-        case .referenceTooLong(_, let seconds, let maxSeconds):
-            return String(
-                format: "This voice's reference clip is %.0fs and could not be trimmed "
-                    + "automatically. LuxTTS needs %.0fs or less — re-record or re-import "
-                    + "it shorter.", seconds, maxSeconds)
         }
     }
 
@@ -2125,6 +2135,7 @@ final class AppModel {
             engine: engine, voices: voices, defaultBackend: backend,
             defaultLLM: resolvedServerDefaultLLM(),
             log: apiLog,
+            neuralEngine: neuralSpeechEngine,
             // Live reads (not captured values): the Settings pickers take
             // effect on the next request without rebuilding the server.
             defaultVoice: { UserDefaults.standard.string(forKey: "serverDefaultVoice") ?? "" },
@@ -2171,6 +2182,40 @@ final class AppModel {
             lab: labModeEnabled ? LabStore.shared : nil)
     }
 
+    /// Loads the Neural Engine voice in the background and prepares the voice the API will most likely be asked
+    /// for (the server's default voice, else the selected one), so the first `qwen3-0.6b-ane` request does not
+    /// pay the ~44 s of Core ML load, voice preparation and first-call compilation. Does nothing when the model
+    /// set is not installed, when the `prewarmNeuralSpeech` default is off, or while a warm-up is already running.
+    /// Low priority, off the main actor, cancelled by `shutdownForExit`; its wall time is logged (category prewarm).
+    func prewarmNeuralSpeech() {
+        guard neuralPrewarm == nil,
+              UserDefaults.standard.object(forKey: "prewarmNeuralSpeech") as? Bool ?? true,
+              (try? QwenANEModelLocation.resolve()) != nil else { return }
+        let candidates = [serverDefaultVoice, selectedVoiceSlug ?? ""].filter { !$0.isEmpty }
+        let voices = voices, neural = neuralSpeechEngine
+        neuralPrewarm = Task.detached(priority: .background) { [weak self] in
+            let start = Date()
+            var request = SynthesisRequest(text: "Ready.", emotion: .neutral, speed: 1.0)
+            var slug: String? = nil
+            for candidate in candidates {
+                if let found = try? voices.get(candidate), !found.meta.refText.isEmpty {
+                    request.refAudioPath = found.refURL.path; request.refText = found.meta.refText
+                    slug = candidate
+                    break
+                }
+            }
+            do {
+                try await neural.warm(backend: .qwen06BANE, request: request)
+                AppLog.prewarm.log("neural speech ready in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s (voice \(slug ?? "none", privacy: .public))")
+            } catch is CancellationError {
+                AppLog.prewarm.log("neural speech warm-up cancelled")
+            } catch {
+                AppLog.prewarm.error("neural speech warm-up failed: \(String(describing: error), privacy: .public)")
+            }
+            await MainActor.run { self?.neuralPrewarm = nil }
+        }
+    }
+
     private func performServerSync() async {
         if serverEnabled {
             await server?.stop()
@@ -2181,6 +2226,7 @@ final class AppModel {
                                           host: serverLANEnabled ? "0.0.0.0" : "127.0.0.1")
                 server = newServer
                 serverError = nil
+                prewarmNeuralSpeech()
             } catch {
                 server = nil
                 serverError = error.localizedDescription
@@ -2202,6 +2248,7 @@ final class AppModel {
             try await newServer.start(port: port)
             server = newServer
             serverError = nil
+            prewarmNeuralSpeech()
         } catch {
             server = nil
             serverError = error.localizedDescription
@@ -2213,12 +2260,15 @@ final class AppModel {
     /// this path so process teardown never races an in-flight Metal command.
     func shutdownForExit() async {
         chat.stop()
+        neuralPrewarm?.cancel()
         await server?.stop()
         await engine.quiesce()
         await chatSpeechEngine.quiesce()
+        await neuralSpeechEngine.quiesce()
         await engine.unload()
         await engine.unloadLLM()
         await chatSpeechEngine.unload()
+        await neuralSpeechEngine.unload()
     }
 
     // MARK: memory pressure
@@ -2241,10 +2291,12 @@ final class AppModel {
             AppLog.memory.log("evicting resident models (pressure)")
             let engine = self.engine
             let chatSpeechEngine = self.chatSpeechEngine
+            let neuralSpeechEngine = self.neuralSpeechEngine
             Task { @MainActor [weak self] in
                 await engine.unload()
                 await engine.unloadLLM()
                 await chatSpeechEngine.unload()
+                await neuralSpeechEngine.evictTTSWhenIdle()      // waits for an API render in flight
                 await self?.refreshEngineStatus()   // RAM chip must drop the names
             }
         }

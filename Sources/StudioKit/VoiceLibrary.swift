@@ -33,9 +33,9 @@ public struct VoiceCapabilities: Sendable, Equatable {
     /// than speaking stored ones, so no library voice ever enables it.
     public func supports(_ backend: BackendID) -> Bool {
         guard backend != .qwenDesign else { return false }
-        // engines/qwen3-0.6b/ is a prepared-voice CACHE derived from source/ (docs/gvoice-format.md),
-        // not a rendition: without source the codes cannot drive any backend here, so it never counts.
-        if engines.contains(backend.rawValue), backend != .qwen06B { return true }
+        // An engine folder the pack actually carries is what the voice works on (qwen3-0.6b only when its
+        // folder is complete: section audio + codes + voice.json, see `capabilities`).
+        if engines.contains(backend.rawValue) { return backend == .qwen06B ? hasSource : true }
         // Dia2 conditions on a word-aligned prefix, not on raw audio. It used
         // to be excluded here, because a pack without the alignment cache in
         // engines/dia2/ had no prefix and would generate unconditioned — a
@@ -89,6 +89,29 @@ public struct VoiceLibrary: Sendable {
         return url
     }
 
+    /// Chooses and stores, once, the sections of a voice's master for the engines that take a shorter
+    /// reference (`ReferenceSections.prepare`): call after a voice is saved, imported or its master is
+    /// replaced. Sections already stored for this master are kept; a replaced master invalidates the old
+    /// ones by hash. Never changes `source/`.
+    @discardableResult
+    public func prepareSections(_ slug: String) async -> [String] {
+        guard let (meta, refURL, _) = try? entry(slug), let refURL else { return [] }
+        return await ReferenceSections.prepare(referenceURL: refURL, refText: meta.refText)
+    }
+
+    /// Prepares and stores the Qwen section of the voice and of every take (language references, emotions)
+    /// that has a master and a transcript, so an export carries `engines/qwen3-0.6b/` for each of them.
+    /// Sections already complete for their master are kept. Returns the slugs prepared now.
+    @discardableResult
+    public func prepareQwenSections(_ slug: String) async -> [String] {
+        var done: [String] = []
+        for (_, vslug) in variantSlugs(of: slug).sorted(by: { $0.key < $1.key }) {
+            guard let (meta, refURL, _) = try? entry(vslug), let refURL else { continue }
+            if await ReferenceSections.prepareQwen(referenceURL: refURL, refText: meta.refText) { done.append(vslug) }
+        }
+        return done
+    }
+
     /// Save a new voice from reference audio, engine assets, or both.
     ///
     /// `refWav` is optional because a voice is not always a recording: a
@@ -125,7 +148,7 @@ public struct VoiceLibrary: Sendable {
         let meta = VoiceMeta(name: name, slug: slug, refText: refText,
                              createdAt: Self.timestamp(), provenance: provenance,
                              pace: pace, enginePace: enginePace, gain: gain,
-                             notes: notes)
+                             notes: notes, id: UUID().uuidString, revision: 1)
         try write(meta, to: voiceDir)
         return meta
     }
@@ -201,9 +224,16 @@ public struct VoiceLibrary: Sendable {
         guard let (meta, refURL, engines) = try? entry(slug) else {
             return VoiceCapabilities(hasSource: false, hasRefText: false, engines: [])
         }
+        var folders = Set(engines.keys)
+        // A qwen3-0.6b folder counts only when it is complete (codes, embedding, voice.json); a half-written
+        // one — or a cache without its section audio when the master is past the encoder — is not a rendition.
+        if let qwen = engines[QwenEngineFiles.engineID],
+           !(qwen[QwenEngineFiles.voiceFile] != nil && qwen["ref_codes.npy"] != nil && qwen["spk_embed.npy"] != nil) {
+            folders.remove(QwenEngineFiles.engineID)
+        }
         return VoiceCapabilities(hasSource: refURL != nil,
                                  hasRefText: !meta.refText.isEmpty,
-                                 engines: Set(engines.keys))
+                                 engines: folders)
     }
 
     /// How `slug` renders on `engine`, or nil if it cannot. An emotion-variant
@@ -393,8 +423,10 @@ public struct VoiceLibrary: Sendable {
     /// re-slug must migrate their own references (chat, selection).
     public func update(_ slug: String, name: String? = nil,
                        refText: String? = nil, refWav: Data? = nil,
+                       notes: String? = nil,
                        variantSuffixes: Set<String> = []) throws -> VoiceMeta {
         var meta = try self.meta(slug)
+        var changed = name != nil && name != meta.name
         var voiceDir = try folder(slug)
         let isVoice = layout.locate(slug) == .voice(slug)
         if let name, name != meta.name, !isVoice {
@@ -421,8 +453,18 @@ public struct VoiceLibrary: Sendable {
             meta.name = name
             meta.slug = newSlug
         }
-        if let refText { meta.refText = refText }
+        if let refText {
+            changed = changed || refText != meta.refText
+            meta.refText = refText
+        }
+        // An empty string clears the description, as nil on the model means "unset".
+        if let notes {
+            let next = notes.isEmpty ? nil : notes
+            changed = changed || next != meta.notes
+            meta.notes = next
+        }
         if let refWav, !refWav.isEmpty {
+            changed = true
             // The standard applies HERE too. This is the third write site for a
             // reference and it was the one that missed — re-recording a voice
             // through `update` dropped it back to whatever level the microphone
@@ -432,7 +474,7 @@ public struct VoiceLibrary: Sendable {
                 .write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
-        return meta
+        return changed ? try touchRevision(meta.slug) : meta
     }
 
     /// Resolved loudness trim for a slug, in dB: its own trim, else the trim of
@@ -511,13 +553,16 @@ public struct VoiceLibrary: Sendable {
                              data: try encoder.encode(direction))
     }
 
+    /// Import hook (GVoicePackStore): a pack's persona lands on the imported voice.
+    public func setPersona(_ slug: String, _ persona: Persona) throws { try setPersona(slug, persona: persona) }
+
     /// Sets (or clears, with nil) the chat persona on a stored voice.
     @discardableResult
     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
         var meta = try self.meta(slug)
         meta.persona = persona
         try write(meta, to: try folder(slug))
-        return meta
+        return try touchRevision(slug)
     }
 
     public func avatarURL(_ slug: String) -> URL? {
@@ -527,12 +572,14 @@ public struct VoiceLibrary: Sendable {
 
     public func saveAvatar(_ slug: String, pngData: Data) throws {
         try pngData.write(to: try folder(slug).appendingPathComponent("avatar.png"))
+        try touchRevision(slug)
     }
 
     public func removeAvatar(_ slug: String) throws {
         guard let url = layout.folder(for: slug)?.appendingPathComponent("avatar.png") else { return }
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
+            try touchRevision(slug)
         }
     }
 

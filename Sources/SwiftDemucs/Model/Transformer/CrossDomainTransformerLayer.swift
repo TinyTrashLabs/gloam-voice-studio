@@ -6,7 +6,7 @@ import MLXNN
 /// Replaces PyTorch's `nn.MultiheadAttention` packed `in_proj_weight` with
 /// individual projections for MLX weight loading.
 ///
-/// Checkpoint mapping (via convert_weights.py):
+/// Checkpoint mapping (via scripts/convert_demucs_weights.py):
 /// - `in_proj_weight` [3*dim, dim] → split into `query_proj.weight`, `key_proj.weight`, `value_proj.weight`
 /// - `in_proj_bias` [3*dim] → split into `query_proj.bias`, `key_proj.bias`, `value_proj.bias`
 /// - `out_proj.weight/bias` → `out_proj.weight/bias` (unchanged)

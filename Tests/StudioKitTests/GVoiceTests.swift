@@ -422,6 +422,27 @@ final class GVoiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(destination.avatarURL("cruz"))), png)
     }
 
+    /// A pack carries its voice's character; the importing library keeps it (2026-10-04: every
+    /// voice is a host, so the persona must travel with the voice).
+    func testPersonaAndNotesTravelWithThePack() throws {
+        _ = try lib.save(name: "Benson", refWav: Data([1, 2]), refText: "hi")
+        let persona = Persona(systemPrompt: "You are Benson, a warm late-night bartender from Mendoza.",
+                              greeting: "Pasá, pasá.", tagline: "late-night bartender",
+                              catchphrases: ["Take your time.", "No clock in here."], color: "#C77D3A")
+        try lib.setPersona("benson", persona: persona)
+        let pack = try GVoice.export("benson", from: lib)
+        XCTAssertEqual(try manifest(pack).persona, persona)
+
+        let destination = VoiceLibrary(directory: dir.appendingPathComponent("imported"))
+        let meta = try GVoice.import(pack, into: destination)
+        XCTAssertEqual(try destination.meta(meta.slug).persona, persona)
+    }
+
+    func testPackWithoutPersonaNamesNone() throws {
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "")
+        XCTAssertNil(try manifest(try GVoice.export("cruz", from: lib)).persona)
+    }
+
     func testAvatarTravelsWithoutSourceToo() throws {
         _ = try lib.save(name: "Cruz", refWav: Data([1, 2]), refText: "hi",
                          engines: ["supertonic": ["style.json": Self.style]])

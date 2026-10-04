@@ -61,8 +61,8 @@ public enum LuxOnnx {
             case .emptyText: return "no tokenizable text"
             case .badPrompt(let m): return "bad LuxTTS voice prompt: \(m)"
             case .referenceTooLong(let s):
-                return String(format: "Reference clip is %.0fs — keep it under %.0fs.",
-                              s, LuxOnnx.maxReferenceSeconds)
+                return String(format: "A %.0fs reference reached the encoder without a window — "
+                    + "callers pick one first (LuxReferenceWindow.pick).", s)
             case .emptyAudio: return "engine returned no samples"
             }
         }

@@ -35,6 +35,27 @@ final class LuxReferenceWindowTests: XCTestCase {
         return samples[lo ..< hi].map(abs).max() ?? 0
     }
 
+    func testApproximateTextSlicesOnSentenceEnds() {
+        let text = "One two three four. Five six seven eight. Nine ten eleven twelve. Thirteen fourteen fifteen sixteen."
+        // A window over the middle half of the audio: the slice starts and stops on whole sentences.
+        let out = LuxReferenceWindow.approximateText(text, windowStart: 25_000, windowCount: 50_000, totalCount: 100_000)
+        XCTAssertEqual(out, "Five six seven eight. Nine ten eleven twelve.")
+    }
+
+    func testPickNeverRefusesALongMaster() async throws {
+        let clip = build([(2, 0.5), (0.4, 0), (40, 0.5)])
+        let text = (0 ..< 120).map { "w\($0)" }.joined(separator: " ")
+        let picked = await LuxReferenceWindow.pick(
+            samples: clip, sampleRate: sampleRate, refText: text, maxSeconds: 20)
+        let w = try XCTUnwrap(picked)
+        XCTAssertLessThanOrEqual(w.seconds, 20.0)
+        XCTAssertGreaterThan(w.seconds, 12.0)
+        XCTAssertFalse(w.text.isEmpty)
+        let fits = await LuxReferenceWindow.pick(
+            samples: build([(12, 0.5)]), sampleRate: sampleRate, refText: text, maxSeconds: 20)
+        XCTAssertNil(fits, "a clip that fits is not windowed")
+    }
+
     func testLeavesAClipInsideTheWindowAlone() {
         let clip = build([(12, 0.5)])
         let out = LuxReferenceWindow.window(samples: clip, sampleRate: sampleRate, maxSeconds: 30).samples

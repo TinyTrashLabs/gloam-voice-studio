@@ -70,17 +70,48 @@ final class QwenVoicePrepTests: XCTestCase {
     }
 
     func testRejectsTooLongWindowBeforeLoadingModels() {
-        let long = wav(samples: tone(seconds: 21))
+        let long = wav(samples: tone(seconds: 41))
         XCTAssertThrowsError(try QwenVoicePrep.prepare(referenceWAV: long, transcript: "x",
                                                        modelsDirectory: URL(fileURLWithPath: "/nonexistent"))) {
             guard case .referenceTooLong(let s)? = $0 as? QwenVoicePrepError else { return XCTFail("\($0)") }
-            XCTAssertEqual(s, 21, accuracy: 0.01)
+            XCTAssertEqual(s, 41, accuracy: 0.01)
         }
     }
 
-    func testRejectsWrongFormat() {
+    func testAnySampleRateIsConvertedNotRefused() throws {
+        // 44.1 kHz mono used to be refused as "need mono 24 kHz"; it is converted now, so prep gets as far
+        // as the (absent) models.
         XCTAssertThrowsError(try QwenVoicePrep.prepare(referenceWAV: wav(samples: tone(seconds: 2), rate: 44100),
                                                        transcript: "x", modelsDirectory: URL(fileURLWithPath: "/x"))) {
+            guard case .modelMissing? = $0 as? QwenVoicePrepError else { return XCTFail("\($0)") }
+        }
+    }
+
+    func testA48kStereoReferenceBecomes24kMono() throws {
+        // 3 s, 48 kHz, two channels (left a 220 Hz tone, right silent): 72 000 mono 24 kHz samples, tone intact.
+        let rate = 48_000, n = 3 * rate
+        var pcm = Data()
+        for i in 0..<n {
+            var l = Int16((0.5 * sin(2 * Double.pi * 220 * Double(i) / Double(rate))) * 32767).littleEndian
+            var r = Int16(0).littleEndian
+            withUnsafeBytes(of: &l) { pcm.append(contentsOf: $0) }; withUnsafeBytes(of: &r) { pcm.append(contentsOf: $0) }
+        }
+        func le<T: FixedWidthInteger>(_ v: T) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        var d = Data("RIFF".utf8); d += le(UInt32(36 + pcm.count)); d += Data("WAVEfmt ".utf8)
+        d += le(UInt32(16)); d += le(UInt16(1)); d += le(UInt16(2)); d += le(UInt32(rate)); d += le(UInt32(rate * 4))
+        d += le(UInt16(4)); d += le(UInt16(16)); d += Data("data".utf8); d += le(UInt32(pcm.count)); d += pcm
+        let out = try QwenVoicePrep.samples(of: d)
+        XCTAssertEqual(out.count, 72_000, accuracy: 4)
+        let rms = (out[2000..<70000].reduce(0) { $0 + $1 * $1 } / Float(68000)).squareRoot()
+        XCTAssertEqual(rms, 0.5 / 2 / Float(2).squareRoot(), accuracy: 0.03, "channels averaged, level kept")
+        // And prep proceeds to the encoders (absent here) instead of refusing the format.
+        XCTAssertThrowsError(try QwenVoicePrep.prepare(referenceWAV: d, transcript: "x", modelsDirectory: URL(fileURLWithPath: "/x"))) {
+            guard case .modelMissing? = $0 as? QwenVoicePrepError else { return XCTFail("\($0)") }
+        }
+    }
+
+    func testNotAudioIsStillRefused() {
+        XCTAssertThrowsError(try QwenVoicePrep.samples(of: Data("not a wav".utf8))) {
             guard case .unsupportedWAV? = $0 as? QwenVoicePrepError else { return XCTFail("\($0)") }
         }
     }

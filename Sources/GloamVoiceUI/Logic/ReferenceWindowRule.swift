@@ -42,14 +42,15 @@ public struct ReferenceWindowMeta: Codable, Equatable {
 public enum ReferenceWindowRule {
     /// Shorter than this and there is nothing to learn from.
     public static let minSeconds = RecordingCheck.minSeconds
-    /// LuxTTS's cap; also the longest master allowed to go un-windowed. Equal
-    /// to EngineKit's `LuxReferenceWindow.maxSeconds`, which this package does
-    /// not link: the Studio app's tests pin the two together.
+    /// The longest window a person can set by hand (LuxTTS's span). Equal to
+    /// EngineKit's `LuxReferenceWindow.maxSeconds`, which this package does
+    /// not link: the Studio app's tests pin the two together. Masters are not
+    /// limited by it: an engine picks its own section of a longer one.
     public static let maxSeconds = 30.0
     /// Past this the editor offers a window: cost is set by the prompt, and
     /// a window this long is what "Propose" cuts to (the radio app's rule).
     public static let adviseAboveSeconds = 20.0
-    public static let proposedSeconds = ClipImport.luxWindowSeconds
+    public static let proposedSeconds = 15.0
 
     /// Plausible speech rates, in words per second. Under-counting audio
     /// inflates LuxTTS's frames-per-token ratio and the predicted duration
