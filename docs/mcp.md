@@ -24,8 +24,10 @@ For Claude Code: `claude mcp add --transport http gloam http://127.0.0.1:8790/mc
 
 ### `list_voices`
 
-No arguments. Returns the library as JSON: `slug`, display `name`, and
-`hasPersona` (whether a chat persona is set).
+No arguments. Returns the library as JSON: `slug`, display `name`, `id` and
+`revision` (see Voice library in [api.md](api.md)), `persona` (the object, or
+`null`; `hasPersona` is kept), `hasNotes`, `languages`, `variants` (take keys)
+and `hasAvatar`.
 
 ### `speak`
 
@@ -34,6 +36,8 @@ No arguments. Returns the library as JSON: `slug`, display `name`, and
 | `text` | string, required | What to say |
 | `voice` | string | Voice slug from `list_voices`; omitted falls back to the Settings → API server default voice |
 | `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` |
+| `instruct` | string | Delivery direction, on backends that take one; wins over the voice's own Direction |
+| `language` | string | Language of `text` (`es`, `en-US`, …). A voice with a take in that language speaks from it, and the hint reaches the engine on backends that take one |
 
 Synthesizes with the app's current Studio backend. Returns the WAV inline as
 MCP `audio` content (when under 4 MB) plus a text line with the temp-file
@@ -54,6 +58,26 @@ voice:
 
 Preset-voicepack backends (`kokoro`, `supertonic`, `qwen3-custom`) are
 unaffected by this gate.
+
+### Voice identity tools
+
+These mirror the voice-library routes in [api.md](api.md) and share their rules. File arguments are
+paths on this Mac that the app can read (`~` is expanded). Each returns the voice's meta as JSON
+(`slug`, `id`, `revision`, …) unless noted.
+
+| Tool | Arguments | Does |
+| --- | --- | --- |
+| `design_voice` | `name`, `instruct`, `script` (required); `language`, `persona` | `POST /voices/design`: renders `script` on `qwen3-design` from `instruct` and saves it |
+| `create_voice` | `name`, `path` (WAV), `transcript` (all required) | Saves a recording as a voice |
+| `update_voice` | `voice` (required); `name`, `persona` (object, or `null` to clear), `notes` (`""` clears) | `PATCH /voices/:slug` |
+| `set_avatar` | `voice`, `path` (PNG or JPEG) | `PUT /voices/:slug/avatar` |
+| `add_language_take` | `voice`, `language`, `path` (WAV), `transcript` | `POST /voices/:slug/variants`; returns the take's meta |
+| `delete_voice` | `voice` | Deletes the voice and its takes. Returns `{"ok": true}` |
+| `export_voice` | `voice`, `path` | Writes the `.gvoice` (`.gvoice` appended when `path` has no extension) |
+| `import_voice` | `path`; `update` (bool) | Imports a `.gvoice`, keeping its `id` and `revision`; `update: true` replaces an older local version |
+
+Failures are tool errors with the same text as the route's `detail`
+(`voice 'ghost' not found`, `'path' is not a PNG or JPEG image`, …).
 
 ### `unload_models`
 

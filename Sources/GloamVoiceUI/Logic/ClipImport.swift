@@ -21,20 +21,12 @@ public enum ClipImport {
     /// Same floor as a recording (`RecordingCheck.minSeconds`): an import is
     /// judged by the rules a take is.
     public static let minSeconds = RecordingCheck.minSeconds
-    /// Refused before the file is opened. A 100 MB file is over an hour of
-    /// MP3 or ten minutes of CD-quality WAV — nothing a 15 s reference needs.
-    public static let maxFileBytes = 100 * 1024 * 1024
-    /// Only this much of a file is decoded, from the top. Leading room tone is
-    /// trimmed after, so a clip whose speech starts within the first two
-    /// minutes still windows correctly; anything later is not a clone
-    /// reference, it is an episode.
-    public static let maxDecodeSeconds = 120.0
-    /// LuxTTS refuses references over 30 s (`LuxOnnx.maxReferenceSeconds`, in the app) and
-    /// gets expensive well before that: its cost is set by the PROMPT, which
-    /// every chunk re-pays. 15 s is the window aidj settled on after measuring
-    /// 28.5 s → 14.6 s take a render from 3.68 GB to 1.96 GB — and 3.68 GB is
-    /// over the device's kill line.
-    public static let luxWindowSeconds = 15.0
+    /// Refused before the file is opened: not a clone reference, an archive.
+    public static let maxFileBytes = 200 * 1024 * 1024
+    /// Memory guard for the decoder, not a reference length: ten minutes of
+    /// 24 kHz mono is what is ever read from a file. The whole clip up to that
+    /// is kept as the master; each engine picks its own section of it.
+    public static let maxDecodeSeconds = 600.0
 
     public enum ImportError: LocalizedError {
         case unreadable(String)
@@ -48,8 +40,7 @@ public enum ClipImport {
             case .tooShort(let s):
                 return String(format: "That clip is %.1fs — a clone needs at least %.0fs of speech.", s, minSeconds)
             case .tooLarge(let bytes):
-                return String(format: "That file is %d MB — pick a shorter clip. A clone only uses the first %.0f seconds of speech.",
-                              bytes / (1024 * 1024), luxWindowSeconds)
+                return String(format: "That file is %d MB — too large to import as a voice.", bytes / (1024 * 1024))
             }
         }
     }
@@ -57,22 +48,21 @@ public enum ClipImport {
     public struct Imported {
         public let url: URL
         public let seconds: Double
-        /// True when the file was longer than the engine's window and was cut.
-        public let trimmed: Bool
         /// The prepared audio, 24 kHz mono — what the transcript screen plays
         /// back so the words can be checked against what is actually there.
         public let samples: [Float]
         /// Level, noise, clipping — the same measurement a recording gets.
         public let quality: RecordingCheck.Quality
 
-        public init(url: URL, seconds: Double, trimmed: Bool, samples: [Float], quality: RecordingCheck.Quality) {
-            self.url = url; self.seconds = seconds; self.trimmed = trimmed
+        public init(url: URL, seconds: Double, samples: [Float], quality: RecordingCheck.Quality) {
+            self.url = url; self.seconds = seconds
             self.samples = samples; self.quality = quality
         }
     }
 
     /// Decode, downmix, resample, length-check, and write a clean 24 kHz mono
-    /// WAV into the app's temp directory, windowed to LuxTTS's reference limit.
+    /// WAV into the app's temp directory. The whole clip is kept: it is the
+    /// voice's master, and each engine picks the section it can use.
     public static func prepare(_ src: URL) throws -> Imported {
         // Files handed over by the document picker live outside the sandbox.
         let scoped = src.startAccessingSecurityScopedResource()
@@ -92,21 +82,13 @@ public enum ClipImport {
         samples = ClipPrep.trimAndFade(samples)
         samples = ClipPrep.removeDC(samples)
 
-        var seconds = Double(samples.count) / Double(sampleRate)
+        let seconds = Double(samples.count) / Double(sampleRate)
         guard seconds >= minSeconds else { throw ImportError.tooShort(seconds) }
-
-        let cap = luxWindowSeconds
-        var trimmed = false
-        if seconds > cap {
-            samples = window(samples, maxSeconds: cap)
-            seconds = Double(samples.count) / Double(sampleRate)
-            trimmed = true
-        }
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("import-\(UUID().uuidString).wav")
         try VoicePlayer.wavData(samples: samples, sampleRate: sampleRate).write(to: url)
-        return Imported(url: url, seconds: seconds, trimmed: trimmed, samples: samples,
+        return Imported(url: url, seconds: seconds, samples: samples,
                         quality: RecordingCheck.measure(samples, sampleRate: sampleRate))
     }
 
@@ -129,26 +111,6 @@ public enum ClipImport {
             .appendingPathComponent("take-\(UUID().uuidString).wav")
         try VoicePlayer.wavData(samples: cleaned, sampleRate: sampleRate).write(to: url)
         return Imported(url: url, seconds: Double(cleaned.count) / Double(sampleRate),
-                        trimmed: false, samples: cleaned, quality: quality)
-    }
-
-    /// Cut to `maxSeconds`, ending at the quietest point in the last stretch so
-    /// the reference does not stop mid-word — a clipped final syllable is a
-    /// pronunciation the prompt then teaches the model.
-    public static func window(_ samples: [Float], maxSeconds: Double) -> [Float] {
-        let limit = Int(maxSeconds * Double(sampleRate))
-        guard samples.count > limit else { return samples }
-        let frame = sampleRate / 100                    // 10 ms
-        let searchFrom = max(0, limit - sampleRate * 2) // look back up to 2 s
-        var bestCut = limit
-        var bestEnergy = Float.greatestFiniteMagnitude
-        var i = searchFrom
-        while i + frame <= limit {
-            var sum: Float = 0
-            for s in samples[i..<(i + frame)] { sum += s * s }
-            if sum < bestEnergy { bestEnergy = sum; bestCut = i + frame }
-            i += frame
-        }
-        return Array(samples[0..<bestCut])
+                        samples: cleaned, quality: quality)
     }
 }

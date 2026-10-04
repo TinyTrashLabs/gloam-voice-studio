@@ -61,8 +61,8 @@ public struct ReferenceWindowEditor: View {
             } header: {
                 Text("Reference window").font(t.console(11, .medium)).tracking(1.5).foregroundStyle(t.fgFaint)
             } footer: {
-                Text(String(format: "The master runs %.0fs; LuxTTS listens to at most %.0fs of it, and every render pays for the whole window, so shorter is quicker. Propose starts at the first speech and ends in a pause, %.0fs in.",
-                            sourceSeconds, ReferenceWindowRule.maxSeconds, ReferenceWindowRule.proposedSeconds))
+                Text(String(format: "The master runs %.0fs. Without a window each engine picks its own section of it; set one to choose the part yourself. Every render pays for the whole window, so shorter is quicker. Propose starts at the first speech and ends in a pause, %.0fs in.",
+                            sourceSeconds, ReferenceWindowRule.proposedSeconds))
                     .font(t.sans(11)).foregroundStyle(t.fgFaint)
             }
             .listRowBackground(t.panel)
@@ -94,12 +94,9 @@ public struct ReferenceWindowEditor: View {
             if voice.hasWindow {
                 Section {
                     Button("Use whole master", systemImage: "rectangle.expand.vertical") { useWholeMaster() }
-                        .font(t.sans(14)).tint(sourceSeconds > ReferenceWindowRule.maxSeconds ? t.fgFaint : t.accent)
-                        .disabled(sourceSeconds > ReferenceWindowRule.maxSeconds)
+                        .font(t.sans(14)).tint(t.accent)
                 } footer: {
-                    Text(sourceSeconds > ReferenceWindowRule.maxSeconds
-                         ? String(format: "The master is over %.0fs, so it needs a window.", ReferenceWindowRule.maxSeconds)
-                         : "Drop the window and let the engine hear the whole master.")
+                    Text("Drop the window and let each engine choose its own section of the master.")
                         .font(t.sans(11)).foregroundStyle(t.fgFaint)
                 }
                 .listRowBackground(t.panel)

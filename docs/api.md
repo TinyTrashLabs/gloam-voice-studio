@@ -36,7 +36,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `speed` | float | Playback-speed multiplier (time-domain; extremes shift pitch) |
 | `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice. Omitted with a `voice` that has its own Breeze Direction (`engines/breeze-tts-2/voice.json`), that Direction and its CFG are used; send `"instruct": ""` for none |
 | `speaker` | string | Preset speaker — required by `qwen3-custom` |
-| `language` | string | Qwen language hint |
+| `language` | string | Language of `input` (`es`, `es-MX`, `english`, …) on the backends that take one (`qwen3-*`, including `qwen3-0.6b-ane`; nil/`auto` = detect). A cloning request whose `voice` has a take tagged with that language (see `POST /voices/:slug/variants`) renders from that take's reference and transcript, unless `emotion` already picked a take |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
 | `cfg_scale` | number | Classifier-free guidance, clamped to 1–8. `breeze-tts-2`: default 4, 1 = off, and it acts only when there is an `instruct` or `emotion` to follow. `dia2` (single-voice requests): overrides its default guidance. Ignored by other backends |
 | `reference_guidance` | number | `breeze-tts-2` identity strength: extra guidance toward the reference voice, clamped to 1–4 (1 = off). Only acts on a cloned take; with an `instruct` it uses upstream's dual guidance (reference and instruction weighted separately). Costs an extra model pass per frame. Ignored by other backends |
@@ -196,13 +196,26 @@ usage.
 
 | Route | Description |
 | --- | --- |
-| `GET /voices` | List voices (`{"voices": [VoiceMeta…]}`) |
+| `GET /voices` | List voices (`{"voices": [VoiceMeta…]}`). Each row is the stored meta (`name`, `slug`, `refText`, `persona`, `notes`, `language`, `id`, `revision`, …) plus `hasSource`, `engines`, `variants` (take keys), `languages` (own + takes') and `hasAvatar` |
 | `POST /voices` | Create: `{"name", "refAudio": <base64 wav>, "refText"?}` |
-| `PATCH /voices/:slug` | Update name/reference/transcript (rename re-slugs) |
-| `DELETE /voices/:slug` | Delete a voice |
+| `POST /voices/design` | Design and keep: `{"name", "instruct", "script", "language"?, "persona"?}` renders `script` on `qwen3-design` from `instruct` and saves the audio + script as a new voice; returns its meta. `409` for a taken name (before rendering), `400` for a blank field. Takes a slot in the generation queue (`503` when busy) |
+| `PATCH /voices/:slug` | Update `name` (re-slugs), `refAudio`, `refText`, `notes` (`""` clears) and `persona` (a full object `{systemPrompt, greeting?, tagline?, catchphrases?, color?, language?}` sets it, `null` clears it, absent leaves it). Returns the new meta |
+| `DELETE /voices/:slug` | Delete a voice and its takes |
 | `GET /voices/:slug/ref.wav` | The reference clip |
-| `GET /voices/:slug/export` | `.gvoice` pack (zip) |
-| `POST /voices/import` | `{"data": <base64 .gvoice>}` |
+| `GET /voices/:slug/avatar` | The voice's picture, `image/png`, 256x256 (`404` when it has none) |
+| `PUT /voices/:slug/avatar` | Raw PNG or JPEG body (up to 16 MB), cropped and resized to the pack's 256x256 PNG; returns the meta. `400` for anything else |
+| `DELETE /voices/:slug/avatar` | Remove the picture |
+| `POST /voices/:slug/variants` | Add a language take: `{"language": "es", "refAudio": <base64 wav>, "refText"}`. Saved as the take `<slug>-<language>` tagged with its language (the same `source[variant].language` packs carry); an existing take for that language is replaced. Returns the take's meta. `400` for a bad tag, bad base64 or empty `refText` |
+| `GET /voices/:slug/export` | `.gvoice` pack (zip), carrying `id` and `revision` |
+| `POST /voices/import` | `{"data": <base64 .gvoice>, "update"?: bool}`; returns the meta |
+
+**Identity.** A voice made here gets a UUID `id` and `revision: 1`. `id` never changes; `revision`
+goes up by one on every edit of the voice's audio, transcript, name, notes, persona, avatar or
+language takes (a patch that changes nothing does not bump it). Export writes both into the pack's
+manifest, and import restores them, so a voice keeps its identity across machines. When the library
+already holds a voice with the pack's `id`, the import is a copy and the copy gets a new `id`; with
+`"update": true` and a pack whose `revision` is higher, the local voice is replaced instead. An
+import never overwrites a voice at the same slug (`409`) except through that update path.
 
 ## Models
 

@@ -201,8 +201,8 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
         // ...up to a point. Past roughly 50s of reference the model's saturating
         // relative positional encoding stops separating positions and the
         // sampler collapses into bursts around dead air — measured, with the
-        // numbers, in LuxReferenceWindow. So over-long references DO get cut,
-        // but audio and transcript are cut together at the same ASR word
+        // numbers, in LuxReferenceWindow. So over-long references DO get cut
+        // (a master may be any length; the engine picks its own section), but audio and transcript are cut together at the same ASR word
         // boundary, which is the "word-level alignment" the paragraph above
         // says is the precondition for truncating at all.
         var effectiveRefText = refText
@@ -220,23 +220,18 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             rawAudio = MLXArray(storedAudio)
             effectiveRefText = stored.text
         } else if refSeconds > LuxReferenceWindow.maxSeconds {
-            guard let window = await LuxReferenceWindow.fit(
+            guard let window = await LuxReferenceWindow.pick(
                 samples: rawAudio.asArray(Float.self),
                 sampleRate: LuxMelFeatures.sampleRate,
                 refText: refText)
-            else {
-                // Better a clear refusal than the garbled two-burst take this
-                // reference is guaranteed to produce.
-                throw EngineError.referenceTooLong(
-                    backend: .luxTTS, seconds: refSeconds,
-                    maxSeconds: LuxReferenceWindow.maxSeconds)
-            }
+            else { throw EngineError.generationFailed(backend: .luxTTS, message: "no reference window") }
             luxLog.notice(
-                "luxtts: reference \(refSeconds, format: .fixed(precision: 1))s over the \(LuxReferenceWindow.maxSeconds, format: .fixed(precision: 0))s cap — windowed to \(window.seconds, format: .fixed(precision: 1))s, transcript re-derived on-device"
+                "luxtts: reference \(refSeconds, format: .fixed(precision: 1))s over the \(LuxReferenceWindow.maxSeconds, format: .fixed(precision: 0))s cap — windowed to \(window.seconds, format: .fixed(precision: 1))s, transcript \(window.approximate ? "sliced from the master's" : "re-derived on-device")"
             )
-            // Persist it beside the voice so it survives into any export, and
-            // so the ASR pass happens once per voice rather than per cold
-            // prompt cache.
+            // A voice without its section (an older pack) gets it chosen now
+            // and stored beside the voice — in every export, and the ASR pass
+            // happens once per voice, never per cold prompt cache. Whatever
+            // made the transcript, the stored section is the voice's.
             LuxReferenceWindow.store(
                 window, forReference: refURL, sampleRate: LuxMelFeatures.sampleRate)
             rawAudio = MLXArray(window.samples)

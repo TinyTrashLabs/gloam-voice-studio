@@ -327,7 +327,7 @@ struct StudioView: View {
                     // simply lay out at full height and the page scrolls them.
                     VStack(alignment: .leading, spacing: 0) {
                         zoneLabel("TAKES")
-                        if model.variants.isEmpty {
+                        if model.variants.isEmpty && earlierTakes.isEmpty {
                             VStack(spacing: 10) {
                                 Text("No takes yet — write a line and press Generate (⌘↩).")
                                     .font(.caption).foregroundStyle(Brand.fgFaint)
@@ -338,6 +338,9 @@ struct StudioView: View {
                             VStack(spacing: 10) {
                                 ForEach(model.variants) { variant in
                                     variantCard(variant)
+                                }
+                                ForEach(earlierTakes, id: \.id) { entry in
+                                    earlierTakeRow(entry)
                                 }
                             }
                             .padding(.top, 6)
@@ -1152,6 +1155,40 @@ struct StudioView: View {
             .padding(6)
         }
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// Every earlier take of the selected voice (its language and emotion takes included), newest
+    /// first, from History. The batch just generated is already in the list above, so its entries
+    /// (the newest ones) are skipped.
+    private var earlierTakes: [HistoryEntry] {
+        guard let slug = model.selectedVoiceSlug else { return [] }
+        let mine = model.history.list().filter { e in
+            guard let v = e.voice else { return false }
+            return v == slug || v.hasPrefix(slug + "-")
+        }
+        return Array(mine.dropFirst(model.variants.count))
+    }
+
+    @ViewBuilder
+    private func earlierTakeRow(_ entry: HistoryEntry) -> some View {
+        let id = "history-\(entry.id)"
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.text ?? "").lineLimit(2).font(.callout)
+                Text([entry.backend, entry.voice].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(Brand.fgFaint)
+            }
+            Spacer(minLength: 8)
+            Text(String(format: "%.1fs", entry.seconds))
+                .font(.system(.caption, design: .monospaced)).foregroundStyle(Brand.fgDim)
+            Button(player.playingID == id ? "Pause" : "Play") {
+                if let url = try? model.history.wavURL(entry.id), let data = try? Data(contentsOf: url) {
+                    player.togglePlayback(id: id, data: data)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.accent.opacity(0.12), lineWidth: 1))
     }
 
     /// A legible Lab label for a Studio take: which variant (A/B), the voice, and

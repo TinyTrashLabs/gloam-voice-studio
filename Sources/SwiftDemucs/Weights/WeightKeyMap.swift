@@ -2,7 +2,7 @@ import Foundation
 
 /// Documents the key mapping from PyTorch htdemucs_ft checkpoint to MLX module tree.
 ///
-/// The Python `scripts/convert_weights.py` handles the actual conversion.
+/// The Python `scripts/convert_demucs_weights.py` handles the actual conversion.
 /// This file serves as documentation and validation reference.
 ///
 /// ## Conversion Pipeline (4 steps)
@@ -20,7 +20,7 @@ import Foundation
 /// ### Step 2: Attention Q/K/V Weight Split
 ///
 /// PyTorch `nn.MultiheadAttention` fuses Q, K, V into `in_proj_weight` `[3*dim, dim]`.
-/// convert_weights.py splits into separate projections:
+/// scripts/convert_demucs_weights.py splits into separate projections:
 /// - `in_proj_weight[0:dim]` → `query_proj.weight` `[dim, dim]`
 /// - `in_proj_weight[dim:2*dim]` → `key_proj.weight` `[dim, dim]`
 /// - `in_proj_weight[2*dim:]` → `value_proj.weight` `[dim, dim]`
@@ -33,7 +33,7 @@ import Foundation
 /// - Even indices (0, 2, 4) → self-attention (MyTransformerEncoderLayer)
 /// - Odd indices (1, 3) → cross-attention (CrossTransformerEncoderLayer)
 ///
-/// convert_weights.py separates into typed arrays:
+/// scripts/convert_demucs_weights.py separates into typed arrays:
 /// ```
 /// crosstransformer.layers.0.*   → crosstransformer.self_layers.0.*
 /// crosstransformer.layers.1.*   → crosstransformer.cross_layers.0.*

@@ -72,8 +72,8 @@ public struct TakesSection: View {
             .sheet(item: $pendingImport) { imported in
                 TakeTranscriptSheet(
                     title: "What's said in it?",
-                    caption: String(format: "%.1fs%@ — fix anything wrong; the voice learns from these words as much as the audio.",
-                                    imported.seconds, imported.trimmed ? ", trimmed to fit the reference window" : ""),
+                    caption: String(format: "%.1fs — fix anything wrong; the voice learns from these words as much as the audio.",
+                                    imported.seconds),
                     text: $pendingText, busy: transcribing,
                     onSave: { text in pendingImport = nil; model.add(imported.url, text, origin: .imported) },
                     onCancel: { pendingImport = nil })

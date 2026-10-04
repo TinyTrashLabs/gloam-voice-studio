@@ -32,8 +32,10 @@ extension QwenVoicePrep {
         /// The pack folder for this voice. `audio` is the pack-relative path of the file that was
         /// prepared (`source/ref.wav`, or a window); `window` its span in the master when it is one.
         public func enginePayload(audio: String = "source/ref.wav",
-                                  window: (start: Double, end: Double)? = nil) throws -> QwenEngineFiles {
-            try QwenVoicePrep.enginePayload(for: files, audioSHA256: audioSHA256, audio: audio, window: window)
+                                  window: (start: Double, end: Double)? = nil,
+                                  sourceSHA256: String? = nil) throws -> QwenEngineFiles {
+            try QwenVoicePrep.enginePayload(for: files, audioSHA256: audioSHA256, audio: audio, window: window,
+                                            sourceSHA256: sourceSHA256)
         }
     }
 
@@ -89,14 +91,16 @@ extension QwenVoicePrep {
     /// The `engines/qwen3-0.6b/` payload for a prepared voice. `audioSHA256` is the sha256 of the
     /// exact bytes of the file named by `audio`.
     public static func enginePayload(for voice: QwenVoiceFiles, audioSHA256: String, audio: String = "source/ref.wav",
-                                     window: (start: Double, end: Double)? = nil) throws -> QwenEngineFiles {
+                                     window: (start: Double, end: Double)? = nil,
+                                     sourceSHA256: String? = nil) throws -> QwenEngineFiles {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
         guard voice.spkEmbedding.count == 1024 else { throw QwenANEError.invalid("spkEmbedding must be 1024 floats") }
         let (codes, spk) = npyFiles(voice)
         let payload = QwenEngineFiles(
             text: voice.refText,
             derivedFrom: .init(audio: audio, sha256: audioSHA256, startSeconds: window?.start, endSeconds: window?.end,
-                               by: packWriter, prepVersion: prepVersion, mel: melKind),
+                               by: packWriter, prepVersion: prepVersion, mel: melKind,
+                               sourceSha256: window == nil ? nil : sourceSHA256),
             refCodes: codes, spkEmbedding: spk)
         try payload.validate()
         return payload

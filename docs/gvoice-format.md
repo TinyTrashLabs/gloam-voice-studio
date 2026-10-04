@@ -46,7 +46,7 @@ backends vary in what they need:
 | `fish-s2-pro` | optional | none | — | `source/` audio (stock voice also valid) |
 | `breeze-tts-2` | optional | optional | — | `source/` audio + transcript (an `instruct` may accompany it, or stand alone to design a voice) |
 | `kokoro` | **none** | none | `kokoroVoices` | a `speaker` id |
-| `lux-tts` | **required** | none | — | `source/` audio, plus a `lux-tts` reference window when the master runs long |
+| `lux-tts` | **required** | none | — | `source/` audio, plus a stored `lux-tts` section when the master runs long |
 | `dia2` | optional | none | — | Word-aligned reference audio; may carry a dedicated `dia2` clip |
 | `supertonic` | **none** | none | F1–F5 / M1–M5 (`supertonicVoices`) | `style.json` — `style_ttl` + `style_dp` |
 
@@ -72,9 +72,13 @@ billie-frost.gvoice          (zip)
 │   └── ref-hype.wav
 └── engines/                 optional — one directory per engine
     ├── lux-tts/
-    │   ├── ref.wav          the reference window LuxTTS conditions on
+    │   ├── ref.wav          the section LuxTTS conditions on (a master over 30 s)
     │   └── voice.json       { "audio": …, "text": …, "derivedFrom": { … } }
+    ├── pocket-tts/
+    │   ├── ref.wav          the section Pocket conditions on (a master over 10 s)
+    │   └── voice.json       { "audio": …, "text": "", "derivedFrom": { … } }
     ├── qwen3-0.6b/          optional — Qwen3-TTS's prepared voice (a cache of source/)
+    │   ├── ref.wav          only when the master is longer than the speech encoder takes: the section
     │   ├── ref_codes.npy    int32 (1, 16, T) speech-tokenizer codes
     │   ├── spk_embed.npy    float32 (1024,) x-vector speaker embedding
     │   └── voice.json       { "refCodes": …, "spkEmbedding": …, "text": …, "derivedFrom": { … } }
@@ -102,53 +106,79 @@ both below; `source/` stays the master.) A manifest MAY
 still list such an engine pointing back into `source/`; readers MUST tolerate
 that but writers need not emit it.
 
-### The `lux-tts` reference window
+### Engine sections
 
-`lux-tts` also consumes `source/` audio directly, with one exception. LuxTTS
-conditions on the reference as part of one attention sequence, and past roughly
-50 seconds of reference its saturating relative positional encoding stops
-separating positions: the sampler degrades into bursts of speech around dead
-air. Nothing errors — the audio simply comes back wrong. So a master longer
-than the engine's cap (30s) has to be cut down to a window before use.
+A voice's master (`source/ref.wav` and its full transcript) may be any
+length. Some engines condition on less: LuxTTS takes at most 30 s (its
+saturating relative positional encoding stops separating positions past
+roughly 50 s, and the sampler degrades into bursts around dead air — nothing
+errors, the audio simply comes back wrong), Pocket 10 s, Qwen3-TTS 0.6B as
+much as its speech encoder's fixed input (40 s; 20 s on older model sets).
 
-A window is part of the voice, not a detail of one reader's run. Deriving one
-costs a transcription pass, and a reader that derives its own gives every
-machine a slightly different reference for the same voice. So a pack SHOULD
-carry the window it wants used:
+**An engine never picks a section while it renders.** The section is chosen
+ONCE, when the voice is prepared — saved, imported, its master replaced, or
+the person edits the window — and stored in the pack under that engine's
+folder: `engines/<engine>/ref.wav` (the section's audio) and its exact
+transcript and span in `engines/<engine>/voice.json`. A render reads what is
+stored. A voice that lacks the section for an engine (an older pack) has it
+prepared at the first use, written into the voice (so it is in every later
+export) and used; it is never an ephemeral pick.
+
+The choice is the same everywhere (`ReferenceSection.cut`, GVoiceKit): start at
+the first speech, end in a pause near the tail so the section never stops
+mid-word. The transcript is the on-device transcription of THE SECTION when it
+reads at 1–6 words per second; otherwise (no recognizer, an implausible read)
+the master's own transcript sliced to the span at sentence ends. Either way it
+is stored and never recomputed. Where a function does this for a voice, it is
+the one in GVoiceKit / QwenANE (`QwenVoicePrep.prepareEngineFolder`) /
+EngineKit (`ReferenceSections.prepare`); an app that only renders reads the
+folders.
+
+For `lux-tts` and `pocket-tts` the folder holds:
 
 ```json
 {
   "audio": "engines/lux-tts/ref.wav",
-  "text": "the transcript of the WINDOW, not of the master",
+  "text": "the transcript of the SECTION, not of the master",
   "derivedFrom": {
     "audio": "source/ref.wav",
     "startSeconds": 0.0,
     "endSeconds": 28.54,
     "sourceSeconds": 58.6,
-    "by": "on-device-asr"
+    "by": "on-device-asr",
+    "sourceSha256": "9f2c…SHA-256 of the master's bytes…"
   }
 }
 ```
 
-The window is stored as **real audio**, not as offsets into the master. Offsets
-would be smaller, but then every implementation would have to reproduce the cut
-— including its edge fade — sample-for-sample to condition the model on the
-same signal, and a spec that requires re-deriving a signal is a spec that
-drifts. `derivedFrom` keeps the provenance instead, so the window stays
-traceable to the master without being re-computable from it.
+`by` is `"on-device-asr"`, `"transcript-slice"` or `"user"` (the window editor).
+`sourceSha256` is the hash of the master the section was cut from: a reader
+whose master no longer hashes to it MUST treat the section as stale and
+prepare a new one; a section without it (written before the field existed) is
+accepted. Pocket needs no transcript, so its `text` is empty. For
+`qwen3-0.6b` the same facts live in its own `voice.json` (below): `ref.wav`
+is the section, `derivedFrom.audio` is `engines/qwen3-0.6b/ref.wav`,
+`startSeconds`/`endSeconds` its span, and the codes are computed FROM it.
 
-`source/` MUST still hold the untouched master. The window is derived material;
-the master is what a future engine, a different cap, or a better cutter would
-start from again.
+The section is stored as **real audio**, not as offsets into the master:
+offsets would force every implementation to reproduce the cut — including its
+edge fade — sample for sample. It is written at the reference standard
+(`ReferenceStandard`), so importing it (which applies the standard to every
+engine wav) leaves its bytes, and the hashes recorded beside it, unchanged.
+`source/` MUST still hold the untouched master. Import keeps a section that
+is present and whose master hash matches; it does not re-pick.
 
-`text` is REQUIRED and describes the window. A transcript that under-counts its
-audio is worse than none: LuxTTS derives output length from the prompt's
-frames-per-token ratio, so a short transcript against long audio inflates that
-ratio and the predicted duration runs away with it.
+`text` is REQUIRED for engines that condition on it and describes the
+section. A transcript that under-counts its audio is worse than none: LuxTTS
+derives output length from the prompt's frames-per-token ratio, so a short
+transcript against long audio inflates that ratio and the predicted duration
+runs away with it.
 
-A reader that finds no `lux-tts` entry and a master inside the cap MUST just
-use `source/`. One that finds a master over the cap and no window MAY derive
-its own, and SHOULD refuse rather than condition on the over-long master.
+A reader that finds a master inside an engine's limit uses `source/`. One
+that finds a master over the limit and no stored section prepares it once and
+stores it; it MUST NOT refuse the voice for its length and MUST NOT cut
+anything it does not store. A pack's `revision` should be raised when a
+section changes.
 
 Transcript text lives inline in the manifest (`source.<key>.text`), not as a
 sibling file — there is no `transcript.txt` member. (An earlier draft of this
@@ -186,20 +216,21 @@ engines/qwen3-0.6b/
 ```
 
 - **`ref_codes.npy`** is the 12 Hz speech tokenizer's output: 16 codebooks by
-  `T` frames (`T` is at most 250: the encoder takes at most 20 s). Every code
+  `T` frames (`T` is at most 250 on a 20 s encoder). Every code
   is in `0..<2048`. `.npy` format 1.0, little-endian, C order, no pickling.
 - **`spk_embed.npy`** is the 1024-float x-vector. Every value is finite.
 - **`text`** is REQUIRED: the exact transcript of the audio the codes encode.
   For a window, that is the transcript of the WINDOW, as for `lux-tts`.
 - **`derivedFrom.audio`** is the pack-relative path of the audio file that was
   encoded: `source/ref.wav` normally, or a window such as
-  `engines/lux-tts/ref.wav` when the master is longer than the encoder takes
-  (20 s). It MUST start with `source/` or `engines/`, with no `..` segment.
+  `engines/qwen3-0.6b/ref.wav` (the section) when the master is longer than the encoder takes. It MUST start with `source/` or `engines/`, with no `..` segment.
   **`sha256`** is the SHA-256 of that file's bytes (not of decoded samples),
   as 64 lowercase hex digits. **`startSeconds` / `endSeconds`** are present,
-  as a pair, when the file is a window cut from a longer master — as in the
-  `lux-tts` window's `derivedFrom`; they are provenance, not an input to
-  anything. **`by`** names the recipe (`QwenVoicePrep`, the Core ML encoders
+  as a pair, when the file is a section cut from a longer master — as in the
+  `lux-tts` section's `derivedFrom`; they are provenance, not an input to
+  anything. **`sourceSha256`** (optional, with a section) is the SHA-256 of the
+  master's bytes it was cut from; a master that no longer hashes to it makes
+  the section stale. **`by`** names the recipe (`QwenVoicePrep`, the Core ML encoders
   in `Sources/QwenANE`) and **`prepVersion`** is that recipe's integer version,
   bumped whenever a change (mel front end, tail rule, encoder) could alter the
   output; `prepVersion` is only meaningful under its `by`. **`mel`** names the
@@ -388,7 +419,7 @@ key. The canonical member is `avatar.png` at the pack root.
 | `notes` | no | Free-form human description of the voice — what it sounds like, where it came from. A property of the VOICE, so it travels with the pack rather than living in whichever app happens to display it. Readers that ignore it lose nothing renderable, so adding it does NOT bump `gvoice`. |
 | `persona` | no | The voice's character, generic: `{ systemPrompt, greeting?, tagline?, catchphrases?, color? }`. `systemPrompt` describes who the voice is for an LLM; `color` is `#RRGGBB`. Apps interpret it in their own terms — the radio app as a host, the party app as a DJ, Studio as a chat character — together with `name`, `avatar` and `language`. A voice without one gets the app's default character for its name. Added 2026-10-04 (it was previously kept local to each library); readers that ignore it lose nothing renderable, so it did NOT bump `gvoice`. |
 | `id` | no | Stable identity of the voice across shares: a UUID minted when the voice is created and kept by every export (a copy of a voice gets a NEW id). Two packs with the same `id` are versions of one voice. |
-| `revision` | no | Integer version of the voice, bumped whenever its audio, character or photo changes. On import, an `id` the library already has SHOULD prompt: a higher `revision` is an update (offer **Update**, replacing the local voice, or **Keep both**, saving it as a copy with a new `id`); an equal or lower one is the same or an older version (offer **Keep both**). Absent `id` means every import is a new voice. Added 2026-10-04 without a `gvoice` bump. |
+| `revision` | no | Integer version of the voice, bumped whenever its audio, character or photo changes. On import, an `id` the library already has SHOULD prompt: a higher `revision` is an update (offer **Update**, replacing the local voice, or **Keep both**, saving it as a copy with a new `id`); an equal or lower one is the same or an older version (offer **Keep both**). Absent `id` means every import is a new voice. Added 2026-10-04 without a `gvoice` bump. Gloam Voice Studio mints `id` (revision 1) at creation, bumps `revision` on every edit of the audio, transcript, name, notes, persona, avatar or language takes, writes both on export and restores them on import; a pack whose `id` the library already has is imported as a copy with a new `id`, unless the caller asks to update and the pack's `revision` is higher. |
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
 | `source` | no | Variant key → `{ audio, text, language? }`. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |

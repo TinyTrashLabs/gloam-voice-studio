@@ -220,7 +220,9 @@ public enum GVoice {
             pace: base.meta.pace, enginePace: base.meta.enginePace,
             gain: base.meta.gain,
             source: [:], engines: [:], provenance: base.meta.provenance,
-            persona: base.meta.persona, notes: base.meta.notes)
+            persona: base.meta.persona, notes: base.meta.notes,
+            id: base.meta.id, revision: base.meta.revision)
+        manifest.language = base.meta.language
         var entries: [(name: String, data: Data)] = []
 
         for key in manifest.variants ?? [] {
@@ -230,7 +232,8 @@ public enum GVoice {
             if includeSource, let refURL = entry.refURL {
                 let member = "source/ref\(suffix).wav"
                 entries.append((member, try Data(contentsOf: refURL)))
-                manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText)
+                manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText,
+                                                         language: entry.meta.language)
             }
             let packHasSource = includeSource && entry.refURL != nil
             // Sorted: dictionary order varies between runs, and it decides both
@@ -241,9 +244,18 @@ public enum GVoice {
                 // The qwen3-0.6b codes + speaker embedding clone the voice as surely as
                 // source/ does, so they stay home whenever source/ does.
 
+                // A take's (or language reference's) qwen3-0.6b voice.json names its files plainly
+                // (that is how the library stores it); in the pack it must name the suffixed members,
+                // and a section's audio path must name the suffixed ref, so a reader can verify it.
+                var rewritten: [String: Data] = [:]
+                if engine == QwenEngineFiles.engineID, key != "base",
+                   let payload = Self.stemmedQwenFolder(files: files, key: key, suffix: suffix) {
+                    rewritten = payload
+                }
                 for (filename, url) in files.sorted(by: { $0.key < $1.key }) {
-                    let member = "engines/\(engine)/\(stem(filename, suffix: suffix))"
-                    entries.append((member, try Data(contentsOf: url)))
+                    let name = stem(filename, suffix: suffix)
+                    let member = "engines/\(engine)/\(name)"
+                    entries.append((member, try rewritten[name] ?? Data(contentsOf: url)))
                     manifest.engines?[engine, default: [:]][key, default: []].append(member)
                 }
             }
@@ -266,6 +278,28 @@ public enum GVoice {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try makeArchive(entries: [("manifest.json", try encoder.encode(manifest))] + entries)
+    }
+
+    /// The pack-side bytes of a take's `engines/qwen3-0.6b/` files that differ from the library's: its
+    /// `voice.json` (member names suffixed, section audio path suffixed). Keyed by pack file name; nil
+    /// when the folder is not a valid prepared voice (then it is exported untouched).
+    static func stemmedQwenFolder(files: [String: URL], key: String, suffix: String) -> [String: Data]? {
+        var data: [String: Data] = [:]
+        for (name, url) in files {
+            guard let d = try? Data(contentsOf: url), d.count <= QwenEngineFiles.maxNPYBytes else { continue }
+            data[name] = d
+        }
+        guard var payload = try? QwenEngineFiles.decode(files: data) else { return nil }
+        let dirPrefix = QwenEngineFiles.directory + "/"
+        switch payload.derivedFrom.audio {
+        case "source/ref.wav": payload.derivedFrom.audio = "source/ref\(suffix).wav"
+        case dirPrefix + "ref.wav": payload.derivedFrom.audio = dirPrefix + "ref\(suffix).wav"
+        default: break
+        }
+        guard let members = try? payload.members(variant: key) else { return nil }
+        var out: [String: Data] = [:]
+        for (path, bytes) in members { out[(path as NSString).lastPathComponent] = bytes }
+        return out
     }
 
     /// "base" first, then the rest alphabetically. Written out rather than
@@ -325,22 +359,7 @@ public enum GVoice {
     /// (that ordering is attacker-controlled and must not be trusted to put
     /// "base" first).
     public static func `import`(_ data: Data, into library: some GVoicePackStore) throws -> VoiceMeta {
-        let archive: Archive
-        let manifest: Manifest
-        do {
-            archive = try Archive(data: data, accessMode: .read)
-            guard archive.reduce(0, { count, _ in count + 1 }) <= maxEntries else {
-                throw StudioError.invalidArchive("pack has too many entries")
-            }
-            guard let entry = archive["manifest.json"] else {
-                throw StudioError.invalidArchive("not a .gvoice pack (no manifest.json)")
-            }
-            manifest = try JSONDecoder().decode(Manifest.self, from: try extract(entry, from: archive))
-        } catch let error as StudioError {
-            throw error
-        } catch {
-            throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
-        }
+        let (archive, manifest) = try open(data)
 
         // Readers reject only versions newer than they understand (Rule:
         // additive changes never bump `gvoice`), with one floor: version 1
@@ -425,6 +444,9 @@ public enum GVoice {
                                         pace: manifest.pace, enginePace: manifest.enginePace,
                                         gain: manifest.gain, notes: manifest.notes)
         if let persona = manifest.persona { try library.setPersona(baseMeta.slug, persona) }
+        if let language = manifest.language ?? sources["base"]?.language {
+            try library.setLanguage(baseMeta.slug, language)
+        }
 
         // Rule 1 applies to the avatar as to any other member: missing,
         // oversized, or not actually a PNG means no avatar, never a failed
@@ -443,8 +465,39 @@ public enum GVoice {
                                refWav: ref, refText: sources[key]?.text ?? "",
                                provenance: manifest.provenance, variantOf: baseMeta.slug,
                                engines: assets, notes: nil)
+            if let language = sources[key]?.language {
+                try library.setLanguage("\(baseMeta.slug)-\(safeKey)", language)
+            }
         }
-        return baseMeta
+        // Last, because the setters above (persona, avatar, languages) each bump a store's revision:
+        // the pack's own identity is what the imported voice must end up with.
+        if let id = manifest.id, !id.isEmpty {
+            try library.setIdentity(baseMeta.slug, id: id, revision: manifest.revision)
+        }
+        return (try? library.entry(baseMeta.slug).meta) ?? baseMeta
+    }
+
+    /// Reads just the manifest of a pack: what an importer needs to compare its `id` and `revision`
+    /// against the library before deciding to install.
+    public static func manifest(of data: Data) throws -> Manifest {
+        try open(data).manifest
+    }
+
+    private static func open(_ data: Data) throws -> (archive: Archive, manifest: Manifest) {
+        do {
+            let archive = try Archive(data: data, accessMode: .read)
+            guard archive.reduce(0, { count, _ in count + 1 }) <= maxEntries else {
+                throw StudioError.invalidArchive("pack has too many entries")
+            }
+            guard let entry = archive["manifest.json"] else {
+                throw StudioError.invalidArchive("not a .gvoice pack (no manifest.json)")
+            }
+            return (archive, try JSONDecoder().decode(Manifest.self, from: try extract(entry, from: archive)))
+        } catch let error as StudioError {
+            throw error
+        } catch {
+            throw StudioError.invalidArchive("not a valid .gvoice archive: \(error)")
+        }
     }
 
     /// The voice (and take key) a standalone pack slugged `slug` and named

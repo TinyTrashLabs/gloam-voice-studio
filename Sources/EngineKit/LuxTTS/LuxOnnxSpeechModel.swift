@@ -57,8 +57,26 @@ public final class LuxOnnxSpeechModel: SpeechModel, @unchecked Sendable {
                     backend: .luxTTS,
                     message: "lux-tts on ONNX needs the reference transcript")
             }
-            let samples = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
-            let promptTokens = try tokenizer.textToTokenIDs(refText).map(Int64.init)
+            var samples = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+            var promptText = refText
+            // Same rule as the MLX path: the voice's own window wins, and a
+            // master past the engine's span is cut to a window (audio and
+            // transcript together) rather than refused.
+            let refURL = URL(fileURLWithPath: refPath)
+            if let stored = LuxReferenceWindow.storedRendition(forReference: refURL),
+                let storedAudio = try? LuxReferenceWindow.loadRenditionAudio(stored, forReference: refURL)
+            {
+                samples = storedAudio
+                promptText = stored.text
+            } else if let window = await LuxReferenceWindow.pick(
+                samples: samples, sampleRate: LuxOnnx.sampleRate, refText: refText,
+                maxSeconds: LuxOnnx.maxReferenceSeconds)
+            {
+                LuxReferenceWindow.store(window, forReference: refURL, sampleRate: LuxOnnx.sampleRate)
+                samples = window.samples
+                promptText = window.text
+            }
+            let promptTokens = try tokenizer.textToTokenIDs(promptText).map(Int64.init)
             let prompt = try LuxOnnx.encodePrompt(samples24k: samples, tokens: promptTokens)
             let textIDs = try tokenizer.textToTokenIDs(request.text).map(Int64.init)
 

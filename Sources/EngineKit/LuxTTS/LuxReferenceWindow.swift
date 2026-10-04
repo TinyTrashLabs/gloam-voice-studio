@@ -37,11 +37,13 @@
 // that sounds like the audio is harmless. What is NOT harmless is a transcript
 // that under-counts the audio — hence the words-per-second gate below.
 //
-// Best-effort by construction: with no on-device recognizer the window can't
-// be established, and the caller should refuse the reference rather than emit
-// the garbage this exists to prevent.
+// A reference is never refused for its length: `pick` always returns a
+// window. With no on-device recognizer (or an implausible transcription) the
+// transcript falls back to the matching share of the master's own, snapped to
+// sentence boundaries — see `approximateText`.
 
 import Foundation
+import GVoiceKit
 import Speech
 
 public enum LuxReferenceWindow {
@@ -56,6 +58,12 @@ public enum LuxReferenceWindow {
         /// Where the window sits in the master clip.
         public let startSeconds: Double
         public let sourceSeconds: Double
+        /// True when the transcript is a proportional slice of the master's own
+        /// (no on-device recognizer, or its words failed the density gate), so
+        /// it describes the window less exactly than a transcription would.
+        /// It is stored like any other (`by: "transcript-slice"`) and never
+        /// recomputed: the stored section is the voice's, whatever made it.
+        public var approximate = false
     }
 
     /// `engines/lux-tts/voice.json` — the metadata beside the materialized
@@ -77,22 +85,35 @@ public enum LuxReferenceWindow {
             /// Length of the master at derivation time. A master that no
             /// longer matches has been replaced, and this window with it.
             public var sourceSeconds: Double
-            /// How the transcript was produced.
+            /// How the transcript was produced: "on-device-asr", "transcript-slice"
+            /// (the master's own transcript cut to the span) or "user".
             public var by: String?
+            /// SHA-256 of the master's bytes when the section was cut. A section
+            /// whose master no longer hashes to this is stale and is replaced.
+            /// Absent on sections written before this field existed (accepted).
+            public var sourceSha256: String?
+            public init(audio: String? = nil, startSeconds: Double, endSeconds: Double,
+                        sourceSeconds: Double, by: String? = nil, sourceSha256: String? = nil) {
+                self.audio = audio; self.startSeconds = startSeconds; self.endSeconds = endSeconds
+                self.sourceSeconds = sourceSeconds; self.by = by; self.sourceSha256 = sourceSha256
+            }
         }
         /// Pack-relative path of the window audio.
         public var audio: String
         /// Transcript of the WINDOW, not of the master.
         public var text: String
         public var derivedFrom: DerivedFrom?
+        public init(audio: String, text: String, derivedFrom: DerivedFrom? = nil) {
+            self.audio = audio; self.text = text; self.derivedFrom = derivedFrom
+        }
     }
 
-    /// Where a voice's LuxTTS rendition lives on disk, mirroring its layout
-    /// inside a pack (`engines/lux-tts/…` beside `source/`). VoiceLibrary
-    /// scans `engines/*`, so a window written here travels into every export
+    /// Where a voice's section for `engine` lives on disk, mirroring its layout
+    /// inside a pack (`engines/<engine>/…` beside `source/`). VoiceLibrary
+    /// scans `engines/*`, so a section written here travels into every export
     /// without further plumbing.
-    private static func renditionDir(forReference refURL: URL) -> URL {
-        refURL.deletingLastPathComponent().appendingPathComponent("engines/lux-tts")
+    static func renditionDir(forReference refURL: URL, engine: String = "lux-tts") -> URL {
+        refURL.deletingLastPathComponent().appendingPathComponent("engines/\(engine)")
     }
 
     public static let renditionAudioName = "ref.wav"
@@ -100,12 +121,19 @@ public enum LuxReferenceWindow {
 
     /// The voice's own window, or nil when it has none or the master it was
     /// cut from is no longer the file on disk.
-    public static func storedRendition(forReference refURL: URL) -> Rendition? {
-        let metaURL = renditionDir(forReference: refURL).appendingPathComponent(renditionMetaName)
+    public static func storedRendition(
+        forReference refURL: URL, engine: String = "lux-tts", requiresText: Bool = true
+    ) -> Rendition? {
+        let metaURL = renditionDir(forReference: refURL, engine: engine)
+            .appendingPathComponent(renditionMetaName)
         guard let data = try? Data(contentsOf: metaURL),
             let rendition = try? JSONDecoder().decode(Rendition.self, from: data),
-            !rendition.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !requiresText || !rendition.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
+        // A section cut from a different master than the one on disk is stale.
+        if let cutFrom = rendition.derivedFrom?.sourceSha256,
+            cutFrom != ReferenceSection.sha256Hex(ofFile: refURL)
+        { return nil }
         return rendition
     }
 
@@ -117,35 +145,40 @@ public enum LuxReferenceWindow {
     /// PACK-relative path, and on disk the file sits in the voice's own
     /// engines directory.
     public static func loadRenditionAudio(
-        _ rendition: Rendition, forReference refURL: URL
+        _ rendition: Rendition, forReference refURL: URL, engine: String = "lux-tts"
     ) throws -> [Float] {
-        let url = renditionDir(forReference: refURL)
+        let url = renditionDir(forReference: refURL, engine: engine)
             .appendingPathComponent((rendition.audio as NSString).lastPathComponent)
         return try LuxOnnx.loadMono24k(url)
     }
 
-    /// Writes a derived window as the voice's `lux-tts` rendition: the audio
-    /// itself plus the transcript that matches it.
-    public static func store(_ window: Window, forReference refURL: URL, sampleRate: Int) {
-        let dir = renditionDir(forReference: refURL)
+    /// Writes a section as the voice's rendition for `engine`: the audio itself
+    /// (levelled to the reference standard, so an export -> import round trip
+    /// leaves its bytes alone) plus the transcript that matches it and the span
+    /// it covers in the master. Returns false when it could not be written.
+    @discardableResult
+    public static func store(
+        _ window: Window, forReference refURL: URL, sampleRate: Int, engine: String = "lux-tts"
+    ) -> Bool {
+        let dir = renditionDir(forReference: refURL, engine: engine)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let audioURL = dir.appendingPathComponent(renditionAudioName)
-        guard (try? WAVWriter.write(samples: window.samples, sampleRate: sampleRate, to: audioURL))
-            != nil
-        else { return }
+        let wav = ReferenceSection.wavData(window.samples, sampleRate: sampleRate)
+        guard (try? wav.write(to: audioURL, options: .atomic)) != nil else { return false }
         let rendition = Rendition(
-            audio: "engines/lux-tts/\(renditionAudioName)",
+            audio: "engines/\(engine)/\(renditionAudioName)",
             text: window.text,
             derivedFrom: Rendition.DerivedFrom(
                 audio: "source/\(refURL.lastPathComponent)",
                 startSeconds: window.startSeconds,
                 endSeconds: window.startSeconds + window.seconds,
                 sourceSeconds: window.sourceSeconds,
-                by: "on-device-asr"))
+                by: window.approximate ? "transcript-slice" : "on-device-asr",
+                sourceSha256: ReferenceSection.sha256Hex(ofFile: refURL)))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(rendition) else { return }
-        try? data.write(to: dir.appendingPathComponent(renditionMetaName))
+        guard let data = try? encoder.encode(rendition) else { return false }
+        return (try? data.write(to: dir.appendingPathComponent(renditionMetaName), options: .atomic)) != nil
     }
 
     /// Plausible speech rates, in words per second, for the windowed clip.
@@ -208,6 +241,57 @@ public enum LuxReferenceWindow {
             startSeconds: startSeconds, sourceSeconds: seconds)
     }
 
+    /// The window for a master that may be any length: nil when it already fits
+    /// `maxSeconds`, otherwise the best section the engine can hold. Prefers the
+    /// on-device transcription of the cut (`fit`); when that is unavailable it
+    /// keeps the same audio cut and slices the master's transcript to match
+    /// (`approximateText`), so a long reference never turns into a refusal.
+    public static func pick(
+        samples: [Float], sampleRate: Int, refText: String,
+        maxSeconds: Double = LuxReferenceWindow.maxSeconds
+    ) async -> Window? {
+        let seconds = Double(samples.count) / Double(max(1, sampleRate))
+        guard seconds > maxSeconds, sampleRate > 0 else { return nil }
+        if let heard = await fit(
+            samples: samples, sampleRate: sampleRate, refText: refText, maxSeconds: maxSeconds)
+        {
+            return heard
+        }
+        let cut = window(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
+        let windowSeconds = Double(cut.samples.count) / Double(sampleRate)
+        let text = approximateText(
+            refText, windowStart: cut.start, windowCount: cut.samples.count,
+            totalCount: samples.count)
+        var w = Window(
+            samples: cut.samples, text: text, seconds: windowSeconds,
+            startSeconds: Double(cut.start) / Double(sampleRate), sourceSeconds: seconds)
+        w.approximate = true
+        return w
+    }
+
+    static func approximateText(
+        _ text: String, windowStart: Int, windowCount: Int, totalCount: Int
+    ) -> String {
+        ReferenceSection.approximateText(
+            text, windowStart: windowStart, windowCount: windowCount, totalCount: totalCount)
+    }
+
+    /// On-device transcription of a WAV, or nil when there is no authorized
+    /// on-device recognizer or nothing was heard. The `transcribe` hook for
+    /// the shared section preparation (QwenVoicePrep.prepareEngineFolder).
+    public static func transcribeWAV(_ wav: Data) async -> String? {
+        guard SFSpeechRecognizer.authorizationStatus() == .authorized,
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+            recognizer.isAvailable, recognizer.supportsOnDeviceRecognition
+        else { return nil }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lux-window-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard (try? wav.write(to: tmp)) != nil else { return nil }
+        let text = try? await recognize(url: tmp, recognizer: recognizer)
+        return (text?.isEmpty == false) ? text : nil
+    }
+
     /// The energy-based cut: start at the first speech (lead-in silence would
     /// otherwise eat the window), end in a pause near the tail where one is
     /// available so the reference doesn't stop mid-phoneme. Mirrors the web
@@ -215,71 +299,7 @@ public enum LuxReferenceWindow {
     static func window(
         samples: [Float], sampleRate: Int, maxSeconds: Double
     ) -> (samples: [Float], start: Int) {
-        let maxSamples = Int(maxSeconds * Double(sampleRate))
-        guard samples.count > maxSamples, maxSamples > 0 else { return (samples, 0) }
-
-        let frame = max(1, Int(Double(sampleRate) * 0.02))
-        let frameCount = (samples.count + frame - 1) / frame
-        var energy = [Float](repeating: 0, count: frameCount)
-        var loudest: Float = 0
-        for f in 0 ..< frameCount {
-            let from = f * frame, to = min(from + frame, samples.count)
-            var sumSq: Float = 0
-            for i in from ..< to { sumSq += samples[i] * samples[i] }
-            let e = (sumSq / Float(to - from)).squareRoot()
-            energy[f] = e
-            loudest = max(loudest, e)
-        }
-        let floor = max(loudest * 0.08, 0.008)
-
-        // Skip lead-in silence, but only lead-in: search a bounded prefix. An
-        // unbounded scan slides the whole window down the clip whenever a quiet
-        // opening sits under a floor set by a loud passage later — on a 58s
-        // reference that silently selected the LAST 30 seconds, a different
-        // part of the recording than the stored transcript describes.
-        //
-        // Scoring candidate windows by speech DENSITY was tried and reverted
-        // (2026-08-01). It measured no benefit — on a real 28.5s clone the
-        // opening was already the densest 15s (60.9% speech vs 53-58% later) —
-        // and it reproduced the sliding bug, because a quiet opening scores as
-        // silence against a floor set by a louder passage. The pausiness it was
-        // meant to fix was DRAWL, which density cannot see: that speaker had
-        // high density and still read slow. Per-voice pace is the control for
-        // that.
-        let onsetLimit = min(frameCount, Int(5.0 / 0.02))
-        var startFrame = 0
-        while startFrame < onsetLimit, energy[startFrame] <= floor { startFrame += 1 }
-        if startFrame >= onsetLimit { startFrame = 0 }
-        var start = max(0, startFrame * frame - Int(Double(sampleRate) * 0.1))
-        start = min(start, samples.count - maxSamples)
-        var end = start + maxSamples
-
-        let searchFloorFrame = (end - Int(Double(maxSamples) * 0.25)) / frame
-        let minQuietFrames = 10  // 200 ms
-        var quietRun = 0
-        var f = end / frame - 1
-        while f >= max(0, searchFloorFrame) {
-            if energy[f] <= floor {
-                quietRun += 1
-            } else {
-                if quietRun >= minQuietFrames {
-                    let cut = min(end, (f + 1) * frame + Int(Double(sampleRate) * 0.08))
-                    if cut - start >= Int(Double(maxSamples) * 0.6) { end = cut }
-                    break
-                }
-                quietRun = 0
-            }
-            f -= 1
-        }
-
-        var out = Array(samples[start ..< end])
-        let fade = min(out.count / 2, Int(Double(sampleRate) * 0.01))
-        for i in 0 ..< fade {
-            let ramp = Float(i) / Float(fade)
-            out[i] *= ramp
-            out[out.count - 1 - i] *= ramp
-        }
-        return (out, start)
+        ReferenceSection.cut(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
     }
 
     /// Transcribes a whole file, every utterance in it.

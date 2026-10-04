@@ -16,7 +16,7 @@ enum MCPRoute {
 
     static func add(to router: Router<BasicRequestContext>, deps: APIDependencies) {
         router.post("mcp") { request, context -> Response in
-            var buffer = try await request.body.collect(upTo: 4 * 1024 * 1024)
+            var buffer = try await request.body.collect(upTo: APIRouter.maxLibraryBodyBytes)
             guard let data = buffer.readData(length: buffer.readableBytes),
                   let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
@@ -62,8 +62,9 @@ enum MCPRoute {
         var tools: [[String: Any]] = [
             [
                 "name": "list_voices",
-                "description": "List the cloned voices in the Gloam library "
-                    + "(slug, display name, whether a chat persona is set).",
+                "description": "List the voices in the Gloam library: slug, display name, "
+                    + "stable id and revision, persona (or null), whether notes are set, "
+                    + "the languages it speaks, its takes (variants) and whether it has an avatar.",
                 "inputSchema": ["type": "object", "properties": [String: Any]()],
             ],
             [
@@ -78,6 +79,11 @@ enum MCPRoute {
                                   "description": "Voice slug from list_voices (optional)"],
                         "emotion": ["type": "string",
                                     "description": "flat|neutral|warm|excited|hype (optional)"],
+                        "instruct": ["type": "string",
+                                     "description": "Delivery direction on backends that take one (optional)"],
+                        "language": ["type": "string",
+                                     "description": "BCP-47 language of the text, e.g. es (optional). "
+                                         + "A voice with a take in that language speaks from it."],
                     ],
                     "required": ["text"],
                 ],
@@ -129,6 +135,7 @@ enum MCPRoute {
                 ],
             ],
         ]
+        tools += voiceToolDefinitions
         guard deps.lab != nil else { return tools }
         tools += [
             [
@@ -225,8 +232,18 @@ enum MCPRoute {
         switch params["name"] as? String {
         case "list_voices":
             let voices = deps.voices.list().map { meta -> [String: Any] in
-                ["slug": meta.slug, "name": meta.name,
-                 "hasPersona": meta.persona != nil]
+                var row: [String: Any] = [
+                    "slug": meta.slug, "name": meta.name,
+                    "hasPersona": meta.persona != nil,
+                    "persona": jsonObject(meta.persona) ?? NSNull(),
+                    "hasNotes": !(meta.notes ?? "").isEmpty,
+                    "languages": deps.voices.languages(of: meta.slug),
+                    "variants": deps.voices.layout.variantKeys(of: meta.slug),
+                    "hasAvatar": deps.voices.avatarURL(meta.slug) != nil,
+                ]
+                if let id = meta.id { row["id"] = id }
+                if let revision = meta.revision { row["revision"] = revision }
+                return row
             }
             let json = (try? JSONSerialization.data(
                 withJSONObject: voices, options: [.prettyPrinted])) ?? Data("[]".utf8)
@@ -250,6 +267,8 @@ enum MCPRoute {
             // UNCONDITIONED branch and inventing a random speaker while reporting
             // success. Refuse explicitly instead, same as the HTTP endpoint.
             let clones = controls.voiceClone != .none
+            let language = (arguments["language"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let instruct = (arguments["instruct"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let effectiveVoice = (arguments["voice"] as? String) ?? {
                 let def = deps.defaultVoice()
                 return def.isEmpty ? nil : def
@@ -274,10 +293,13 @@ enum MCPRoute {
                     return toolError(id: id, "voice '\(voice)' has an empty reference"
                         + " transcript — \(backend.rawValue) cannot clone from it")
                 }
-                resolved = (found.refURL.path,
-                            found.meta.refText.isEmpty ? nil : found.meta.refText)
+                // A take in the requested language supplies the reference (same as /v1/audio/speech).
+                let source = clones
+                    ? deps.voices.take(of: found.meta.slug, language: language) ?? found : found
+                resolved = (source.refURL.path,
+                            source.meta.refText.isEmpty ? nil : source.meta.refText)
                 resolvedIsTake = found.meta.isTake
-                voiceSlug = found.meta.slug.isEmpty ? voice : found.meta.slug
+                voiceSlug = source.meta.slug.isEmpty ? voice : source.meta.slug
             } else if clones {
                 APIRouter.logError("mcp speak: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -292,11 +314,11 @@ enum MCPRoute {
                 .flatMap(Emotion.init(rawValue:)) ?? .neutral
             let emotion = backend.emotionMechanism == .directed && resolvedIsTake
                 ? Emotion.neutral : requested
-            // speak takes no instruction, so the voice's own Direction (Benson's
-            // accent fix) is the only one there is — as on /v1/audio/speech.
-            let voiceDirection = voiceSlug.flatMap {
+            // An `instruct` the caller sent wins outright; otherwise the voice's own
+            // Direction (Benson's accent fix) — as on /v1/audio/speech.
+            let voiceDirection = instruct == nil ? voiceSlug.flatMap {
                 deps.voices.direction(for: $0, engine: backend.rawValue)
-            }
+            } : nil
             do {
                 let lane = deps.speechLane(for: backend)
                 let result = try await lane.gate.run {
@@ -306,7 +328,8 @@ enum MCPRoute {
                         request: SynthesisRequest(
                             text: text, refAudioPath: refPath, refText: refText,
                             emotion: emotion, speed: 1.0,
-                            instruct: voiceDirection?.instruct,
+                            instruct: instruct ?? voiceDirection?.instruct,
+                            language: language,
                             cfgScaleOverride: voiceDirection?.cfgScale.map(Float.init)))
                 }
                 let wav = WAVEncoder.encode(
@@ -446,6 +469,8 @@ enum MCPRoute {
             } catch {
                 return toolError(id: id, "\(error)")
             }
+        case .some(let name) where voiceToolNames.contains(name):
+            return await callVoiceTool(id: id, name: name, arguments: arguments, deps: deps)
         default:
             return toolError(id: id, "unknown tool")
         }
@@ -453,17 +478,17 @@ enum MCPRoute {
 
     /// Wraps already-serialized JSON bytes as a `text` tool-result content block
     /// (MCP has no first-class JSON content type).
-    private static func jsonText(_ data: Data) -> [String: Any] {
+    static func jsonText(_ data: Data) -> [String: Any] {
         ["type": "text", "text": String(decoding: data, as: UTF8.self)]
     }
 
     // MARK: JSON-RPC plumbing
 
-    private static func toolResult(id: Any?, content: [[String: Any]]) -> Response {
+    static func toolResult(id: Any?, content: [[String: Any]]) -> Response {
         jsonRPCResult(id: id, ["content": content, "isError": false])
     }
 
-    private static func toolError(id: Any?, _ message: String) -> Response {
+    static func toolError(id: Any?, _ message: String) -> Response {
         jsonRPCResult(id: id, [
             "content": [["type": "text", "text": message]],
             "isError": true,

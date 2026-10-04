@@ -387,8 +387,9 @@ extension BackendID {
         switch self {
         case .qwen06BANE:
             // Clone-only (no unconditioned mode on the ANE build), and the on-device sampler
-            // exposes no knobs, so there are none to offer.
-            ControlSurface(voiceClone: .required, instruct: .none, language: false, knobs: Knobs())
+            // exposes no knobs, so there are none to offer. The language hint (es, en, …) reaches
+            // `QwenANEEngine.render`; nil still means auto-detect.
+            ControlSurface(voiceClone: .required, instruct: .none, language: true, knobs: Knobs())
         case .qwen06B, .qwen06BMobile, .qwen17B:
             // Base is a voice-cloning model (text + reference audio). It does NOT
             // take a natural-language instruct — that's VoiceDesign/CustomVoice only.

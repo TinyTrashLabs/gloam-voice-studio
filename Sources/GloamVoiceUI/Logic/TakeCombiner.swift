@@ -38,10 +38,8 @@ public enum TakeCombiner {
 /// `RecordingCheck`'s (tuned on real takes, 2026-09-09); this decides which
 /// of them stop a Save and which only warn.
 public enum TakeRules {
-    /// LuxTTS refuses a reference past this (`LuxOnnx.maxReferenceSeconds`).
-    public static let capSeconds = RecordingCheck.maxSeconds
-    /// Past this the master is worth windowing: cost is set by the prompt.
-    public static let windowAdviceSeconds = 20.0
+    // No length cap: a master may be any reasonable length, and each engine
+    // that listens to less picks its own section of it.
 
     public enum Verdict: Equatable {
         case good
@@ -68,12 +66,9 @@ public enum TakeRules {
     }
 
     /// Why the master cannot be rebuilt right now, or nil when it can.
-    public static func saveBlocker(verdicts: [Verdict], combinedSeconds: Double) -> String? {
+    public static func saveBlocker(verdicts: [Verdict], combinedSeconds: Double = 0) -> String? {
         if verdicts.isEmpty { return "No takes to build the master from." }
         for case .error(let why) in verdicts { return why }
-        if combinedSeconds > capSeconds {
-            return String(format: "The takes add up to %.0fs — keep the master under %.0fs.", combinedSeconds, capSeconds)
-        }
         return nil
     }
 
@@ -90,12 +85,6 @@ public enum TakeRules {
 
     /// The section footer's length line.
     public static func lengthLine(combinedSeconds: Double) -> String {
-        if combinedSeconds > capSeconds {
-            return String(format: "%.0fs of takes — over the %.0fs cap, so Save is off until one goes.", combinedSeconds, capSeconds)
-        }
-        if combinedSeconds > windowAdviceSeconds {
-            return String(format: "%.0fs of takes (cap %.0fs). Past %.0fs a reference window keeps renders quick.", combinedSeconds, capSeconds, windowAdviceSeconds)
-        }
-        return String(format: "%.0fs of takes, of a %.0fs cap.", combinedSeconds, capSeconds)
+        String(format: "%.0fs of takes.", combinedSeconds)
     }
 }

@@ -64,9 +64,12 @@ final class RecordingCheckTests: XCTestCase {
         XCTAssertEqual(q.problem, "That was too short to learn from. Read the whole line, then tap to finish.")
     }
 
-    func testTooLong() {
-        let q = RecordingCheck.measure(take(seconds: 31), sampleRate: sr)
-        XCTAssertTrue(q.problem?.contains("keep it under 30") == true, "\(q.problem ?? "nil")")
+    func testALongTakeIsNotAProblem() {
+        // The master may be any reasonable length; each engine picks its own section.
+        for seconds in [31.0, 120.0, 290.0] {
+            let q = RecordingCheck.measure(take(seconds: seconds), sampleRate: sr)
+            XCTAssertNil(q.problem, "\(seconds)s: \(q.problem ?? "nil")")
+        }
     }
 
     func testAPhoneTakeAtMinus37Passes() {
