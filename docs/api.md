@@ -31,13 +31,16 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `input` | string, required | Text to speak |
 | `model` | string | Backend id (`qwen3-1.7b`, `chatterbox-turbo`, `fish-s2-pro`, …); defaults to the app's Studio backend |
 | `voice` | string | Library voice slug. With `emotion`, an acted `<voice>-<emotion>` variant clip is used when it exists. Required on cloning backends — see below |
-| `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant |
+| `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant. On `breeze-tts-2` (no variant found) it is phrased into the instruction after `instruct` |
 | `exaggeration` | float 0–1 | Chatterbox emotion knob override |
 | `speed` | float | Playback-speed multiplier (time-domain; extremes shift pitch) |
-| `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` |
+| `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice. Omitted with a `voice` that has its own Breeze Direction (`engines/breeze-tts-2/voice.json`), that Direction and its CFG are used; send `"instruct": ""` for none |
 | `speaker` | string | Preset speaker — required by `qwen3-custom` |
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
+| `cfg_scale` | number | Classifier-free guidance, clamped to 1–8. `breeze-tts-2`: default 4, 1 = off, and it acts only when there is an `instruct` or `emotion` to follow. `dia2` (single-voice requests): overrides its default guidance. Ignored by other backends |
+| `reference_guidance` | number | `breeze-tts-2` identity strength: extra guidance toward the reference voice, clamped to 1–4 (1 = off). Only acts on a cloned take; with an `instruct` it uses upstream's dual guidance (reference and instruction weighted separately). Costs an extra model pass per frame. Ignored by other backends |
+| `seed` | int | `breeze-tts-2`: fixed sampling seed. The same seed, text, voice and settings give the same take. Omitted means fresh randomness. Ignored by other backends |
 | `response_format` | string | Only `wav` |
 | `stream` | bool | `true` returns a streaming WAV — see "Streaming" below |
 | `stream_format` | string | `audio` (same as `stream: true`); `sse` is a 400 |
@@ -45,7 +48,8 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
 Backend gating errors are 400s (e.g. `qwen3-design requires 'instruct'`).
-Fish returns `403` with the license notice until acknowledged in-app.
+Fish, Breeze TTS 2 and SuperTonic each return `403` with their own license
+notice until acknowledged in-app.
 
 #### Streaming (`stream: true`)
 
@@ -152,15 +156,19 @@ brackets is spoken aloud, not performed. Loads the model if it is not resident.
 ### Voice resolution on cloning backends
 
 On a cloning backend (`qwen3-0.6b`, `qwen3-1.7b`, `chatterbox`,
-`chatterbox-turbo`, `fish-s2-pro`, `lux-tts`, `pocket-tts`) the endpoint never
-synthesizes without a resolved reference — an unusable voice is a logged `400`,
-not a take in some invented voice:
+`chatterbox-turbo`, `fish-s2-pro`, `breeze-tts-2`, `lux-tts`, `pocket-tts`) the
+endpoint never synthesizes without a resolved reference — an unusable voice is a
+logged `400`, not a take in some invented voice. The one exception is a backend
+that also designs from `instruct` (`breeze-tts-2`): a non-blank `instruct` with
+no `voice` is voice *design* — the caller described the speaker. It is allowed,
+and it designs even when a Settings default voice is set (the default is not
+cloned in its place); send `voice` as well to direct a clone instead:
 
 | Case | Result |
 | --- | --- |
 | `voice` names no library slug | `400 voice '<slug>' not found` |
-| No `voice` and no Settings default voice | `400 <model> requires a 'voice'` |
-| Voice exists but its `refText` is empty, on a backend that clones from the transcript too (`qwen3-*` Base, `lux-tts`) | `400 voice '<slug>' has an empty reference transcript — <model> cannot clone from it` |
+| No `voice` and no Settings default voice | `400 <model> requires a 'voice'` (unless `instruct` is set on `breeze-tts-2`) |
+| Voice exists but its `refText` is empty, on a backend that clones from the transcript too (`qwen3-*` Base, `breeze-tts-2`, `lux-tts`) | `400 voice '<slug>' has an empty reference transcript — <model> cannot clone from it` |
 | `emotion` given but no `<voice>-<emotion>` clip exists | Falls back to the base voice (unchanged) |
 
 Preset-voicepack backends (`kokoro`, `supertonic`, `qwen3-custom`) are
@@ -195,6 +203,32 @@ usage.
 | `GET /voices/:slug/ref.wav` | The reference clip |
 | `GET /voices/:slug/export` | `.gvoice` pack (zip) |
 | `POST /voices/import` | `{"data": <base64 .gvoice>}` |
+
+## Models
+
+### `POST /v1/models/unload`
+
+Frees memory by evicting resident models. The body is optional:
+
+```bash
+curl -s http://127.0.0.1:8790/v1/models/unload \
+  -H 'content-type: application/json' \
+  -d '{"target": "tts"}'
+```
+
+| `target` | Evicts | Waits for |
+| --- | --- | --- |
+| `tts` | the speech model | an in-flight speech/dialogue render (not an active chat stream) |
+| `llm` | the language model | every model request already queued, so an in-flight `/v1/chat/completions` reply (streamed or not) finishes first |
+| `all` (default) | both, LLM first | both of the above |
+
+Response: `{"unloaded": ["qwen3-1.7b-text", "qwen3-design"], "memGb": 3.12}`.
+`unloaded` lists the backend ids actually evicted (empty when nothing of that
+kind was resident); `memGb` is the same figure `/health` reports — the
+process's *peak* resident memory, so it does not fall after an unload. An unknown
+`target` is `400 {"detail": "target must be one of: tts, llm, all"}`. The next
+request that needs a model reloads it on demand. Does not take a slot in the
+generation queue, so it never gets `503 server busy`.
 
 ## Health
 

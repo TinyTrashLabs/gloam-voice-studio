@@ -249,6 +249,42 @@ extension VoiceLibraryTests {
         XCTAssertEqual(lib.gainDb(for: "nova-warm"), 3)
     }
 
+    func testVoiceDirectionIsPerEngineAndFallsBackToItsVoice() throws {
+        _ = try lib.save(name: "Benson", refWav: Data([1]), refText: "")
+        try lib.saveAt(slug: "benson-long", name: "Benson (64 s ref)", refWav: Data([2]), refText: "",
+                       variantOf: "benson")
+        let accent = VoiceDirection(instruct: "Speaks English with an Argentine accent.", cfgScale: 2)
+        try lib.setDirection("benson", engine: "breeze-tts-2", accent)
+        XCTAssertEqual(lib.direction(for: "benson-long", engine: "breeze-tts-2"), accent,
+                       "a longer reference of a voice is still that voice")
+        XCTAssertNil(lib.direction(for: "benson", engine: "qwen3-1.7b"), "per engine")
+
+        let own = VoiceDirection(instruct: "Warmer.")
+        try lib.setDirection("benson-long", engine: "breeze-tts-2", own)
+        XCTAssertEqual(lib.direction(for: "benson-long", engine: "breeze-tts-2"), own, "its own wins")
+
+        try lib.setDirection("benson-long", engine: "breeze-tts-2", VoiceDirection(instruct: "  "))
+        XCTAssertEqual(lib.direction(for: "benson-long", engine: "breeze-tts-2"), accent,
+                       "a blank Direction is unset")
+
+        try lib.setDirection("benson", engine: "breeze-tts-2", nil)
+        try lib.setDirection("benson-long", engine: "breeze-tts-2", nil)
+        XCTAssertNil(lib.direction(for: "benson-long", engine: "breeze-tts-2"))
+        XCTAssertFalse(lib.capabilities("benson").engines.contains("breeze-tts-2"),
+                       "clearing removes the engine folder")
+    }
+
+    func testVoiceDirectionIsInertForRenditionsAndSurvivesGarbage() throws {
+        _ = try lib.save(name: "Benson", refWav: Data([1]), refText: "")
+        try lib.setDirection("benson", engine: "breeze-tts-2", VoiceDirection(instruct: "Calm."))
+        XCTAssertNil(lib.rendition("benson", engine: "breeze-tts-2"),
+                     "a Direction is not a preset speaker or a baked style")
+        try lib.writeEngineAsset("benson", engine: "breeze-tts-2", file: "voice.json",
+                                 data: Data("not json".utf8))
+        XCTAssertNil(lib.direction(for: "benson", engine: "breeze-tts-2"))
+        XCTAssertNoThrow(try lib.meta("benson"))
+    }
+
     func testFoldLegacyVariantsMovesSiblingTakesAndBacksUp() throws {
         _ = try lib.save(name: "Nova", refWav: Data([1]), refText: "")
         try lib.saveAt(slug: "nova-excited", name: "Nova (excited)", refWav: Data([2]), refText: "")  // legacy: no variantOf

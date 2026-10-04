@@ -98,6 +98,20 @@ enum MCPRoute {
                 ],
             ],
             [
+                "name": "unload_models",
+                "description": "Free memory by evicting the resident speech (tts) "
+                    + "and/or language (llm) model. Waits for an in-flight render "
+                    + "or chat reply to finish first; the next request reloads on "
+                    + "demand. Returns the evicted backend ids and memGb.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "target": ["type": "string", "enum": ["tts", "llm", "all"],
+                                   "description": "Which model to unload (default all)"],
+                    ],
+                ],
+            ],
+            [
                 "name": "listen",
                 "description": "Open the microphone, listen for one spoken "
                     + "utterance, and return the transcript (native on-device "
@@ -241,6 +255,11 @@ enum MCPRoute {
                 return def.isEmpty ? nil : def
             }()
             let resolved: (path: String, text: String?)?
+            // Same rule as /v1/audio/speech: an acted take named directly
+            // already performs its emotion, so a `.directed` backend (Breeze)
+            // must not direct it again.
+            var resolvedIsTake = false
+            var voiceSlug: String? = nil
             if let voice = effectiveVoice {
                 guard let found = try? deps.voices.get(voice) else {
                     APIRouter.logError("mcp speak: voice '\(voice)' not found"
@@ -257,6 +276,8 @@ enum MCPRoute {
                 }
                 resolved = (found.refURL.path,
                             found.meta.refText.isEmpty ? nil : found.meta.refText)
+                resolvedIsTake = found.meta.isTake
+                voiceSlug = found.meta.slug.isEmpty ? voice : found.meta.slug
             } else if clones {
                 APIRouter.logError("mcp speak: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -267,8 +288,15 @@ enum MCPRoute {
             }
             let refPath = resolved?.path
             let refText = resolved?.text
-            let emotion = (arguments["emotion"] as? String)
+            let requested = (arguments["emotion"] as? String)
                 .flatMap(Emotion.init(rawValue:)) ?? .neutral
+            let emotion = backend.emotionMechanism == .directed && resolvedIsTake
+                ? Emotion.neutral : requested
+            // speak takes no instruction, so the voice's own Direction (Benson's
+            // accent fix) is the only one there is — as on /v1/audio/speech.
+            let voiceDirection = voiceSlug.flatMap {
+                deps.voices.direction(for: $0, engine: backend.rawValue)
+            }
             do {
                 let lane = deps.speechLane(for: backend)
                 let result = try await lane.gate.run {
@@ -277,7 +305,9 @@ enum MCPRoute {
                         backend: backend,
                         request: SynthesisRequest(
                             text: text, refAudioPath: refPath, refText: refText,
-                            emotion: emotion, speed: 1.0))
+                            emotion: emotion, speed: 1.0,
+                            instruct: voiceDirection?.instruct,
+                            cfgScaleOverride: voiceDirection?.cfgScale.map(Float.init)))
                 }
                 let wav = WAVEncoder.encode(
                     pcm16: PCM16.data(from: AudioAssembler.normalizePeak(floats: result.samples)),
@@ -315,6 +345,19 @@ enum MCPRoute {
             } catch {
                 return toolError(id: id, "transcription failed: \(error)")
             }
+        case "unload_models":
+            let raw = arguments["target"]
+            let target: UnloadTarget
+            if raw == nil || raw is NSNull {
+                target = .all
+            } else if let name = raw as? String, let parsed = UnloadTarget(rawValue: name) {
+                target = parsed
+            } else {
+                return toolError(id: id, UnloadTarget.invalidDetail)
+            }
+            let out = await APIRouter.unloadModels(target, deps: deps)
+            let json = (try? JSONEncoder().encode(out)) ?? Data("{}".utf8)
+            return toolResult(id: id, content: [jsonText(json)])
         case "listen":
             let maxSeconds = (arguments["maxSeconds"] as? NSNumber)?.doubleValue ?? 30
             let silenceSeconds = (arguments["silenceSeconds"] as? NSNumber)?.doubleValue ?? 1.2

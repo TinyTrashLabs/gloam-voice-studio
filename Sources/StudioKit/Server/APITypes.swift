@@ -23,9 +23,47 @@ public let supertonicLicenseNotice =
     + "undisclosed machine-generated content. By enabling this backend you agree "
     + "to these restrictions."
 
+/// In-app notice for the Breeze TTS 2 backend, from the model card's
+/// "BreezeBlue Research and Non-Commercial License". Unlike Fish, the
+/// restriction reaches the AUDIO too: self-hosted outputs are themselves
+/// research/non-commercial, and a BreezeBlue subscription does not change that.
+public let breezeLicenseNotice =
+    "Breeze TTS 2 weights (by BreezeBlue, converted to MLX by mlx-community) are "
+    + "under the BreezeBlue Research and Non-Commercial License. The weights AND "
+    + "the audio you generate with them locally are for research and non-commercial "
+    + "use only — a paid BreezeBlue subscription does not grant commercial rights "
+    + "to self-hosted output. Commercial use requires a separate agreement with "
+    + "BreezeBlue (breezeblue.ai). By enabling this backend you confirm your use "
+    + "is non-commercial."
+
 /// The license notice matching a backend that requires an ack.
+///
+/// Exhaustive on purpose: this used to be `supertonic ? … : fish`, which
+/// would have shown any newly gated backend the Fish license.
 public func licenseNotice(for backend: BackendID) -> String {
-    backend == .supertonic ? supertonicLicenseNotice : fishLicenseNotice
+    switch backend {
+    case .supertonic: supertonicLicenseNotice
+    case .breezeTTS2: breezeLicenseNotice
+    default: fishLicenseNotice
+    }
+}
+
+/// The license's name, for the acknowledgement sheet's title.
+public func licenseTitle(for backend: BackendID) -> String {
+    switch backend {
+    case .supertonic: "SuperTonic — BigScience Open RAIL-M License"
+    case .breezeTTS2: "Breeze TTS 2 — BreezeBlue Research and Non-Commercial License"
+    default: "Fish Audio Research License"
+    }
+}
+
+/// A few words for the Settings → Models size line.
+public func licenseSummary(for backend: BackendID) -> String {
+    switch backend {
+    case .supertonic: "Open RAIL-M use restrictions"
+    case .breezeTTS2: "non-commercial license (output too)"
+    default: "research/personal license"
+    }
 }
 
 /// FastAPI-compatible HTTP error: serializes as {"detail": "<message>"}.
@@ -95,6 +133,25 @@ struct APIVoice: Codable, ResponseEncodable {
 
 struct VoicesResponse: Codable, ResponseEncodable { let voices: [APIVoice] }
 struct OkResponse: Codable, ResponseEncodable { let ok: Bool }
+
+/// Which resident models `POST /v1/models/unload` (and the `unload_models` MCP
+/// tool) evicts. `all` when the caller doesn't say.
+enum UnloadTarget: String, Sendable {
+    case tts, llm, all
+
+    static let invalidDetail = "target must be one of: tts, llm, all"
+}
+
+struct UnloadRequest: Codable {
+    let target: String?
+}
+
+/// Backend ids actually evicted (empty when nothing of that kind was
+/// resident), plus the same `memGb` figure `/health` reports.
+struct UnloadResponse: Codable, ResponseEncodable {
+    let unloaded: [String]
+    let memGb: Double
+}
 
 struct VoiceCreateRequest: Codable {
     let name: String
@@ -177,6 +234,16 @@ struct SpeechRequest: Codable {
     let top_p: Float?
     let top_k: Int?
     let repetition_penalty: Float?
+    /// Classifier-free guidance scale where the backend offers one (Breeze:
+    /// default 4, 1 = off; acts only when there is an instruct/emotion to
+    /// follow). Ignored elsewhere.
+    let cfg_scale: Float?
+    /// Breeze identity strength: guidance toward the reference voice, clamped
+    /// to 1–4 (1 = off). Only acts on a cloned take. Ignored elsewhere.
+    let reference_guidance: Float?
+    /// Fixed sampling seed: the same seed and settings give the same take.
+    /// Breeze only; ignored elsewhere.
+    let seed: UInt64?
     let response_format: String?
     /// Character-voice effects. Either a built-in name ("demon", "glitch",
     /// "whisper") or an inline preset object. Absent = unprocessed audio, so

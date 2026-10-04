@@ -275,4 +275,150 @@ final class RequestPlannerTests: XCTestCase {
             XCTAssertEqual(error as? EngineError, .speakerRequired(.qwenCustom))
         }
     }
+
+    // MARK: - Breeze TTS 2
+
+    func testBreezeKeepsDirectionAlongsideAClone() throws {
+        // "Voice direction": the reference fixes identity, the instruct steers
+        // delivery. Every other clone backend drops instruct here.
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      refText: "ref words", instruct: "  slow and serious  "))
+        XCTAssertEqual(p.refAudioPath, "/tmp/r.wav")
+        XCTAssertEqual(p.refText, "ref words")
+        XCTAssertEqual(p.instruct, "slow and serious")
+    }
+
+    func testBreezeDesignsFromDirectionWithoutAVoice() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", instruct: "a warm young narrator"))
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertEqual(p.instruct, "a warm young narrator")
+    }
+
+    func testBreezeNeedsNeitherVoiceNorDirection() throws {
+        let p = try RequestPlanner.plan(backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+        XCTAssertNil(p.refAudioPath)
+        XCTAssertNil(p.instruct)
+    }
+
+    func testBreezeForwardsEverySamplerButNotLanguage() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", temperatureOverride: 0.7, language: "english",
+                                      topP: 0.8, topK: 40, repetitionPenalty: 1.1,
+                                      cfgScaleOverride: 6))
+        XCTAssertEqual(p.temperature, 0.7)
+        XCTAssertEqual(p.topP, 0.8)
+        XCTAssertEqual(p.topK, 40)
+        XCTAssertEqual(p.repetitionPenalty, 1.1)
+        XCTAssertEqual(p.cfgScale, 6)
+        XCTAssertNil(p.language)
+    }
+
+    func testBreezeCFGIsClampedToTheOfferedRange() throws {
+        // A 0 or negative scale would steer AWAY from the instruction.
+        let low = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", cfgScaleOverride: -2))
+        XCTAssertEqual(low.cfgScale, 1)
+        let high = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", cfgScaleOverride: 50))
+        XCTAssertEqual(high.cfgScale, 8)
+        let unset = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+        XCTAssertNil(unset.cfgScale, "nil keeps the model default")
+    }
+
+    func testBreezeIdentityStrengthIsClampedAndOneMeansOff() throws {
+        func plan(_ v: Float?) throws -> Float? {
+            try RequestPlanner.plan(backend: .breezeTTS2,
+                                    request: SynthesisRequest(text: "hi", referenceGuidanceOverride: v))
+                .referenceGuidance
+        }
+        XCTAssertEqual(try plan(2.5), 2.5)
+        XCTAssertEqual(try plan(50), 4, "clamped to the offered 1–4")
+        XCTAssertNil(try plan(1), "1 is off: no extra guidance pass")
+        XCTAssertNil(try plan(-3), "below the floor clamps to 1, which is off")
+        XCTAssertNil(try plan(nil))
+    }
+
+    func testBreezeForwardsAFixedSeed() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi", seed: 42))
+        XCTAssertEqual(p.seed, 42)
+        XCTAssertNil(try RequestPlanner.plan(
+            backend: .breezeTTS2, request: SynthesisRequest(text: "hi")).seed)
+    }
+
+    func testIdentityStrengthAndSeedNeverReachABackendWithoutTheKnob() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwen17B,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "r",
+                                      referenceGuidanceOverride: 3, seed: 42))
+        XCTAssertNil(p.referenceGuidance)
+        XCTAssertNil(p.seed)
+    }
+
+    func testCFGNeverReachesABackendWithoutTheKnob() throws {
+        let p = try RequestPlanner.plan(
+            backend: .qwenDesign,
+            request: SynthesisRequest(text: "hi", instruct: "x", cfgScaleOverride: 6))
+        XCTAssertNil(p.cfgScale)
+    }
+
+    func testBreezeTagsPassThroughUntouched() throws {
+        let text = "(laugh) You won't believe this. (sigh)"
+        let p = try RequestPlanner.plan(backend: .breezeTTS2, request: SynthesisRequest(text: text))
+        XCTAssertEqual(p.text, text)
+    }
+
+    // MARK: - Breeze emotion (.directed)
+
+    func testBreezeEmotionPickerBecomesADirection() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav",
+                                      refText: "ref", emotion: .excited))
+        XCTAssertEqual(p.instruct, DeliveryDirection.phrase(for: .excited))
+        XCTAssertEqual(p.text, "hi", "emotion is never written into the spoken text")
+        XCTAssertNil(p.exaggeration)
+    }
+
+    func testBreezeComposesDirectionExpressionAndEmotion() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "ref",
+                                      emotion: .warm, emotionMarker: "whisper",
+                                      instruct: "An old sailor."))
+        XCTAssertEqual(p.instruct, DeliveryDirection.compose(
+            direction: "An old sailor.", expression: "whisper", emotion: .warm))
+        XCTAssertTrue(p.instruct?.hasPrefix("An old sailor.") == true)
+    }
+
+    func testBreezeNeutralWithNoDirectionSendsNoInstruct() throws {
+        // An empty instruction keeps Breeze off its CFG pass entirely.
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "ref"))
+        XCTAssertNil(p.instruct)
+    }
+
+    func testBreezeNeverInjectsAFishMarkerIntoText() throws {
+        let p = try RequestPlanner.plan(
+            backend: .breezeTTS2,
+            request: SynthesisRequest(text: "hi", emotionMarker: "whisper"))
+        XCTAssertEqual(p.text, "hi")
+        XCTAssertEqual(p.instruct, DeliveryDirection.phrase(forExpression: "whisper"))
+    }
+
+    func testEmotionDoesNotLeakIntoOtherBackendsInstruct() throws {
+        // Only .directed phrases emotion; qwen3-design keeps its instruct verbatim.
+        let p = try RequestPlanner.plan(
+            backend: .qwenDesign,
+            request: SynthesisRequest(text: "hi", emotion: .hype, emotionMarker: "whisper",
+                                      instruct: "old narrator"))
+        XCTAssertEqual(p.instruct, "old narrator")
+    }
 }

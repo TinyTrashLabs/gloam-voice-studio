@@ -84,12 +84,15 @@ public actor GloamEngine {
 
     /// Evicts the resident model and releases accelerator memory.
     /// Takes effect immediately; callers must not unload while a generation is in flight.
-    public func unload() {
-        guard let resident else { return }
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func unload() -> BackendID? {
+        guard let resident else { return nil }
         engineLog.log("unload TTS \(resident.backend.rawValue, privacy: .public)")
         measured[resident.backend.rawValue] = nil
         self.resident = nil
         provider.didEvictModel()
+        return resident.backend
     }
 
     /// Evicts the resident TTS model as soon as no TTS work is executing —
@@ -97,11 +100,13 @@ public actor GloamEngine {
     /// EVERYTHING, including an active chat stream whose task parks on `tail`
     /// for the whole LLM reply; TTS eviction must not wait on that (it is
     /// exactly what a cross-engine residency hand-off does mid-stream).
-    public func evictTTSWhenIdle() async {
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func evictTTSWhenIdle() async -> BackendID? {
         while ttsBusy {
             await withCheckedContinuation { ttsIdleWaiters.append($0) }
         }
-        unload()
+        return unload()
     }
 
     /// True while a TTS load or generation is executing (`performSynthesis`,
@@ -119,12 +124,36 @@ public actor GloamEngine {
     public func loadedLLM() -> LLMBackendID? { residentLLM?.backend }
 
     /// Evicts the resident language model and releases accelerator memory.
-    public func unloadLLM() {
-        guard let residentLLM else { return }
+    /// Returns the backend it evicted (nil when nothing was resident).
+    @discardableResult
+    public func unloadLLM() -> LLMBackendID? {
+        guard let residentLLM else { return nil }
         engineLog.log("unload LLM \(residentLLM.backend.rawValue, privacy: .public)")
         measured[residentLLM.backend.rawValue] = nil
         self.residentLLM = nil
         languageProvider?.didEvictModel()
+        return residentLLM.backend
+    }
+
+    /// Evicts the resident language model once every piece of model work
+    /// queued before this call has finished — an in-flight chat reply
+    /// (single-shot or streamed) completes before its model goes away.
+    ///
+    /// Chained onto the task tail rather than `quiesce()` + `unloadLLM()`: a
+    /// chat stream holds `tail` for its whole reply, so waiting on the tail is
+    /// the wait that covers it, and enqueueing the unload AS a tail entry
+    /// closes the gap where a chat queued between "quiesce returned" and
+    /// "unload ran" could grab the model and have it pulled mid-reply. Work
+    /// queued after this call runs after the unload and reloads on demand.
+    @discardableResult
+    public func unloadLLMWhenIdle() async -> LLMBackendID? {
+        let previous = tail
+        let work = Task<LLMBackendID?, Never>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            return await self.unloadLLM()
+        }
+        tail = Task { _ = await work.value }
+        return await work.value
     }
 
     public func chat(backend: LLMBackendID, request: ChatRequest) async throws -> ChatResult {
@@ -462,9 +491,9 @@ public actor GloamEngine {
         let model = try await residentModel(for: backend)
         let start = Date()
         var sampleCount = 0
-        for try await samples in model.synthesizeStream(plan) {
-            try Task.checkCancellation()
-            guard !samples.isEmpty else { continue }
+        // A capped backend's long line streams piece by piece: the first
+        // sentence group plays while the rest render.
+        try await renderPasses(of: plan, backend: backend, model: model, streaming: true) { samples in
             sampleCount += samples.count
             continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
         }
@@ -500,14 +529,19 @@ public actor GloamEngine {
             let chunk = try await dialogue.synthesizeDialogue(ProviderDialogueRequest(
                 script: script,
                 prefixes: [request.dialoguePrefix],
-                // Temperature and topK come from the Studio bench's knobs. CFG
-                // scale does not: `Knobs.cfgScale` has no bench control (the
-                // Dialogue composer owns that slider), so the model default
-                // stands rather than a silently-zero override.
-                temperature: plan.temperature, topK: plan.topK))
+                // Temperature and topK come from the request's knobs. CFG scale
+                // does too when a caller sets one; the app's bench only sends
+                // its CFG slider for Breeze (the Dialogue composer owns Dia2's),
+                // so nil here keeps the model default rather than a
+                // silently-zero override.
+                temperature: plan.temperature, topK: plan.topK, cfgScale: plan.cfgScale))
             raw = chunk.samples
         } else {
-            raw = try await model.synthesize(plan)
+            var joined: [Float] = []
+            try await renderPasses(of: plan, backend: backend, model: model, streaming: false) {
+                joined.append(contentsOf: $0)
+            }
+            raw = joined
         }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(raw.count) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
@@ -533,6 +567,108 @@ public actor GloamEngine {
             samples: samples,
             sampleRate: model.sampleRate,
             wallSeconds: wall)
+    }
+
+    /// `plan` as the generation calls it needs: one, or — for a backend whose
+    /// per-call cap a long line would hit (`maxSecondsPerPass`) — one per
+    /// sentence group, each carrying the same voice, direction and knobs.
+    /// Pieces target two thirds of the cap, leaving room for a slow Direction.
+    /// When later passes will clone the first (`needsIdentityAnchor`), the
+    /// first pass is only the opening sentences (~`anchorSeconds`, but never
+    /// less than the whole first sentence when it fits a piece): that
+    /// audio becomes the reference, and a short clean clip clones better and
+    /// faster than a 40 s one.
+    static func passes(of plan: ProviderRequest, backend: BackendID) -> [ProviderRequest] {
+        guard let cap = backend.maxSecondsPerPass else { return [plan] }
+        let budget = cap * 2 / 3
+        var pieces = LongTextChunker.chunks(plan.text, maxSeconds: budget)
+        guard pieces.count > 1 else { return [plan] }
+        if needsIdentityAnchor(plan, backend: backend),
+           var opening = LongTextChunker.chunks(plan.text, maxSeconds: anchorSeconds).first {
+            let text = plan.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Never end the anchor mid-sentence: a first sentence past the
+            // anchor target but within a piece stays whole. Cutting it would
+            // put a gap mid-sentence and hand every later pass a reference
+            // that stops mid-phrase, which a continuation model carries into
+            // each seam.
+            if let first = LongTextChunker.sentences(text).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               first.count > opening.count,
+               LongTextChunker.estimatedSeconds(first) <= budget {
+                opening = first
+            }
+            // Chunks and sentences are exact prefixes of the trimmed text, so
+            // the rest is what follows the opening.
+            pieces = [opening] + LongTextChunker.chunks(
+                String(text.dropFirst(opening.count)), maxSeconds: budget)
+        }
+        return pieces.map { var piece = plan; piece.text = $0; return piece }
+    }
+
+    /// Target length of an anchoring first pass (see `passes(of:backend:)`).
+    static let anchorSeconds: Double = 12
+
+    /// The breath between pieces of a split line: 150 ms of silence.
+    static func passGap(sampleRate: Int) -> [Float] {
+        [Float](repeating: 0, count: sampleRate * 15 / 100)
+    }
+
+    /// Renders `plan`'s passes in order, handing audio to `emit` as it comes
+    /// (per streamed chunk when `streaming`, per pass otherwise) with a
+    /// `passGap` between passes. One pass is exactly the old single call.
+    ///
+    /// Two things only a multi-pass line needs:
+    /// - Cancellation is checked before every later pass. A cancelled
+    ///   `AsyncThrowingStream` ends quietly rather than throwing, so without
+    ///   this each remaining pass would still start — and the default
+    ///   `synthesizeStream` runs its pass in a Task nobody cancels — leaving
+    ///   several generations racing on one model after the engine went idle.
+    /// - Identity is anchored. A pass with no reference (Breeze designing
+    ///   from a Direction) invents a new speaker every call, so the first
+    ///   pass's audio — written to a temporary WAV, with its text as the
+    ///   transcript — becomes the reference for the rest, which keep the
+    ///   Direction: one designed voice for the whole line.
+    private func renderPasses(
+        of plan: ProviderRequest, backend: BackendID, model: any SpeechModel,
+        streaming: Bool, emit: ([Float]) -> Void
+    ) async throws {
+        var passes = Self.passes(of: plan, backend: backend)
+        var anchor: URL?
+        defer { if let anchor { try? FileManager.default.removeItem(at: anchor) } }
+        for index in passes.indices {
+            if index > 0 {
+                try Task.checkCancellation()
+                emit(Self.passGap(sampleRate: model.sampleRate))
+            }
+            var rendered: [Float] = []
+            if streaming {
+                for try await samples in model.synthesizeStream(passes[index]) {
+                    try Task.checkCancellation()
+                    guard !samples.isEmpty else { continue }
+                    if index == 0 && passes.count > 1 { rendered.append(contentsOf: samples) }
+                    emit(samples)
+                }
+            } else {
+                rendered = try await model.synthesize(passes[index])
+                emit(rendered)
+            }
+            if index == 0, passes.count > 1, Self.needsIdentityAnchor(plan, backend: backend) {
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("gloam-pass-anchor-\(UUID().uuidString).wav")
+                try WAVWriter.write(samples: rendered, sampleRate: model.sampleRate, to: url)
+                anchor = url
+                for later in passes.indices.dropFirst() {
+                    passes[later].refAudioPath = url.path
+                    passes[later].refText = passes[0].text
+                }
+            }
+        }
+    }
+
+    /// Whether later passes must clone the first one to keep one speaker:
+    /// no reference of its own, on a backend that can take one.
+    static func needsIdentityAnchor(_ plan: ProviderRequest, backend: BackendID) -> Bool {
+        plan.refAudioPath == nil && backend.controls.voiceClone != .none
     }
 
     private func residentModel(for backend: BackendID) async throws -> any SpeechModel {

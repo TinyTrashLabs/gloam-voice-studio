@@ -82,9 +82,23 @@ let package = Package(
         // statics that default off, so the Mac app is unchanged.
         // a206f70 (2026-09-26) adds the 8-bit fused step,
         // frame pipelining and the async-decode silence-stop fix.
+        // e6b2a99 (2026-10-03, feat/breeze-tts) is a206f70 plus Breeze TTS 2
+        // (upstream Blaizzy/mlx-audio-swift#255, model_type "breeze") — the
+        // `breeze-tts-2` backend — with an adjustable CFG scale
+        // (BreezeTTSModel.cfgScaleOverride), a cached reference prefix,
+        // static sampler defaults and tested guidance rules. No other model
+        // touched.
+        // eac586e (2026-10-03, feat/breeze-tts) defaults Breeze's repetition
+        // penalty to upstream's 1.1: at 1.0 a take could loop on a silent
+        // frame and leave 10 s+ of dead air at a "(clears throat)".
+        // b4c683a (2026-10-03, feat/breeze-tts) adds identity strength
+        // (BreezeTTSModel.referenceGuidanceOverride, upstream's dual CFG).
+        // cf35145 (2026-10-03) is the fork's main merging #13 (Breeze, all of
+        // the above) onto 60c05fe, #14's fix for the first-word crack in
+        // streamed Qwen (the decoder is primed with the ICL reference codes).
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "60c05fee22121de5ab4f2a49ec175cd3b7093907"),
+            revision: "cf35145d3cd02ada01d34037f6e34b2a72c4edde"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
@@ -228,7 +242,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit", "GVoiceKit", "QwenANE"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
@@ -242,6 +256,11 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .testTarget(
+            name: "GVoiceKitTests",
+            dependencies: ["GVoiceKit"],
+            path: "Tests/GVoiceKitTests"
         ),
         .target(
             name: "GloamVoiceUI",
@@ -357,7 +376,7 @@ let package = Package(
         ),
         .testTarget(
             name: "QwenANETests",
-            dependencies: ["QwenANE"],
+            dependencies: ["QwenANE", "GVoiceKit"],
             path: "Tests/QwenANETests",
             exclude: ["make_reference.py", "make_voice_prep_reference.py"],
             resources: [.copy("Fixtures")]

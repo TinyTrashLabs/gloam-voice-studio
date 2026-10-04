@@ -61,6 +61,29 @@ public enum APIRouter {
                 loadedBackends: loaded.map { [$0.rawValue] } ?? [])
         }
 
+        // Free memory on demand: evict the resident TTS and/or LLM model without
+        // cutting off work already running. No request gate — eviction waits on
+        // the engine itself (see `unloadModels`), and holding a gate slot would
+        // make an unload 503 behind a queue of renders it has no need to wait for.
+        router.post("v1/models/unload") { request, _ -> UnloadResponse in
+            // Optional body: empty (or whitespace) means target=all.
+            var buffer = try await request.body.collect(upTo: 64 * 1024)
+            let data = buffer.readData(length: buffer.readableBytes) ?? Data()
+            var raw: String? = nil
+            if !data.allSatisfy({ [0x20, 0x09, 0x0A, 0x0D].contains($0) }) {
+                guard let body = try? JSONDecoder().decode(UnloadRequest.self, from: data) else {
+                    throw APIError(status: .badRequest,
+                                   detail: "invalid JSON body — " + UnloadTarget.invalidDetail)
+                }
+                raw = body.target
+            }
+            // Absent/null target → all; a present but unknown one → 400.
+            guard let target = raw.map({ UnloadTarget(rawValue: $0) }) ?? .all else {
+                throw APIError(status: .badRequest, detail: UnloadTarget.invalidDetail)
+            }
+            return await unloadModels(target, deps: deps)
+        }
+
         router.get("voices") { _, _ in
             VoicesResponse(voices: deps.voices.list().map {
                 APIVoice(meta: $0, capabilities: deps.voices.capabilities($0.slug),
@@ -291,12 +314,18 @@ public enum APIRouter {
             var refPath: String? = nil
             var refText: String? = nil
             var usedVariant = false
+            // The resolved voice is itself an acted take (named directly).
+            var resolvedIsTake = false
             // The library slug actually rendered, so the voice's own loudness
             // trim can be applied to the output below. Nil for preset/instruct
             // backends, whose `voice` is not a library slug at all.
             var trimSlug: String? = nil
             let defaultVoice = deps.defaultVoice()
-            let effectiveVoice = req.voice ?? (defaultVoice.isEmpty ? nil : defaultVoice)
+            // An `instruct` with no `voice`, on a backend that designs from a
+            // direction (Breeze), asks for a DESIGNED voice — reaching for the
+            // Settings default would silently clone someone instead.
+            let designs = backend.designsFromDirection && req.voice == nil && !blank(req.instruct)
+            let effectiveVoice = req.voice ?? (designs || defaultVoice.isEmpty ? nil : defaultVoice)
             // Baked engine rendition: a pack carrying assets for THIS backend
             // (e.g. Billie Frost's engines/supertonic/style.json) renders that
             // voice instead of a house preset. Variant rendition first, then
@@ -355,22 +384,30 @@ public enum APIRouter {
                     refPath = resolved.refURL.path
                     refText = resolved.meta.refText.isEmpty ? nil : resolved.meta.refText
                     trimSlug = resolved.slug
+                    resolvedIsTake = resolved.meta.isTake
                 } else if clones {
                     logError("/v1/audio/speech: \(StudioError.voiceNotFound(slug: voice))"
                         + " (model \(backend.rawValue)) — refusing to synthesize an"
                         + " unconditioned, randomly invented speaker")
                     throw APIError(status: .badRequest, detail: "voice '\(voice)' not found")
                 }
-            } else if clones {
+            } else if clones && !designs {
                 // No `voice` and no configured default: a cloning backend would
-                // invent a speaker. Say so instead.
+                // invent a speaker. Say so instead. Design (`designs` above) is
+                // the exception: the caller described the speaker, so this is
+                // not an unconditioned guess.
                 logError("/v1/audio/speech: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
                     + " unconditioned, randomly invented speaker")
                 throw APIError(status: .badRequest,
                                detail: "\(backend.rawValue) requires a 'voice'")
             }
-            let knobEmotion = usedVariant ? Emotion.neutral
+            // `.directed` (Breeze) also treats a take named directly in `voice`
+            // ("cruz-excited") as already performing its emotion, so the
+            // emotion isn't directed on top of it. Other mechanisms keep
+            // their long-standing behaviour.
+            let namedTake = backend.emotionMechanism == .directed && resolvedIsTake
+            let knobEmotion = usedVariant || namedTake ? Emotion.neutral
                 : (req.emotion.flatMap(Emotion.init(rawValue:)) ?? .neutral)
             // Dia2 conditions on a word-aligned prefix, not on `refAudioPath`, so
             // the single-voice route has to build one too — otherwise a request
@@ -401,6 +438,14 @@ public enum APIRouter {
                 }
                 return resolved.clamped()
             }()
+            // The voice's own Direction for this engine, used when the caller
+            // sent none — the same reason the trim below is applied here: a
+            // voice should sound like itself off-machine too. Any `instruct`,
+            // even a blank one, is the caller's choice and wins outright,
+            // CFG included.
+            let voiceDirection = req.instruct == nil
+                ? trimSlug.flatMap { deps.voices.direction(for: $0, engine: backend.rawValue) }
+                : nil
             do {
                 let synthRefPath = refPath, synthRefText = refText
                 let synthRequest = SynthesisRequest(
@@ -410,10 +455,15 @@ public enum APIRouter {
                     temperatureOverride: req.temperature,
                     exaggerationOverride: req.exaggeration,
                     exaggerationCeiling: req.exaggeration_ceiling,
-                    instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
+                    instruct: req.instruct ?? voiceDirection?.instruct,
+                    speaker: packSpeaker ?? effectiveSpeaker,
                     styleURL: styleURL, language: req.language,
                     topP: req.top_p, topK: req.top_k,
                     repetitionPenalty: req.repetition_penalty,
+                    cfgScaleOverride: req.cfg_scale
+                        ?? voiceDirection?.cfgScale.map(Float.init),
+                    referenceGuidanceOverride: req.reference_guidance,
+                    seed: req.seed,
                     dialoguePrefix: speechPrefix,
                     fx: fxPreset,
                     firstChunkFrames: req.first_chunk_frames)
@@ -690,6 +740,28 @@ public enum APIRouter {
         }
 
         return router
+    }
+
+    /// Evicts the resident models `target` names from the server's engine and
+    /// reports what actually went, plus `/health`'s memory figure. Shared by
+    /// `POST /v1/models/unload` and the `unload_models` MCP tool.
+    ///
+    /// - tts: `evictTTSWhenIdle` — an in-flight speech/dialogue render finishes
+    ///   first; an active chat stream is NOT waited on (TTS eviction never is).
+    /// - llm: `unloadLLMWhenIdle` — chained onto the engine's task tail, which
+    ///   a chat stream holds for its whole reply, so an in-flight
+    ///   /v1/chat/completions (streamed or not) completes before the model goes.
+    /// - all: LLM first, then TTS, so a live stream's interleaved speech isn't
+    ///   evicted mid-reply only to reload for the next sentence.
+    static func unloadModels(_ target: UnloadTarget, deps: APIDependencies) async -> UnloadResponse {
+        var unloaded: [String] = []
+        if target != .tts, let llm = await deps.engine.unloadLLMWhenIdle() {
+            unloaded.append(llm.rawValue)
+        }
+        if target != .llm, let tts = await deps.engine.evictTTSWhenIdle() {
+            unloaded.append(tts.rawValue)
+        }
+        return UnloadResponse(unloaded: unloaded, memGb: memGb())
     }
 
     /// Wrap already-serialized JSON bytes in a 200 response — the Lab routes hand

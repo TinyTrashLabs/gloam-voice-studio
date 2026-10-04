@@ -70,7 +70,7 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
                 #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             let tools = (listReply["result"] as? [String: Any])?["tools"] as? [[String: Any]]
             XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
-                           ["list_voices", "listen", "speak", "transcribe"])
+                           ["list_voices", "listen", "speak", "transcribe", "unload_models"])
         }
     }
 
@@ -87,7 +87,7 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
             XCTAssertEqual(tools?.compactMap { $0["name"] as? String }.sorted(),
                            ["lab_delete_clip", "lab_delete_group", "lab_list",
                             "lab_put_clip", "lab_read_feedback", "lab_set_group",
-                            "list_voices", "listen", "speak", "transcribe"])
+                            "list_voices", "listen", "speak", "transcribe", "unload_models"])
         }
     }
 
@@ -121,6 +121,60 @@ final class MCPRouteTests: XCTestCase, @unchecked Sendable {
             let result = reply["result"] as? [String: Any]
             XCTAssertEqual(result?["isError"] as? Bool, false)
         }
+    }
+
+    func testSpeakDoesNotDirectANamedBreezeTakeWithItsEmotionAgain() async throws {
+        let voices = try seededLibrary("speak-breeze-take")
+        _ = try voices.saveAt(slug: "cruz-excited", name: "Cruz (Excited)",
+                              refWav: Data([0, 1, 2]), refText: "an excited take",
+                              variantOf: "cruz")
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider), voices: voices,
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        try await Application(router: APIRouter.build(deps)).test(.router) { client in
+            let reply = try await self.rpc(client, #"""
+            {"jsonrpc":"2.0","id":3,"method":"tools/call",
+             "params":{"name":"speak","arguments":{"text":"hi","voice":"cruz-excited","emotion":"excited"}}}
+            """#)
+            XCTAssertEqual((reply["result"] as? [String: Any])?["isError"] as? Bool, false)
+        }
+        XCTAssertEqual(provider.model.last?.refText, "an excited take")
+        XCTAssertNil(provider.model.last?.instruct, "the take already performs 'excited'")
+    }
+
+    func testSpeakDirectsABreezeBaseVoiceWithTheEmotion() async throws {
+        let provider = CapturingProvider()
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: try seededLibrary("speak-breeze-base"),
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        try await Application(router: APIRouter.build(deps)).test(.router) { client in
+            _ = try await self.rpc(client, #"""
+            {"jsonrpc":"2.0","id":3,"method":"tools/call",
+             "params":{"name":"speak","arguments":{"text":"hi","voice":"cruz","emotion":"excited"}}}
+            """#)
+        }
+        XCTAssertEqual(provider.model.last?.instruct, DeliveryDirection.phrase(for: .excited))
+    }
+
+    func testSpeakUsesTheVoicesOwnBreezeDirection() async throws {
+        let provider = CapturingProvider()
+        let voices = try seededLibrary("speak-breeze-direction")
+        try voices.setDirection("cruz", engine: "breeze-tts-2",
+                                VoiceDirection(instruct: "An Argentine accent.", cfgScale: 2))
+        let deps = APIDependencies(engine: GloamEngine(provider: provider), voices: voices,
+                                   defaultBackend: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        try await Application(router: APIRouter.build(deps)).test(.router) { client in
+            _ = try await self.rpc(client, #"""
+            {"jsonrpc":"2.0","id":3,"method":"tools/call",
+             "params":{"name":"speak","arguments":{"text":"hi","voice":"cruz","emotion":"excited"}}}
+            """#)
+        }
+        XCTAssertEqual(provider.model.last?.instruct,
+                       "An Argentine accent. " + DeliveryDirection.phrase(for: .excited)!)
+        XCTAssertEqual(provider.model.last?.cfgScale, 2)
     }
 
     func testUnknownVoiceIsToolError() async throws {

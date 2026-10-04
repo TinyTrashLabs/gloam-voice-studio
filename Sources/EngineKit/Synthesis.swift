@@ -7,9 +7,10 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var refAudioPath: String?
     public var refText: String?
     public var emotion: Emotion
-    /// Fish inline emotion marker (e.g. "whisper"): the planner renders it as a
-    /// leading `[marker]` for `.inlineMarker` backends. nil = none. Ignored by other
-    /// backends. Not injected if `text` already begins with a `[marker]`.
+    /// Named expression (e.g. "whisper"). Fish (`.inlineMarker`): rendered as a
+    /// leading `[marker]`, not injected if `text` already begins with one.
+    /// Breeze (`.directed`): phrased into the instruction (`DeliveryDirection`).
+    /// nil = none. Ignored by other backends.
     public var emotionMarker: String?
     /// Playback-speed multiplier (1.0 = unchanged). Applied as a time-domain
     /// resample after generation — extreme values shift pitch, same trade-off
@@ -47,6 +48,15 @@ public struct SynthesisRequest: Sendable, Equatable {
     public var tShiftOverride: Float?
     /// LuxTTS dual-path 48k output toggle override (nil = model default true).
     public var returnSmoothOverride: Bool?
+    /// Breeze classifier-free guidance scale for instructed takes (nil = model
+    /// default 4; 1 = off). Honored where `Knobs.cfgScale` is offered.
+    public var cfgScaleOverride: Float?
+    /// Breeze identity strength: guidance toward the reference voice (nil or 1 =
+    /// off). Honored where `Knobs.referenceGuidance` is offered.
+    public var referenceGuidanceOverride: Float?
+    /// Fixed sampling seed (nil = fresh randomness every take). Honored where
+    /// `Knobs.seed` is offered.
+    public var seed: UInt64?
     /// Dia2 only: the selected voice's word-aligned conditioning prefix.
     ///
     /// Dia2 does not clone from `refAudioPath` — it conditions on a prefix whose
@@ -74,6 +84,8 @@ public struct SynthesisRequest: Sendable, Equatable {
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 numStepsOverride: Int? = nil, guidanceScaleOverride: Float? = nil,
                 tShiftOverride: Float? = nil, returnSmoothOverride: Bool? = nil,
+                cfgScaleOverride: Float? = nil,
+                referenceGuidanceOverride: Float? = nil, seed: UInt64? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
                 fx: FXPreset? = nil,
                 firstChunkFrames: Int? = nil) {
@@ -101,6 +113,9 @@ public struct SynthesisRequest: Sendable, Equatable {
         self.guidanceScaleOverride = guidanceScaleOverride
         self.tShiftOverride = tShiftOverride
         self.returnSmoothOverride = returnSmoothOverride
+        self.cfgScaleOverride = cfgScaleOverride
+        self.referenceGuidanceOverride = referenceGuidanceOverride
+        self.seed = seed
     }
 }
 
@@ -115,7 +130,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var exaggeration: Float?
     /// Chatterbox (regular) only: CFG guidance weight (nil = model default 0.5).
     public var cfgWeight: Float?
-    /// Qwen natural-language direction.
+    /// Natural-language direction (Qwen Design/Custom; Breeze, where it may
+    /// also accompany a reference voice — see `BackendID.instructDirectsClone`).
     public var instruct: String?
     /// Qwen CustomVoice preset speaker.
     public var speaker: String?
@@ -142,6 +158,12 @@ public struct ProviderRequest: Sendable, Equatable {
     public var returnSmooth: Bool?
     /// qwen3-0.6b-ane only: frames in the first streamed vocoder chunk (nil = 12).
     public var firstChunkFrames: Int?
+    /// Breeze only: classifier-free guidance scale (nil = model default 4).
+    public var cfgScale: Float?
+    /// Breeze only: identity strength (nil = off).
+    public var referenceGuidance: Float?
+    /// Fixed sampling seed (nil = random).
+    public var seed: UInt64?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 temperature: Float? = nil, exaggeration: Float? = nil, cfgWeight: Float? = nil,
@@ -149,7 +171,8 @@ public struct ProviderRequest: Sendable, Equatable {
                 language: String? = nil,
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
-                tShift: Float? = nil, returnSmooth: Bool? = nil, firstChunkFrames: Int? = nil) {
+                tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil,
+                referenceGuidance: Float? = nil, seed: UInt64? = nil, firstChunkFrames: Int? = nil) {
         self.firstChunkFrames = firstChunkFrames
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
@@ -158,6 +181,8 @@ public struct ProviderRequest: Sendable, Equatable {
         self.topP = topP; self.topK = topK; self.repetitionPenalty = repetitionPenalty
         self.speed = speed; self.numSteps = numSteps; self.guidanceScale = guidanceScale
         self.tShift = tShift; self.returnSmooth = returnSmooth
+        self.cfgScale = cfgScale
+        self.referenceGuidance = referenceGuidance; self.seed = seed
     }
 }
 
@@ -242,9 +267,22 @@ enum RequestPlanner {
 
         // Instruct: honored only when the backend allows it AND (on clone-capable
         // backends) no reference voice is selected — the library ignores instruct on
-        // the clone path, so the plan drops it to stay honest.
-        let wantsInstruct = controls.instruct != .none && !(controls.voiceClone != .none && hasRef)
-        let instruct = wantsInstruct ? clean(request.instruct) : nil
+        // the clone path, so the plan drops it to stay honest. The exception is a
+        // backend whose clone path takes the instruct too (Breeze's "voice
+        // direction"), where dropping it would discard the user's Direction.
+        let instructSurvivesClone = !(controls.voiceClone != .none && hasRef)
+            || backend.instructDirectsClone
+        let wantsInstruct = controls.instruct != .none && instructSurvivesClone
+        // `.directed` (Breeze): the emotion picker and any expression are
+        // phrased into the instruction after the user's own Direction — that
+        // instruction IS the model's emotion control.
+        let instruct: String? = {
+            guard wantsInstruct else { return nil }
+            guard backend.emotionMechanism == .directed else { return clean(request.instruct) }
+            return DeliveryDirection.compose(direction: clean(request.instruct),
+                                             expression: clean(request.emotionMarker),
+                                             emotion: request.emotion)
+        }()
         if controls.instruct == .required && instruct == nil {
             throw EngineError.instructRequired(backend)
         }
@@ -316,6 +354,19 @@ enum RequestPlanner {
             tShift: knobs.tShift != nil ? request.tShiftOverride : nil,
             returnSmooth: knobs.returnSmooth != nil
                 ? (request.returnSmoothOverride ?? knobs.returnSmooth) : nil,
+            // Clamped to the offered range: a 0 or negative scale from an API
+            // caller would steer AWAY from the instruction.
+            cfgScale: knobs.cfgScale.flatMap { range in
+                request.cfgScaleOverride.map { min(max($0, range.lowerBound), range.upperBound) }
+            },
+            // Clamped the same way; 1 (the floor) is "off", so it is dropped
+            // rather than sent as a guidance pass that changes nothing.
+            referenceGuidance: knobs.referenceGuidance.flatMap { range in
+                request.referenceGuidanceOverride
+                    .map { min(max($0, range.lowerBound), range.upperBound) }
+                    .flatMap { $0 > 1 ? $0 : nil }
+            },
+            seed: knobs.seed == true ? request.seed : nil,
             firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil
         )
     }

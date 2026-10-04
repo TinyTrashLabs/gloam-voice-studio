@@ -7,6 +7,15 @@ import StudioKit
 import SpeechKit
 import GVoiceProductionKit
 
+if CommandLine.arguments.dropFirst().first == "gvoice-qwen-prep" {
+    do {
+        try runGVoiceQwenPrep(Array(CommandLine.arguments.dropFirst(2)))
+        exit(0)
+    } catch {
+        die("gvoice-qwen-prep failed: \(error)")
+    }
+}
+
 if CommandLine.arguments.dropFirst().first == "gvoice-prepare" {
     do {
         try await runGVoicePrepare(Array(CommandLine.arguments.dropFirst(2)))
@@ -378,7 +387,7 @@ func usage() -> Never {
     let llmIDs = LLMBackendID.allCases.map(\.rawValue).joined(separator: "|")
     let lines: [String] = [
         "usage: spike --backend <qwen3-0.6b|qwen3-1.7b|qwen3-design|qwen3-custom|",
-        "chatterbox|chatterbox-turbo|fish-s2-pro> --text <text> ",
+        "chatterbox|chatterbox-turbo|fish-s2-pro|breeze-tts-2> --text <text> ",
         "--out <file.wav> [--ref <ref.wav>] [--ref-text <transcript>] ",
         "[--emotion <flat|neutral|warm|excited|hype>] [--speed <s>] [--ack-fish-license] ",
         "[--instruct <natural-language direction>] [--speaker <preset>] [--language <lang>]\n",

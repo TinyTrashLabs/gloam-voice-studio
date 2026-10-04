@@ -58,6 +58,12 @@ run on the CPU only (`.cpuOnly`; never CPU_AND_NE, it hung the ANE compiler):
 
 Source packages: `qwen-onnx-cpu/out/coreml_enc/`; compile with `xcrun coremlcompiler compile`.
 
+A `.gvoice` pack can carry the prepared voice (`engines/qwen3-0.6b/`, docs/gvoice-format.md):
+`QwenVoicePrep.prepared(fromPack:referenceWAV:transcript:cacheDirectory:modelsDirectory:)` checks the
+cache, then the pack's files (sha256 of the audio, prep version, mel, transcript, array shapes), and
+only then runs the encoders; `Prepared.origin` says which, and `Prepared.enginePayload(...)` makes the
+folder to write back. `spike gvoice-qwen-prep <pack.gvoice>` adds or refreshes it.
+
 ```swift
 // wav: mono 24 kHz PCM16, already through ReferenceStandard (or a GVoiceProductionKit PreparedReference)
 let voice = try QwenVoicePrep.prepared(referenceWAV: wav, transcript: text,
