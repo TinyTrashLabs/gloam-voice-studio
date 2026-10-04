@@ -80,6 +80,14 @@ public enum QwenVoicePrep {
                               spkEmbedding: try embedding(speaker, samples))
     }
 
+    /// The longest section a Qwen voice may store: the encoder's input, but never more than 256 codec
+    /// frames (20.48 s at 12.5 Hz) -- the pack format's ref_codes limit, which keeps the voice prefix
+    /// small enough to leave the ANE talker's 1024-slot KV for the speech it generates.
+    public static let maxRefFrames = 256
+    public static func sectionLimitSamples(modelsDirectory: URL) -> Int {
+        min(encoderLimitSamples(modelsDirectory: modelsDirectory), maxRefFrames * 1920)
+    }
+
     /// The speech encoder's real input length in samples, read from the model file (40 s, or 20 s on an
     /// older model set); `maxSamples` when the model can't be loaded (prep then reports that itself).
     public static func encoderLimitSamples(modelsDirectory: URL) -> Int {

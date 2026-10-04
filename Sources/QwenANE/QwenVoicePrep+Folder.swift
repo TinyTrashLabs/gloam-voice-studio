@@ -60,7 +60,7 @@ extension QwenVoicePrep {
         try await prepareEngineFolder(
             voiceDir: voiceDir, masterWAV: masterWAV, transcript: transcript, cacheDirectory: cacheDirectory,
             storeFolder: storeFolder, transcribe: transcribe,
-            limitSamples: encoderLimitSamples(modelsDirectory: modelsDirectory),
+            limitSamples: sectionLimitSamples(modelsDirectory: modelsDirectory),
             encode: { try prepare(referenceWAV: $0, transcript: $1, modelsDirectory: modelsDirectory) })
     }
 
