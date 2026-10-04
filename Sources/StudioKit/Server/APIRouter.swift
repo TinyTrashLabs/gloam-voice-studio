@@ -99,9 +99,12 @@ public enum APIRouter {
             guard let raw = Data(base64Encoded: req.refAudio) else {
                 throw APIError(status: .badRequest, detail: "refAudio is not valid base64")
             }
-            return try mapStoreErrors {
+            let saved = try mapStoreErrors {
                 try deps.voices.save(name: req.name, refWav: raw, refText: req.refText ?? "")
             }
+            // Section(s) for the engines that take a shorter reference are chosen now, once, and stored in the pack.
+            await deps.voices.prepareSections(saved.slug)
+            return saved
         }
 
         router.patch("voices/:slug") { request, context in
@@ -115,11 +118,14 @@ public enum APIRouter {
                 raw = decoded
             }
             let name = req.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return try mapStoreErrors {
+            let updated = try mapStoreErrors {
                 try deps.voices.update(slug,
                                        name: (name?.isEmpty == false) ? name : nil,
                                        refText: req.refText, refWav: raw)
             }
+            // A replaced master or transcript: sections cut from the old one are stale by hash and are re-chosen here.
+            if raw != nil || req.refText != nil { await deps.voices.prepareSections(slug) }
+            return updated
         }
 
         router.delete("voices/:slug") { _, context in

@@ -132,33 +132,13 @@ final class QwenANEBackendTests: XCTestCase {
         } catch EngineError.generationFailed(_, let message) {
             XCTAssertTrue(message.contains("QwenSpeechEncoder"), message)
         }
-        // The window that went to the encoder: the voice's own (transcribed) or the cached slice.
-        let candidates = [dir.appendingPathComponent("engines/lux-tts/ref.wav")]
-            + ((try? FileManager.default.contentsOfDirectory(at: dir.appendingPathComponent("cache/windows"),
-                                                             includingPropertiesForKeys: nil)) ?? [])
-        let window = try XCTUnwrap(candidates.first { FileManager.default.fileExists(atPath: $0.path) })
+        // The section was chosen at prep time and stored in the voice's own qwen3-0.6b folder.
+        let window = dir.appendingPathComponent("engines/qwen3-0.6b/ref.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: window.path))
         let file = try AVAudioFile(forReading: window)
         let seconds = Double(file.length) / file.processingFormat.sampleRate
         XCTAssertLessThanOrEqual(seconds, 30.0)
         XCTAssertGreaterThan(seconds, 15.0)
-    }
-
-    @available(macOS 15.0, iOS 18.0, *)
-    func testLongReferenceUsesTheVoicesLuxWindowAndItsTranscript() throws {
-        let dir = try tempDir()
-        let ref = dir.appendingPathComponent("ref.wav")
-        try wav(seconds: 40).write(to: ref)
-        let engines = dir.appendingPathComponent("engines/lux-tts")
-        try FileManager.default.createDirectory(at: engines, withIntermediateDirectories: true)
-        try wav(seconds: 12).write(to: engines.appendingPathComponent("ref.wav"))
-        let meta = #"{"audio":"engines/lux-tts/ref.wav","text":"the words of the window"}"#
-        try Data(meta.utf8).write(to: engines.appendingPathComponent("voice.json"))
-        // The window is accepted (it fits), so prep moves on to the encoders, which this empty set lacks.
-        XCTAssertThrowsError(try QwenANESpeechModel.prepare(reference: ref, transcript: "text of the whole 40 s master",
-                                                            modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))) { error in
-            guard case EngineError.generationFailed(_, let message) = error else { return XCTFail("\(error)") }
-            XCTAssertTrue(message.contains("QwenSpeechEncoder"), message)
-        }
     }
 }
 

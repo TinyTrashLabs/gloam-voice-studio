@@ -285,12 +285,9 @@ public final class PocketOnnxEngine {
         guard !refSamples24k.isEmpty else {
             throw PocketOnnx.SynthError.badBundle("empty reference audio")
         }
-        // Pocket conditions on audio alone (no transcript), so a longer master
-        // is simply cut to its best section: first speech to a pause, the
-        // same energy cut LuxTTS windows with.
-        let ref = LuxReferenceWindow.window(
-            samples: refSamples24k, sampleRate: meta.sampleRate,
-            maxSeconds: PocketOnnx.maxReferenceSeconds).samples
+        // Callers pass the voice's stored section (`ReferenceSections.pocketSamples`),
+        // never a long master: the engine encodes exactly what it is given.
+        let ref = refSamples24k
 
         let audioT = try floatTensor(ref, shape: [1, 1, ref.count])
         let enc = try run(mimiEncoder, ["audio": audioT], outputs: ["latents"])

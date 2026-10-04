@@ -228,13 +228,12 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             luxLog.notice(
                 "luxtts: reference \(refSeconds, format: .fixed(precision: 1))s over the \(LuxReferenceWindow.maxSeconds, format: .fixed(precision: 0))s cap — windowed to \(window.seconds, format: .fixed(precision: 1))s, transcript \(window.approximate ? "sliced from the master's" : "re-derived on-device")"
             )
-            // Persist it beside the voice so it survives into any export, and
-            // so the ASR pass happens once per voice rather than per cold
-            // prompt cache.
-            if !window.approximate {
-                LuxReferenceWindow.store(
-                    window, forReference: refURL, sampleRate: LuxMelFeatures.sampleRate)
-            }
+            // A voice without its section (an older pack) gets it chosen now
+            // and stored beside the voice — in every export, and the ASR pass
+            // happens once per voice, never per cold prompt cache. Whatever
+            // made the transcript, the stored section is the voice's.
+            LuxReferenceWindow.store(
+                window, forReference: refURL, sampleRate: LuxMelFeatures.sampleRate)
             rawAudio = MLXArray(window.samples)
             effectiveRefText = window.text
         }

@@ -250,7 +250,7 @@ public final class PocketSpeechModel: SpeechModel, @unchecked Sendable {
             // Decode via the shared 24 kHz loader (Mimi's native rate, so
             // sherpa's internal resampler is a no-op) — same front door as the
             // LuxTTS ONNX path, so reference handling stays comparable.
-            let samples = try LuxOnnx.loadMono24k(URL(fileURLWithPath: refPath))
+            let samples = try ReferenceSections.pocketSamples(forReference: URL(fileURLWithPath: refPath))
             // Random per call for take-to-take variety, matching how
             // MLXModelProvider re-seeds MLX's RNG per process; a pinned seed is
             // available on the PocketEngine surface for the spike CLI.

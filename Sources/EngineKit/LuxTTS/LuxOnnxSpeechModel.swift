@@ -72,9 +72,7 @@ public final class LuxOnnxSpeechModel: SpeechModel, @unchecked Sendable {
                 samples: samples, sampleRate: LuxOnnx.sampleRate, refText: refText,
                 maxSeconds: LuxOnnx.maxReferenceSeconds)
             {
-                if !window.approximate {
-                    LuxReferenceWindow.store(window, forReference: refURL, sampleRate: LuxOnnx.sampleRate)
-                }
+                LuxReferenceWindow.store(window, forReference: refURL, sampleRate: LuxOnnx.sampleRate)
                 samples = window.samples
                 promptText = window.text
             }

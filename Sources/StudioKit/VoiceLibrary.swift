@@ -33,9 +33,9 @@ public struct VoiceCapabilities: Sendable, Equatable {
     /// than speaking stored ones, so no library voice ever enables it.
     public func supports(_ backend: BackendID) -> Bool {
         guard backend != .qwenDesign else { return false }
-        // engines/qwen3-0.6b/ is a prepared-voice CACHE derived from source/ (docs/gvoice-format.md),
-        // not a rendition: without source the codes cannot drive any backend here, so it never counts.
-        if engines.contains(backend.rawValue), backend != .qwen06B { return true }
+        // An engine folder the pack actually carries is what the voice works on (qwen3-0.6b only when its
+        // folder is complete: section audio + codes + voice.json, see `capabilities`).
+        if engines.contains(backend.rawValue) { return backend == .qwen06B ? hasSource : true }
         // Dia2 conditions on a word-aligned prefix, not on raw audio. It used
         // to be excluded here, because a pack without the alignment cache in
         // engines/dia2/ had no prefix and would generate unconditioned — a
@@ -87,6 +87,16 @@ public struct VoiceLibrary: Sendable {
     func folder(_ slug: String) throws -> URL {
         guard let url = layout.folder(for: slug) else { throw StudioError.voiceNotFound(slug: slug) }
         return url
+    }
+
+    /// Chooses and stores, once, the sections of a voice's master for the engines that take a shorter
+    /// reference (`ReferenceSections.prepare`): call after a voice is saved, imported or its master is
+    /// replaced. Sections already stored for this master are kept; a replaced master invalidates the old
+    /// ones by hash. Never changes `source/`.
+    @discardableResult
+    public func prepareSections(_ slug: String) async -> [String] {
+        guard let (meta, refURL, _) = try? entry(slug), let refURL else { return [] }
+        return await ReferenceSections.prepare(referenceURL: refURL, refText: meta.refText)
     }
 
     /// Save a new voice from reference audio, engine assets, or both.
@@ -201,9 +211,16 @@ public struct VoiceLibrary: Sendable {
         guard let (meta, refURL, engines) = try? entry(slug) else {
             return VoiceCapabilities(hasSource: false, hasRefText: false, engines: [])
         }
+        var folders = Set(engines.keys)
+        // A qwen3-0.6b folder counts only when it is complete (codes, embedding, voice.json); a half-written
+        // one — or a cache without its section audio when the master is past the encoder — is not a rendition.
+        if let qwen = engines[QwenEngineFiles.engineID],
+           !(qwen[QwenEngineFiles.voiceFile] != nil && qwen["ref_codes.npy"] != nil && qwen["spk_embed.npy"] != nil) {
+            folders.remove(QwenEngineFiles.engineID)
+        }
         return VoiceCapabilities(hasSource: refURL != nil,
                                  hasRefText: !meta.refText.isEmpty,
-                                 engines: Set(engines.keys))
+                                 engines: folders)
     }
 
     /// How `slug` renders on `engine`, or nil if it cannot. An emotion-variant
