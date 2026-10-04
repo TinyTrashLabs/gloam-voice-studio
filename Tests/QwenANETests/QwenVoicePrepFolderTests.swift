@@ -95,4 +95,27 @@ final class QwenVoicePrepFolderTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sectionURL.path))
         XCTAssertEqual(QwenVoicePrep.storedFolder(in: voiceDir)?.derivedFrom.audio, "source/ref.wav")
     }
+
+    func testA48kStereoMasterGetsA24kMonoSection() async throws {
+        let rate = 48_000
+        let mono = Self.speech(seconds: 50)
+        var pcm = Data()
+        for i in 0 ..< 50 * rate {
+            var v = Int16(mono[min(mono.count - 1, i / 2)] * 32767).littleEndian   // 24 kHz source, doubled to 48 kHz
+            withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0); pcm.append(contentsOf: $0) }   // L and R
+        }
+        func le<T: FixedWidthInteger>(_ v: T) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        var m = Data("RIFF".utf8); m += le(UInt32(36 + pcm.count)); m += Data("WAVEfmt ".utf8)
+        m += le(UInt32(16)); m += le(UInt16(1)); m += le(UInt16(2)); m += le(UInt32(rate)); m += le(UInt32(rate * 4))
+        m += le(UInt16(4)); m += le(UInt16(16)); m += Data("data".utf8); m += le(UInt32(pcm.count)); m += pcm
+        let r = try await run(m, Encoder())
+        XCTAssertEqual(r.origin, .computed)
+        let wav = try Data(contentsOf: sectionURL)
+        let section = try QwenVoicePrep.samples(of: wav)   // the stored section is already 24 kHz mono
+        XCTAssertEqual(RefLoudness.dataChunk(in: wav)?.sampleRate, 24_000)
+        XCTAssertEqual(RefLoudness.dataChunk(in: wav)?.channels, 1)
+        XCTAssertLessThanOrEqual(section.count, limit); XCTAssertGreaterThan(section.count, 12 * 24_000)
+        let d = try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir)?.derivedFrom)
+        XCTAssertEqual(d.sourceSha256, ReferenceSection.sha256Hex(m))
+    }
 }

@@ -2,12 +2,13 @@ import CoreML
 import CryptoKit
 import Foundation
 import GVoiceKit
+import GVoiceProductionKit
 
 public enum QwenVoicePrepError: Error, Equatable, LocalizedError {
     /// The trimmed reference is longer than the speech encoder's fixed input (40 s; 20 s on older model sets). Internal signal, not a refusal: `QwenANESpeechModel.prepare` answers it by picking a window of the master.
     case referenceTooLong(seconds: Double)
     case referenceTooShort(seconds: Double)
-    /// Not mono 24 kHz PCM16/float32 WAV (run it through ReferenceStandard / the cleanup pipeline first).
+    /// Not audio at all (any rate, channel count or sample format AVFoundation reads is converted).
     case unsupportedWAV(String)
     case modelMissing(String)
     case modelFailed(String)
@@ -151,23 +152,47 @@ public enum QwenVoicePrep {
 
     // MARK: WAV
 
-    /// Mono 24 kHz samples in [-1, 1) from PCM16 or float32 WAV bytes.
+    /// Mono 24 kHz samples in [-1, 1) from WAV bytes of ANY sample rate and channel count: other rates are
+    /// resampled (`NativeAudioProcessor`, AVAudioConverter at maximum quality) and channels averaged, so a
+    /// 48 kHz or stereo reference is prepared like any other and never refused for its format. PCM16 and
+    /// float32 are parsed directly; anything else AVFoundation reads is decoded through a temporary file.
     static func samples(of wav: Data) throws -> [Float] {
         let wav = Data(wav)   // zero-based indices
-        guard let c = RefLoudness.dataChunk(in: wav) else { throw QwenVoicePrepError.unsupportedWAV("not a readable WAV") }
-        guard c.channels == 1, c.sampleRate == sampleRate else {
-            throw QwenVoicePrepError.unsupportedWAV("need mono 24 kHz, got \(c.channels) ch at \(c.sampleRate) Hz")
-        }
+        guard let c = RefLoudness.dataChunk(in: wav) else { return try decodeThroughAVFoundation(wav) }
         let width = c.format == .pcm16 ? 2 : 4
+        let channels = max(1, c.channels)
         let count = c.length / width
-        guard count > 0 else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
-        return wav.withUnsafeBytes { raw -> [Float] in
+        guard count >= channels else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
+        let interleaved: [Float] = wav.withUnsafeBytes { raw -> [Float] in
             let base = raw.baseAddress!.advanced(by: c.offset)
             if c.format == .pcm16 {
                 return (0..<count).map { Float(base.loadUnaligned(fromByteOffset: $0 * 2, as: Int16.self).littleEndian) / 32768 }
             }
             return (0..<count).map { Float(bitPattern: base.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self).littleEndian) }
         }
+        if channels == 1, c.sampleRate == sampleRate { return interleaved }
+        let frames = count / channels
+        let planar = (0..<channels).map { ch in (0..<frames).map { interleaved[$0 * channels + ch] } }
+        return try mono24k(ReferenceAudioBuffer(sampleRate: c.sampleRate, channels: planar))
+    }
+
+    private static func mono24k(_ buffer: ReferenceAudioBuffer) throws -> [Float] {
+        do {
+            let out = try NativeAudioProcessor.resample(NativeAudioProcessor.mono(buffer), to: sampleRate)
+            guard let samples = out.channels.first, !samples.isEmpty else { throw QwenVoicePrepError.unsupportedWAV("no audio") }
+            return samples
+        } catch let e as QwenVoicePrepError { throw e }
+        catch { throw QwenVoicePrepError.unsupportedWAV("could not convert to 24 kHz mono: \(error)") }
+    }
+
+    private static func decodeThroughAVFoundation(_ wav: Data) throws -> [Float] {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("qwen-prep-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        do {
+            try wav.write(to: tmp)
+            return try mono24k(NativeAudioProcessor.decode(tmp))
+        } catch let e as QwenVoicePrepError { throw e }
+        catch { throw QwenVoicePrepError.unsupportedWAV("not a readable WAV") }
     }
 
     // MARK: cache files
