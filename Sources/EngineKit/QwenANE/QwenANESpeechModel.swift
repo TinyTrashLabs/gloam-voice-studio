@@ -13,7 +13,7 @@ import QwenANE
 /// ready; see `QwenANEEngine.render(onAudio:)` for what is trimmed (leading silence only, internal pauses
 /// are left alone on the stream).
 ///
-/// References: the speech encoder takes at most 20 s. A longer reference uses the voice's own `lux-tts`
+/// References: the speech encoder takes at most 40 s (20 s on older model sets). A longer reference uses the voice's own `lux-tts`
 /// window (`engines/lux-tts/ref.wav` + the transcript of that window) when that fits; otherwise the request
 /// fails with `EngineError.referenceTooLong`. The audio is never cut without a matching transcript.
 @available(macOS 15.0, iOS 18.0, *)

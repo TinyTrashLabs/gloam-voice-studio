@@ -70,11 +70,11 @@ final class QwenVoicePrepTests: XCTestCase {
     }
 
     func testRejectsTooLongWindowBeforeLoadingModels() {
-        let long = wav(samples: tone(seconds: 21))
+        let long = wav(samples: tone(seconds: 41))
         XCTAssertThrowsError(try QwenVoicePrep.prepare(referenceWAV: long, transcript: "x",
                                                        modelsDirectory: URL(fileURLWithPath: "/nonexistent"))) {
             guard case .referenceTooLong(let s)? = $0 as? QwenVoicePrepError else { return XCTFail("\($0)") }
-            XCTAssertEqual(s, 21, accuracy: 0.01)
+            XCTAssertEqual(s, 41, accuracy: 0.01)
         }
     }
 

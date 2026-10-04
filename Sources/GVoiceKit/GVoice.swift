@@ -59,7 +59,12 @@ public enum GVoice {
         public struct Source: Codable, Equatable, Sendable {
             public var audio: String?
             public var text: String?
-            public init(audio: String?, text: String?) { self.audio = audio; self.text = text }
+            /// BCP-47 language of this take's audio and text ("es", "en"). Absent means unstated:
+            /// a reader picking a take for a line's language falls back to `base`.
+            public var language: String?
+            public init(audio: String?, text: String?, language: String? = nil) {
+                self.audio = audio; self.text = text; self.language = language
+            }
         }
         public var gvoice: Int
         public var name: String
