@@ -105,6 +105,20 @@ final class QwenEngineFilesTests: XCTestCase {
         XCTAssertThrowsError(try s.members(variant: "../x"))
     }
 
+    func testATakeDecodesAfterImportGaveItsFilesPlainNames() throws {
+        // The pack's take voice.json names ref_codes-hype.npy; import installs
+        // the take's files as voice.json / ref_codes.npy / spk_embed.npy.
+        let s = Self.sample()
+        var installed: [String: Data] = [:]
+        for (path, data) in try s.members(variant: "hype") {
+            let leaf = (path as NSString).lastPathComponent
+            installed[QwenEngineFiles.plainName(leaf) ?? leaf] = data
+        }
+        XCTAssertEqual(Set(installed.keys), ["ref_codes.npy", "spk_embed.npy", "voice.json"])
+        XCTAssertEqual(try QwenEngineFiles.decode(files: installed), s)
+        XCTAssertNil(QwenEngineFiles.plainName("ref_codes.npy"))
+    }
+
     func testDecodeRejectsPathsOutsideTheFolder() throws {
         var files = try Self.sample().files()
         for evil in ["source/ref.wav", "engines/qwen3-0.6b/../x", "/abs/ref_codes.npy", "engines/other/ref_codes.npy", "engines/qwen3-0.6b/a/b.npy"] {

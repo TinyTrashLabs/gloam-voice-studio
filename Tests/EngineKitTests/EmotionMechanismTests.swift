@@ -21,6 +21,15 @@ final class EmotionMechanismTests: XCTestCase {
         XCTAssertEqual(BackendID.qwenCustom.emotionMechanism, .textDriven)
     }
 
+    func testBreezeIsDirectedAndOnlyBreeze() {
+        // Breeze's emotion control is its instruction, so the picker and any
+        // expression are phrased into it rather than mapped to a knob.
+        XCTAssertEqual(BackendID.breezeTTS2.emotionMechanism, .directed)
+        for backend in BackendID.allCases where backend != .breezeTTS2 {
+            XCTAssertNotEqual(backend.emotionMechanism, .directed, backend.rawValue)
+        }
+    }
+
     func testFishUsesInlineMarker() {
         // Fish emotion is a leading [marker] in the text (its trained control), NOT
         // the sampling temperature. temperature stays a plain sampling knob.

@@ -17,6 +17,26 @@ public struct Persona: Codable, Equatable, Sendable {
     }
 }
 
+/// A voice's own Direction for one engine: the instruction that makes a
+/// directed engine (Breeze) sound like this person, and the CFG it was tuned
+/// at. Benson's ElevenLabs reference reads faintly British to Breeze; "Speaks
+/// English with an Argentine accent." at CFG 2 puts him back. That belongs to
+/// the voice, not to whatever happened to be typed in the Direct pane last.
+///
+/// Stored as the engine's own member, `engines/<id>/voice.json` — the same
+/// place qwen3-design keeps its instruct — so it travels per variant and a
+/// reader that has never heard of the engine still carries it through
+/// re-export (format Rule 1). See docs/gvoice-format.md.
+public struct VoiceDirection: Codable, Equatable, Sendable {
+    public var instruct: String
+    /// Nil = the engine's own default CFG.
+    public var cfgScale: Double?
+    public init(instruct: String, cfgScale: Double? = nil) {
+        self.instruct = instruct
+        self.cfgScale = cfgScale
+    }
+}
+
 /// On-disk shape and key names are identical to the Python engine's
 /// voices.py meta.json so .gvoice packs interchange cleanly.
 public struct VoiceMeta: Codable, Equatable, Sendable {
@@ -35,6 +55,10 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// independently-named voice like "dj-nova" must never be mistaken for a
     /// variant of "dj" just because its slug starts with "dj-".
     public var variantOf: String?
+    /// An acted take of another voice — its clip already performs an emotion
+    /// or style. The one test every surface uses when deciding not to direct
+    /// that emotion a second time.
+    public var isTake: Bool { variantOf != nil }
     /// Delivery pace, 1.0 = the reference's own pace. Nil means unset — which
     /// is NOT the same as 1.0, because writing a default into every pack would
     /// make "unset" indistinguishable from "deliberately 1.0" on re-export.

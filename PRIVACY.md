@@ -26,9 +26,10 @@ The app makes outbound network requests only when *you* choose to:
   HuggingFace mirror — so the app can synthesize speech on-device. Each model
   is distributed by its own publisher under its own license (for example,
   Chatterbox weights are MIT; Fish S2-Pro weights are under the Fish Audio
-  Research License and SuperTonic weights are under the BigScience Open
-  RAIL-M license, and the app requires you to explicitly acknowledge the
-  license before downloading either one). These downloads go directly from
+  Research License, Breeze TTS 2 weights are under the BreezeBlue Research
+  and Non-Commercial License, and SuperTonic weights are under the
+  BigScience Open RAIL-M license, and the app requires you to explicitly
+  acknowledge the license before downloading any of them). These downloads go directly from
   your Mac to HuggingFace — the app does not proxy, inspect, or retain a copy
   of what you download beyond your local cache. The pocket-tts backend's
   sherpa-onnx runtime library (Apache-2.0) ships inside the app bundle — it

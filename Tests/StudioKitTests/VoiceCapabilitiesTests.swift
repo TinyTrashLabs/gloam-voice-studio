@@ -102,6 +102,9 @@ final class VoiceCapabilitiesTests: XCTestCase {
         XCTAssertFalse(caps(source: true).supports(.qwen17B))
         XCTAssertTrue(caps(source: true, refText: true).supports(.qwen17B))
         XCTAssertFalse(caps(source: true).supports(.luxTTS))
+        // breeze prompts with the transcript ahead of the reference codes.
+        XCTAssertFalse(caps(source: true).supports(.breezeTTS2))
+        XCTAssertTrue(caps(source: true, refText: true).supports(.breezeTTS2))
         // chatterbox/fish clone from audio alone.
         XCTAssertTrue(caps(source: true).supports(.fishS2Pro))
     }

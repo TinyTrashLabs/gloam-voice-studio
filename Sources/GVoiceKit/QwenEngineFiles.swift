@@ -212,13 +212,27 @@ public struct QwenEngineFiles: Equatable, Sendable {
             guard path.hasPrefix(prefix) else { throw Invalid("\(path) is outside \(directory)/") }
             let leaf = String(path.dropFirst(prefix.count))
             guard (try? GVoice.safeComponent(leaf)) != nil else { throw Invalid("unsafe path \(path)") }
-            guard let d = files[leaf] else { throw Invalid("missing \(path)") }
+            // A take's voice.json names its pack members ("ref_codes-hype.npy"),
+            // but import installs a take's files under their plain names
+            // (GVoice.unstem), so the plain name is the same file.
+            guard let d = files[leaf] ?? plainName(leaf).flatMap({ files[$0] }) else {
+                throw Invalid("missing \(path)")
+            }
             return d
         }
         let out = QwenEngineFiles(text: j.text, derivedFrom: j.derivedFrom,
                                   refCodes: try member(j.refCodes), spkEmbedding: try member(j.spkEmbedding))
         try out.validate()
         return out
+    }
+
+    /// "ref_codes-hype.npy" -> "ref_codes.npy"; nil when there is no take suffix.
+    static func plainName(_ leaf: String) -> String? {
+        let ns = leaf as NSString
+        let ext = ns.pathExtension, stem = ns.deletingPathExtension
+        guard let dash = stem.lastIndex(of: "-"), dash != stem.startIndex else { return nil }
+        let plain = String(stem[..<dash])
+        return ext.isEmpty ? plain : plain + "." + ext
     }
 
     // MARK: pack-level read / write

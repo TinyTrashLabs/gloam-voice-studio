@@ -257,6 +257,23 @@ public enum GVoice {
         return (filename as NSString).deletingPathExtension + suffix + "." + ext
     }
 
+    /// Undoes `stem` for a take's member: "voice-long.json" in variant "long"
+    /// installs as "voice.json". Export suffixes a take's files only so they
+    /// cannot collide with the base's inside one `engines/<id>/` directory;
+    /// in the library each take has its own folder, and every engine looks its
+    /// files up by their plain names. Keeping the suffix left a take's
+    /// lux-tts `voice.json` unfindable, so the take quietly rendered from its
+    /// base's. A name without the suffix (a foreign packer) is kept as is.
+    static func unstem(_ filename: String, key: String) -> String {
+        guard key != "base" else { return filename }
+        let ns = filename as NSString
+        let ext = ns.pathExtension, stemmed = ext.isEmpty ? filename : ns.deletingPathExtension
+        let suffix = "-\(key)"
+        guard stemmed.hasSuffix(suffix), stemmed.count > suffix.count else { return filename }
+        let plain = String(stemmed.dropLast(suffix.count))
+        return ext.isEmpty ? plain : plain + "." + ext
+    }
+
     // MARK: import
 
     /// Hard ceilings on an untrusted pack, checked before any bytes are
@@ -348,7 +365,7 @@ public enum GVoice {
                     guard !normalizedMember(member).lowercased().hasPrefix("source/") else { continue }
                     let filename = try safeComponent((member as NSString).lastPathComponent)
                     guard let blob = readOptional(member) else { continue }
-                    assets[engineID, default: [:]][filename] = blob
+                    assets[engineID, default: [:]][unstem(filename, key: key)] = blob
                 }
             }
             return (ref, assets)

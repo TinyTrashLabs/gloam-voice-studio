@@ -4,6 +4,18 @@ import MLXAudioCore
 import MLXAudioTTS
 import MLXRandom
 
+extension BackendID {
+    /// Breeze's own sampler defaults, for the app's Advanced sliders and their
+    /// Reset. Read from the model class itself rather than copied, so the
+    /// sliders can't drift from what an untouched take would use.
+    public static var breezeSamplingDefaults:
+        (topP: Float, topK: Int, repetitionPenalty: Float, cfgScale: Float)
+    {
+        let p = BreezeTTSModel.defaultParameters
+        return (p.topP, p.topK, p.repetitionPenalty ?? 1, BreezeTTSModel.defaultCFGScale)
+    }
+}
+
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
 public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
@@ -166,6 +178,10 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         }
         let (_, audio) = try loadAudioArray(
             from: URL(fileURLWithPath: path), sampleRate: model.sampleRate)
+        // A file that is gone frees its slot first: a long designed line's
+        // anchor clip (GloamEngine.passes) is deleted once the line is done,
+        // and would otherwise push a real voice out of the cache.
+        refCache.removeAll { !FileManager.default.fileExists(atPath: $0.path) }
         refCache.insert(CachedRef(path: path, mtime: mtime, audio: audio), at: 0)
         if refCache.count > 4 { refCache.removeLast() }   // a few voices, tiny arrays
         return audio
@@ -237,11 +253,18 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 chatterbox.emotionAdvOverride = request.exaggeration
                 chatterbox.cfgWeightOverride = request.cfgWeight
             }
+            if let breeze = model as? BreezeTTSModel {
+                // Set on every call (nil included) so one take's guidance
+                // never carries into the next.
+                breeze.cfgScaleOverride = request.cfgScale
+                breeze.referenceGuidanceOverride = request.referenceGuidance
+            }
             var params = model.defaultGenerationParameters
             if let temperature = request.temperature { params.temperature = temperature }
             if let topP = request.topP { params.topP = topP }
             if let topK = request.topK { params.topK = topK }
             if let rep = request.repetitionPenalty { params.repetitionPenalty = rep }
+            if let seed = request.seed { params.seed = seed }
 
             // NOTE: this MUST run on the GPU on iOS — MLX has NO CPU backend there
             // ("[Compiled::eval_cpu] CPU compilation not supported on the platform"),
@@ -291,11 +314,15 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                 Memory.clearCache()
                 return streamed
             } else {
-                // Base/VoiceDesign/Fish/Chatterbox. For Qwen, `voice:` carries the
+                // Base/VoiceDesign/Fish/Chatterbox/Breeze. For Qwen, `voice:` carries the
                 // instruct (honored only on the no-ref path — planner already enforced this).
+                // Breeze reads `voice:` as its instruction too, with or without a
+                // reference pair: design alone, or direction over a clone. (Its
+                // 60 s-per-call cap is handled a level up — GloamEngine splits
+                // long text by `BackendID.maxSecondsPerPass`.)
                 audio = try await model.generate(
                     text: request.text,
-                    voice: backend.isQwen ? request.instruct
+                    voice: backend.isQwen || backend == .breezeTTS2 ? request.instruct
                         // Supertonic: an absolute style-file path renders that
                         // baked voice (fork PR #7); a bare name stays a preset.
                         : backend == .supertonic ? (request.styleURL?.path ?? request.speaker)

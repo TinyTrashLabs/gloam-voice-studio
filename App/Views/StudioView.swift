@@ -290,6 +290,11 @@ struct StudioView: View {
         .padding(16)
     }
 
+    /// The selected voice's display name, for the voice-Direction actions.
+    private var selectedVoiceName: String? {
+        model.selectedVoiceSlug.map { (try? model.voices.meta($0).name) ?? $0 }
+    }
+
     private func commitSaveDirection() {
         model.saveDirection(named: saveDirectionName)
         saveDirectionName = ""
@@ -406,7 +411,9 @@ struct StudioView: View {
     /// The delivery control for the current backend's emotion mechanism: a
     /// continuous model-native knob for `.liveKnob` (what the model actually takes),
     /// the acted-variant emotion picker for `.variantClipOnly`, the live inline
-    /// `[marker]` picker for `.inlineMarker` (Fish), nothing for `.textDriven`.
+    /// `[marker]` picker for `.inlineMarker` (Fish), the Emotion picker plus an
+    /// Expression menu for `.directed` (Breeze — both become words in its
+    /// instruction), nothing for `.textDriven`.
     @ViewBuilder
     private func deliveryControls(_ controls: ControlSurface) -> some View {
         @Bindable var model = model
@@ -439,6 +446,30 @@ struct StudioView: View {
                  + "inline. Dynamics (temperature) is in Advanced.")
                 .font(.caption2).foregroundStyle(Brand.fgFaint)
                 .fixedSize(horizontal: false, vertical: true)
+        case .directed:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
+                emotionPicker
+                HStack(spacing: 6) {
+                    Text("Expression").font(.caption).foregroundStyle(Brand.fgDim)
+                    Picker("", selection: $model.expression) {
+                        Text("None").tag(VoiceExpression?.none)
+                        Divider()
+                        ForEach(VoiceExpression.allCases, id: \.self) { expr in
+                            Text(expr.label).tag(VoiceExpression?.some(expr))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 160)
+                    .accessibilityIdentifier("expression-picker")
+                    .help("An acted delivery — whisper, angry, laughing… — added to the Direction")
+                }
+                Text("Both become words in the model's direction, after anything you write "
+                     + "in Direction — they work on a cloned voice too. An acted “-emotion” take "
+                     + "of the voice is used instead when one exists.")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case .dialogueTags:
             // Delivery comes from the model's own inline (laughs)-style vocabulary.
             // The chips that insert them arrive with Script mode; nothing to render yet.
@@ -485,7 +516,8 @@ struct StudioView: View {
         k.temperature != nil || k.topP != nil || k.topK != nil
             || k.repetitionPenalty != nil || k.exaggeration != nil || k.cfgWeight != nil
             || k.numSteps != nil || k.guidanceScale != nil || k.tShift != nil
-            || k.speed != nil || k.returnSmooth != nil
+            || k.speed != nil || k.returnSmooth != nil || k.cfgScale != nil
+            || k.referenceGuidance != nil || k.seed != nil
     }
 
     @ViewBuilder
@@ -498,7 +530,9 @@ struct StudioView: View {
                             desc: "Expressiveness. Low = flat & consistent; high = livelier but less predictable.")
                 }
                 if let r = knobs.topP {
-                    knobRow("Top-p", $model.qwenTopP, r,
+                    // bench* route to the current backend's own sampler state
+                    // (AppModel.samplerPaths) — Breeze's never mixes with Qwen's.
+                    knobRow("Top-p", $model.benchTopP, r,
                             desc: "Variety of sound choices. Lower = steadier; 1.0 = the full range.")
                 }
                 if let r = knobs.topK {
@@ -506,18 +540,18 @@ struct StudioView: View {
                         HStack {
                             Text("Top-k")
                             Slider(value: Binding(
-                                get: { Float(model.qwenTopK) },
-                                set: { model.qwenTopK = Int($0) }),
+                                get: { Float(model.benchTopK) },
+                                set: { model.benchTopK = Int($0) }),
                                 in: Float(r.lowerBound)...Float(r.upperBound))
                                 .frame(minWidth: 60, maxWidth: 160)
-                            Text("\(model.qwenTopK)").font(.system(.caption, design: .monospaced))
+                            Text("\(model.benchTopK)").font(.system(.caption, design: .monospaced))
                         }
                         Text("How many options it considers each step. Lower = constrained; higher = varied.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 if let r = knobs.repetitionPenalty {
-                    knobRow("Repetition", $model.qwenRepetitionPenalty, r,
+                    knobRow("Repetition", $model.benchRepetitionPenalty, r,
                             desc: "Higher values reduce stutters and looping artifacts.")
                 }
                 if let r = knobs.exaggeration {
@@ -528,6 +562,12 @@ struct StudioView: View {
                     knobRow("CFG weight", $model.cfgWeight, r,
                             desc: "Chatterbox guidance strength. Lower it (~0.3) as Exaggeration rises "
                                 + "so pacing doesn't rush.")
+                }
+                if let r = knobs.cfgScale {
+                    knobRow("Guidance (CFG)", $model.breezeCfgScale, r,
+                            desc: "How strongly the take follows your Direction, Emotion and "
+                                + "Expression. Higher = more pronounced, less natural; 1 = off. "
+                                + "No effect on a plain clone with nothing to follow.")
                 }
                 if let r = knobs.numSteps {
                     VStack(alignment: .leading, spacing: 2) {
@@ -558,6 +598,31 @@ struct StudioView: View {
                     knobRow("Pace", $model.speed, r,
                             desc: "LuxTTS's native duration pacing (not a post-hoc resample — no pitch "
                                 + "shift). Lower it if a fast reference rushes or drops words.")
+                }
+                if let r = knobs.referenceGuidance {
+                    knobRow("Identity strength", $model.breezeReferenceGuidance, r,
+                            desc: "Pulls a cloned take harder toward the reference voice — try it "
+                                + "when the accent or timbre drifts. 1 = off. Slower: an extra pass "
+                                + "per frame. No effect without a voice.")
+                }
+                if knobs.seed == true {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Toggle("Fixed seed", isOn: $model.breezeSeedLocked)
+                            TextField("Seed", value: $model.breezeSeed, format: .number.grouping(.never))
+                                .frame(width: 80)
+                                .disabled(!model.breezeSeedLocked)
+                                .accessibilityIdentifier("breeze-seed")
+                            Button {
+                                model.breezeSeed = Int.random(in: 1...999_999)
+                            } label: { Image(systemName: "dice") }
+                                .buttonStyle(.borderless)
+                                .help("New seed")
+                        }
+                        Text("On = the same seed and settings give the same take, so you can hear "
+                             + "what one slider changes. Off = a fresh take every time.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
                 if knobs.returnSmooth != nil {
                     Toggle(isOn: $model.luxReturnSmooth) {
@@ -607,6 +672,10 @@ struct StudioView: View {
             + "the identity stays fixed; your Direction shapes the delivery."
         case .fishS2Pro:
             "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
+        case .breezeTTS2:
+            "Pick a voice to clone it, write a Direction to design one from scratch, or do both "
+            + "to steer a cloned voice's tone and pace. Emotion and Expression below add to that "
+            + "Direction; sounds like (laugh) come from the chips above. English and Chinese."
         case .chatterbox:
             "Clone a voice and shape intensity with Emotion + Exaggeration. Free-text Direction isn't supported here."
         case .chatterboxTurbo:
@@ -649,8 +718,12 @@ struct StudioView: View {
                 voicePickerOpen.toggle()
             } label: {
                 HStack(spacing: 6) {
+                    // `voiceList` holds base voices only; an acted take picked
+                    // from the popover is looked up directly so the button
+                    // names it instead of claiming no voice is selected.
                     if let slug = model.selectedVoiceSlug,
-                       let voice = voices.first(where: { $0.slug == slug }) {
+                       let voice = voices.first(where: { $0.slug == slug })
+                           ?? (try? model.voices.meta(slug)) {
                         VoiceAvatarView(
                             slug: voice.slug,
                             name: voice.name,
@@ -659,6 +732,9 @@ struct StudioView: View {
                         Text(voice.name)
                             .font(.system(.callout, design: .default))
                             .foregroundStyle(Brand.fg)
+                    } else if model.selectedVoiceSlug == nil && model.backend.designsFromDirection {
+                        Text("No voice · design from Direction")
+                            .foregroundStyle(Brand.fgDim)
                     } else {
                         Text("Choose a voice")
                             .foregroundStyle(Brand.fgDim)
@@ -695,14 +771,17 @@ struct StudioView: View {
 
     /// TAGS, its own section between WRITE and the Generate bar.
     ///
-    /// Still live after Dia2 left this screen, for exactly one engine: Fish
-    /// (`fish-s2-pro`) is the other backend with `honorsTags`, and it takes the
-    /// curated free-form `[tag]` vocabulary TagChipsView carries by default —
-    /// which is what the `.inlineMarker` copy under EMOTION points the user at.
-    /// Dia2's own `(parenthesised)` sounds now live in the Dialogue composer.
+    /// Still live after Dia2 left this screen, for two engines. Fish
+    /// (`fish-s2-pro`) takes the curated free-form `[tag]` vocabulary
+    /// TagChipsView carries by default — which is what the `.inlineMarker` copy
+    /// under EMOTION points the user at. Breeze (`breeze-tts-2`) takes its own
+    /// short `(laugh)`-style list (`BackendID.fixedNonverbalTags`), so it gets
+    /// those chips and no free-form field. Dia2's own `(parenthesised)` sounds
+    /// now live in the Dialogue composer.
     @ViewBuilder
     var tagSection: some View {
-        if model.backend.spec.honorsTags {
+        // Free-form [marker] engines (Fish), or a documented fixed list (Breeze).
+        if model.backend.spec.honorsTags || !model.backend.fixedNonverbalTags.isEmpty {
             @Bindable var model = model
             zoneLabel("TAGS")
             // An engine with a fixed vocabulary supplies it; one without gets
@@ -725,7 +804,12 @@ struct StudioView: View {
         // take could come out in a voice nobody chose; it stops the button now.
         let blockedReason: String? = {
             guard let slug = model.selectedVoiceSlug else {
-                return "Pick a voice in the sidebar."
+                // A backend that designs from a Direction (Breeze) needs no
+                // voice — but it does need the Direction, or the take is an
+                // unasked-for random speaker.
+                guard model.backend.designsFromDirection else { return "Pick a voice in the sidebar." }
+                return model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Pick a voice, or write a Direction to design one." : nil
             }
             let _ = model.voicesVersion
             guard !model.voiceCapabilities(slug).supports(model.backend) else { return nil }
@@ -798,6 +882,16 @@ struct StudioView: View {
                             Button("Save current…") { showSaveDirection = true }
                                 .disabled(model.instruct.trimmingCharacters(
                                     in: .whitespacesAndNewlines).isEmpty)
+                            if model.canSaveVoiceDirection, let name = selectedVoiceName {
+                                Button("Make this \(name)’s default") { model.saveDirectionAsVoiceDefault() }
+                                    .disabled(model.instruct.trimmingCharacters(
+                                        in: .whitespacesAndNewlines).isEmpty || model.directionIsVoiceDefault)
+                                if model.selectedVoiceDirection != nil {
+                                    Button("Remove \(name)’s default", role: .destructive) {
+                                        model.clearVoiceDirection()
+                                    }
+                                }
+                            }
                         } label: {
                             Label("Presets", systemImage: "text.badge.plus").font(.caption)
                         }
@@ -816,14 +910,28 @@ struct StudioView: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
                         .accessibilityIdentifier("instruct-editor")
+                    if model.directionIsVoiceDefault, let name = selectedVoiceName {
+                        Label("\(name)’s default Direction", systemImage: "person.crop.circle.badge.checkmark")
+                            .font(.caption2).foregroundStyle(Brand.fgDim)
+                            .help("Filled in when you pick this voice. Edit it freely; “Make this "
+                                  + "the default” in Presets saves a new one.")
+                            .accessibilityIdentifier("voice-direction-badge")
+                    }
                     if model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text(#"e.g. "warm, slightly breathy, unhurried late-night radio host""#)
                             .font(.caption2).italic().foregroundStyle(Brand.fgFaint)
                     }
                     if controls.voiceClone != .none && model.selectedVoiceSlug != nil {
-                        Text("A reference voice is selected — Direction is ignored (clone takes priority). "
-                             + "Clear the voice to design by description.")
-                            .font(.caption2).foregroundStyle(.orange)
+                        if model.backend.instructDirectsClone {
+                            Text("Directing the selected voice — its identity stays; your Direction "
+                                 + "shapes tone, pace and emotion. Choose “No voice” in the voice "
+                                 + "picker to design one instead.")
+                                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                        } else {
+                            Text("A reference voice is selected — Direction is ignored (clone takes priority). "
+                                 + "Clear the voice to design by description.")
+                                .font(.caption2).foregroundStyle(.orange)
+                        }
                     }
                 }
             }
@@ -864,6 +972,32 @@ struct StudioView: View {
     private func voicePickerList(_ voices: [VoiceMeta]) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
+                if model.backend.designsFromDirection {
+                    // The only way to leave the voice out on purpose (the
+                    // sidebar has no "none" row): Breeze then designs one
+                    // from the Direction.
+                    Button {
+                        model.selectedVoiceSlug = nil
+                        voicePickerOpen = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "wand.and.stars")
+                                .frame(width: 22, height: 22)
+                                .foregroundStyle(Brand.accent)
+                            Text("No voice — design from Direction").foregroundStyle(Brand.fg)
+                            Spacer()
+                            if model.selectedVoiceSlug == nil {
+                                Image(systemName: "checkmark").foregroundStyle(Brand.accent)
+                            }
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 12)
+                    .accessibilityIdentifier("voice-picker-none")
+                    Divider()
+                }
                 if voices.isEmpty {
                     Text("No voices yet — add one in the sidebar.")
                         .font(.callout)
