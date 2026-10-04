@@ -8,4 +8,5 @@ enum AppLog {
     static let storage = Logger(subsystem: "fm.gloam.studio", category: "storage")
     static let history = Logger(subsystem: "fm.gloam.studio", category: "history")
     static let chat = Logger(subsystem: "fm.gloam.studio", category: "chat")
+    static let prewarm = Logger(subsystem: "fm.gloam.studio", category: "prewarm")
 }

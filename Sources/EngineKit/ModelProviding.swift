@@ -5,6 +5,10 @@ public protocol SpeechModel: AnyObject, Sendable {
     var sampleRate: Int { get }
     func synthesize(_ request: ProviderRequest) async throws -> [Float]
     func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error>
+    /// Gets the model ready to speak `request`'s voice quickly (first-call compilation, voice preparation,
+    /// per-voice caches) without producing audio. Optional: the default does nothing. Honors Task cancellation
+    /// where the work allows it.
+    func warm(_ request: ProviderRequest) async throws
 }
 
 /// Loads models. Real implementation wraps mlx-audio-swift; tests use fakes.
@@ -15,6 +19,8 @@ public protocol ModelProviding: Sendable {
 }
 
 public extension SpeechModel {
+    func warm(_ request: ProviderRequest) async throws {}
+
     /// Streaming is opt-in. Engines that generate a whole take at once get a
     /// single-chunk stream, so callers only ever write the streaming path.
     func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {

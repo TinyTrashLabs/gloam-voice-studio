@@ -21,6 +21,17 @@ final class ANEVocoder {
     private let in12: MLMultiArray, in20: MLMultiArray
     private var hist = [Float](repeating: 0, count: 1024 * ANEVocoder.L)    // (1024 x 8) channel-major
     private var pending: [Int64] = []          // caller thread only (frames not yet submitted as a chunk)
+    /// Frames per chunk, in order; the last entry repeats. Every entry is 1...12 (a window holds 12 new frames and
+    /// a short chunk is zero-padded on the right, which is causal and changes none of its samples). The default is
+    /// whole 12-frame chunks. Set between lines; caller thread only.
+    var chunkSchedule: [Int] = [ANEVocoder.C]
+    private var chunkIndex = 0                 // caller thread only: chunks submitted this line
+    private var unprimedFirstChunk = false     // caller thread only: the next chunk has no left context
+    private var wantFrames: Int {
+        if unprimedFirstChunk { return Self.C }   // that window needs the full 12 frames
+
+        return min(Self.C, max(1, chunkSchedule[min(chunkIndex, chunkSchedule.count - 1)]))
+    }
     private var first = true
     private var wav: [Float] = []
     private var primed: [[Int64]: (head: VocoderHead.State, hist: [Float])] = [:]   // per voice reference
@@ -93,6 +104,8 @@ final class ANEVocoder {
     func begin(context: [Int64]?) {
         drain(); _ = takeError()
         pending = []; pending.reserveCapacity(Self.C * 16)
+        chunkIndex = 0
+        unprimedFirstChunk = (context?.count ?? 0) / 16 < Self.L
         waitWall = 0
         submit { [self] in beginOnQueue(context: context) }
     }
@@ -139,7 +152,7 @@ final class ANEVocoder {
             throw QwenANEError.invalid("vocoder frame has a code outside 0..<\(QwenVoiceFiles.codebookSize)")
         }
         pending.append(contentsOf: frame)
-        if pending.count == Self.C * 16 { submitPending() }
+        if pending.count == wantFrames * 16 { submitPending() }
     }
 
     private func takeErrorIfAny() -> Error? {
@@ -150,6 +163,8 @@ final class ANEVocoder {
     private func submitPending() {
         let codes = pending
         pending.removeAll(keepingCapacity: true)
+        chunkIndex += 1
+        unprimedFirstChunk = false
         submit { [self] in try chunk(codes) }
     }
 
@@ -179,7 +194,6 @@ final class ANEVocoder {
         let w0 = ProcessInfo.processInfo.systemUptime
         let n = codes.count / 16, C = Self.C, L = Self.L
         let h = codes.withUnsafeBufferPointer { head.process(codes: $0.baseAddress!, frames: n) }    // n x 1024
-        let W = first ? C : L + C
         let win = first ? in12 : in20
         let ctx = first ? 0 : L
         // window (1, 1024, W): channel-major, [8 history frames][12 new frames, zero padded]
@@ -191,10 +205,10 @@ final class ANEVocoder {
                 for t in 0..<C { p[c * s1 + (ctx + t) * s2] = t < n ? h[t * 1024 + c] : 0 }
             }
         }
-        // history = last 8 frames of the window
+        // history = the last 8 REAL frames of the window (a short chunk's zero padding is not history)
         win.withUnsafeBytes { raw in
             let p = raw.bindMemory(to: Float.self)
-            for c in 0..<1024 { for j in 0..<L { hist[c * L + j] = p[c * s1 + (W - L + j) * s2] } }
+            for c in 0..<1024 { for j in 0..<L { hist[c * L + j] = p[c * s1 + (ctx + n - L + j) * s2] } }
         }
         let out = try predict(window: win, first: first)          // the C*1920 samples of the new frames
         wav.append(contentsOf: out[0..<(n * 1920)])

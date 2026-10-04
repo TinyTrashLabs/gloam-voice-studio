@@ -414,6 +414,34 @@ public actor GloamEngine {
         return try await work.value
     }
 
+    /// Loads `backend` and gets `request`'s voice ready (see `SpeechModel.warm`) so the next real request does
+    /// not pay for it. Chained through the task tail like any other model work, at utility priority, and
+    /// cancellable: cancelling the caller abandons it (a load already running finishes, the voice step stops).
+    /// Returns the seconds it took.
+    @discardableResult
+    public func warm(backend: BackendID, request: SynthesisRequest) async throws -> Double {
+        if backend.spec.needsLicenseAck && !ackedLicenses.contains(backend) {
+            throw EngineError.licenseAckRequired(backend)
+        }
+        let previous = tail
+        let work = Task<Double, Error>(priority: Self.modelWorkPriority) { [self] in
+            await previous?.value
+            try Task.checkCancellation()
+            self.ttsBusy = true
+            defer { self.ttsWorkEnded() }
+            let start = Date()
+            let plan = try RequestPlanner.plan(backend: backend, request: request)
+            let model = try await self.residentModel(for: backend)
+            try Task.checkCancellation()
+            try await model.warm(plan)
+            let wall = Date().timeIntervalSince(start)
+            engineLog.log("warm \(backend.rawValue, privacy: .public) in \(String(format: "%.1f", wall), privacy: .public)s")
+            return wall
+        }
+        tail = Task { _ = try? await work.value }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+
     /// Streams independently playable chunks while preserving the engine's
     /// single-model-work invariant. Backends without native streaming inherit
     /// `SpeechModel`'s one-chunk fallback.
