@@ -29,6 +29,18 @@ Two properties matter and are easy to lose:
 These reads were generated from the same ElevenLabs voices the `elevenlabs`
 rendition names, which is what makes them verbatim by construction.
 
+**Benson is the exception (2026-10-03):** its `source/ref.wav` is a 64.7 s
+master (`eleven_v4`, 24 kHz, an in-character monologue, transcript checked
+word for word), because Qwen and Breeze TTS 2 clone his accent much better
+from a long reference. LuxTTS keeps a short reference through the pack's
+`engines/lux-tts/` window: the first 14.2 s of that same master, cut in
+silence after a full sentence, with its own transcript and `derivedFrom`.
+Readers that honour the window (the app, `unpack-gvoice.py`) never hand
+LuxTTS the long master.
+It also carries `engines/breeze-tts-2/voice.json`: "Speaks English with an
+Argentine accent." at CFG 2. Without it, Breeze renders him faintly British.
+That setting was picked by ear from a set of accent-only takes.
+
 **Provenance caveat:** `engines/supertonic/style.json` was baked from an
 earlier, longer take of the same voice (`supertonic-mlx-spike/refs/`), not
 from the `source/ref.wav` now in the pack. Same voice, different read. Rebake
