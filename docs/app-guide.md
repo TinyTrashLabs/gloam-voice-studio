@@ -48,6 +48,13 @@ backend. Takes land in the History drawer (⌘Y) for replay, A/B, and export.
   - **Direct** — pick a voice *and* write a Direction. The voice keeps its
     identity; the Direction steers tone, pace and emotion. It is the only
     model where a Direction is honored alongside a cloned voice.
+  - **A voice's own Direction** — some voices need a Direction to sound like
+    themselves (Benson's accent drifts British without "Speaks English with an
+    Argentine accent." at CFG 2). Presets → **Make this Benson's default**
+    saves the Direction and CFG with the voice. Picking the voice for Breeze
+    fills them in, marked as the voice's default, and you can edit them freely.
+    The setting travels in the voice's `.gvoice` pack, and the API uses it when
+    a request sends no `instruct`.
 
   **Emotion** works in all three modes. The Emotion chips (flat → hype) and
   the **Expression** menu (whisper, angry, sad, laughing, …) are turned into

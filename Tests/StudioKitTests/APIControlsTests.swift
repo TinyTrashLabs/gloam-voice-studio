@@ -761,6 +761,29 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(provider.model.last?.cfgScale, 5.5)
     }
 
+    func testBreezeUsesTheVoicesOwnDirectionWhenTheCallerSendsNone() async throws {
+        let provider = CapturingProvider()
+        let deps = try makeDeps(provider, default: .breezeTTS2)
+        await deps.engine.acknowledgeLicense(for: .breezeTTS2)
+        try deps.voices.setDirection("cruz", engine: "breeze-tts-2",
+                                     VoiceDirection(instruct: "An Argentine accent.", cfgScale: 2))
+        let app = Application(router: APIRouter.build(deps))
+        func send(_ body: String) async throws {
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                         body: ByteBuffer(string: body)) { resp in
+                    XCTAssertEqual(resp.status, .ok)
+                }
+            }
+        }
+        try await send(#"{"input":"a","model":"breeze-tts-2","voice":"cruz"}"#)
+        XCTAssertEqual(provider.model.last?.instruct, "An Argentine accent.")
+        XCTAssertEqual(provider.model.last?.cfgScale, 2)
+        try await send(#"{"input":"b","model":"breeze-tts-2","voice":"cruz","instruct":"calm"}"#)
+        XCTAssertEqual(provider.model.last?.instruct, "calm", "the caller's instruct wins")
+        XCTAssertNotEqual(provider.model.last?.cfgScale, 2, "and so does its CFG")
+    }
+
     func testBreezeDesignWithInstructNeedsNoVoice() async throws {
         // No voice and no default — but an instruct describes the speaker, so
         // this is voice design, not the unconditioned guess the 400 guards.

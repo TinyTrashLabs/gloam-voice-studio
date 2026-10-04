@@ -110,6 +110,7 @@ final class AppModel {
             // pack bar — instead of being papered over by quietly swapping in a
             // house preset, which is precisely how a take could come out
             // labelled "Wizard" in somebody else's voice.
+            applyVoiceDirection()
         }
     }
     /// Persisted: a relaunch must bring the API server back in whatever state
@@ -386,6 +387,7 @@ final class AppModel {
     var selectedVoiceSlug: String? {
         didSet {
             UserDefaults.standard.set(selectedVoiceSlug, forKey: "selectedVoiceSlug")
+            applyVoiceDirection()
         }
     }
     var text = ""
@@ -882,6 +884,7 @@ final class AppModel {
                 voices.capabilities($0).supports(backend) ? $0 : nil
             } ?? voices.list().first { voices.capabilities($0.slug).supports(backend) }?.slug
         }
+        applyVoiceDirection()   // didSet does not fire in init
         installMemoryPressureHandler()
         // didSet observers don't fire during init — if the server was left on,
         // start it now (this is the whole point of persisting the toggle).
@@ -1089,6 +1092,90 @@ final class AppModel {
         } else {
             savedDirections.append(DirectionPreset(name: trimmedName, text: text))
         }
+    }
+
+    // MARK: voice Direction
+
+    /// The voice Direction `applyVoiceDirection` last wrote into the Direct
+    /// pane. Picking another voice clears it only while it is still exactly
+    /// what was written — anything the user typed is theirs and stays.
+    @ObservationIgnored private var appliedVoiceDirection: VoiceDirection?
+
+    /// The selected voice's own Direction on the current engine, if it has one.
+    var selectedVoiceDirection: VoiceDirection? {
+        _ = voicesVersion   // read from disk; save/clear bump this to refresh views
+        return selectedVoiceSlug.flatMap { voices.direction(for: $0, engine: backend.rawValue) }
+    }
+
+    /// Whether this engine keeps a per-voice Direction (Breeze does).
+    var canSaveVoiceDirection: Bool {
+        selectedVoiceSlug != nil && VoiceLibrary.directionEngines.contains(backend.rawValue)
+    }
+
+    /// True when the Direct pane still holds the selected voice's Direction.
+    var directionIsVoiceDefault: Bool {
+        guard let d = selectedVoiceDirection else { return false }
+        return instruct.trimmingCharacters(in: .whitespacesAndNewlines) == d.instruct
+            && (backend != .breezeTTS2 || breezeCfgScale == cfg(d))
+    }
+
+    /// Fills the Direct pane with the selected voice's Direction on this
+    /// engine. Visible and editable, never applied behind the user's back:
+    /// it only lands in an empty Direction (or one this method wrote).
+    func applyVoiceDirection() {
+        let previous = appliedVoiceDirection
+        let untouched = instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || instruct == previous?.instruct
+        guard untouched else { return }
+        if let d = selectedVoiceDirection {
+            instruct = d.instruct
+            if backend == .breezeTTS2 { breezeCfgScale = cfg(d) }
+            appliedVoiceDirection = d
+        } else if let previous {
+            instruct = ""
+            if backend == .breezeTTS2, breezeCfgScale == cfg(previous) {
+                breezeCfgScale = BackendID.breezeSamplingDefaults.cfgScale
+            }
+            appliedVoiceDirection = nil
+        }
+    }
+
+    /// Saves the current Direction (and Breeze's CFG) as the selected voice's
+    /// default on this engine. Written to the base voice, so every take and
+    /// longer reference of it inherits it — unless the selected one already
+    /// carries its own, which is then what gets updated.
+    func saveDirectionAsVoiceDefault() {
+        guard let slug = selectedVoiceSlug else { return }
+        let text = instruct.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, canSaveVoiceDirection, let meta = try? voices.meta(slug) else { return }
+        let target = voices.hasOwnDirection(slug, engine: backend.rawValue) ? slug : (meta.variantOf ?? slug)
+        let d = VoiceDirection(instruct: text,
+                               cfgScale: backend == .breezeTTS2 ? Double(breezeCfgScale) : nil)
+        do {
+            try voices.setDirection(target, engine: backend.rawValue, d)
+            instruct = text
+            appliedVoiceDirection = d
+            voicesVersion += 1
+        } catch {
+            generationError = "Couldn't save the voice's Direction: \(error.localizedDescription)"
+        }
+    }
+
+    /// Removes the selected voice's default Direction on this engine.
+    func clearVoiceDirection() {
+        guard let slug = selectedVoiceSlug, let meta = try? voices.meta(slug) else { return }
+        let target = voices.hasOwnDirection(slug, engine: backend.rawValue) ? slug : (meta.variantOf ?? slug)
+        do {
+            try voices.setDirection(target, engine: backend.rawValue, nil)
+        } catch {
+            generationError = "Couldn't remove the voice's Direction: \(error.localizedDescription)"
+        }
+        appliedVoiceDirection = nil
+        voicesVersion += 1
+    }
+
+    private func cfg(_ d: VoiceDirection) -> Float {
+        d.cfgScale.map(Float.init) ?? BackendID.breezeSamplingDefaults.cfgScale
     }
 
     func deleteSavedDirection(_ preset: DirectionPreset) {

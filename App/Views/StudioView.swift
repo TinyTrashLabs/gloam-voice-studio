@@ -290,6 +290,11 @@ struct StudioView: View {
         .padding(16)
     }
 
+    /// The selected voice's display name, for the voice-Direction actions.
+    private var selectedVoiceName: String? {
+        model.selectedVoiceSlug.map { (try? model.voices.meta($0).name) ?? $0 }
+    }
+
     private func commitSaveDirection() {
         model.saveDirection(named: saveDirectionName)
         saveDirectionName = ""
@@ -875,6 +880,16 @@ struct StudioView: View {
                             Button("Save current…") { showSaveDirection = true }
                                 .disabled(model.instruct.trimmingCharacters(
                                     in: .whitespacesAndNewlines).isEmpty)
+                            if model.canSaveVoiceDirection, let name = selectedVoiceName {
+                                Button("Make this \(name)’s default") { model.saveDirectionAsVoiceDefault() }
+                                    .disabled(model.instruct.trimmingCharacters(
+                                        in: .whitespacesAndNewlines).isEmpty || model.directionIsVoiceDefault)
+                                if model.selectedVoiceDirection != nil {
+                                    Button("Remove \(name)’s default", role: .destructive) {
+                                        model.clearVoiceDirection()
+                                    }
+                                }
+                            }
                         } label: {
                             Label("Presets", systemImage: "text.badge.plus").font(.caption)
                         }
@@ -893,6 +908,13 @@ struct StudioView: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.09), lineWidth: 1))
                         .accessibilityIdentifier("instruct-editor")
+                    if model.directionIsVoiceDefault, let name = selectedVoiceName {
+                        Label("\(name)’s default Direction", systemImage: "person.crop.circle.badge.checkmark")
+                            .font(.caption2).foregroundStyle(Brand.fgDim)
+                            .help("Filled in when you pick this voice. Edit it freely; “Make this "
+                                  + "the default” in Presets saves a new one.")
+                            .accessibilityIdentifier("voice-direction-badge")
+                    }
                     if model.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text(#"e.g. "warm, slightly breathy, unhurried late-night radio host""#)
                             .font(.caption2).italic().foregroundStyle(Brand.fgFaint)

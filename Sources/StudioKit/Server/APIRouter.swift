@@ -410,6 +410,14 @@ public enum APIRouter {
                 }
                 return resolved.clamped()
             }()
+            // The voice's own Direction for this engine, used when the caller
+            // sent none — the same reason the trim below is applied here: a
+            // voice should sound like itself off-machine too. Any `instruct`,
+            // even a blank one, is the caller's choice and wins outright,
+            // CFG included.
+            let voiceDirection = req.instruct == nil
+                ? trimSlug.flatMap { deps.voices.direction(for: $0, engine: backend.rawValue) }
+                : nil
             do {
                 let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
@@ -433,11 +441,13 @@ public enum APIRouter {
                                     temperatureOverride: req.temperature,
                                     exaggerationOverride: req.exaggeration,
                                     exaggerationCeiling: req.exaggeration_ceiling,
-                                    instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
+                                    instruct: req.instruct ?? voiceDirection?.instruct,
+                                    speaker: packSpeaker ?? effectiveSpeaker,
                                     styleURL: styleURL, language: req.language,
                                     topP: req.top_p, topK: req.top_k,
                                     repetitionPenalty: req.repetition_penalty,
-                                    cfgScaleOverride: req.cfg_scale,
+                                    cfgScaleOverride: req.cfg_scale
+                                        ?? voiceDirection?.cfgScale.map(Float.init),
                                     referenceGuidanceOverride: req.reference_guidance,
                                     seed: req.seed,
                                     dialoguePrefix: speechPrefix,

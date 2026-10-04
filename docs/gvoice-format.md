@@ -80,6 +80,8 @@ billie-frost.gvoice          (zip)
     │   └── voice.json       { "speaker": "M1" }   (preset, instead of a style)
     ├── qwen3-design/
     │   └── voice.json       { "instruct": "a warm, gravelly late-night host" }
+    ├── breeze-tts-2/
+    │   └── voice.json       { "instruct": "Speaks English with an Argentine accent.", "cfgScale": 2 }
     ├── qwen3-custom/
     │   └── voice.json       { "speaker": "Dylan", "instruct": "…" }
     ├── kokoro/
@@ -89,7 +91,7 @@ billie-frost.gvoice          (zip)
 ```
 
 `chatterbox`, `chatterbox-turbo`, `fish-s2-pro`, `breeze-tts-2` and the Qwen Base models need
-no `engines/` directory — they consume `source/` audio directly, so a reader
+no `engines/` directory to render — they consume `source/` audio directly, so a reader
 serving them reads `source` and ignores `engines` entirely. A manifest MAY
 still list such an engine pointing back into `source/`; readers MUST tolerate
 that but writers need not emit it.
@@ -168,6 +170,45 @@ for a dedicated clip, since it may describe different material.
 Exporters MUST include both assets when present, and importers MUST preserve
 their association. Other engines continue to select their own assets or the
 master recording.
+
+### The `breeze-tts-2` Direction
+
+`breeze-tts-2` clones from `source/` like the engines above, and it is directed
+by a free-text instruction. Some voices need one to sound like themselves: a
+reference can carry an accent that Breeze only half hears (Benson's Argentine
+English came out faintly British until "Speaks English with an Argentine
+accent." at CFG 2 put it back). That instruction is a property of the voice,
+so a pack MAY carry it as `engines/breeze-tts-2/voice.json`:
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `instruct` | yes | The voice's default Direction. Blank means none. |
+| `cfgScale` | no | The CFG it was tuned at. Absent means Breeze's own default. |
+
+A reader SHOULD offer it as the starting Direction when this voice is picked
+for Breeze, and use it when a request names the voice but sends no instruction
+of its own. An instruction the user or caller gives always replaces it,
+`cfgScale` included. It is not a rendition: the voice still renders from
+`source/`, so a reader that ignores the file renders the voice undirected,
+which is a valid reading. Each variant MAY carry its own; a take without one
+uses its base voice's.
+
+It lives in the engine's directory, not in a manifest key, so readers that
+know nothing about Breeze keep it through import and re-export, per Rule 1.
+Engine members already travel per variant and survive stores that only keep
+what they are given. No `gvoice` bump was needed when it was added on
+2026-10-03.
+
+### Variant member names
+
+Inside a pack, a variant's engine files carry the variant key before the
+extension (`style-hype.json`, `voice-hype.json`) so they cannot collide with
+the base's in one `engines/<id>/` directory. That suffix is a packing detail:
+importers MUST install a take's file under its plain name (`voice.json`),
+because engines look their files up by name. A file without the suffix is
+installed as named. Before 2026-10-03 the Swift importer kept the suffix, so a
+take's `lux-tts` window was never found and the take rendered from its base's
+window.
 
 ### The avatar
 

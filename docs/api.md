@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `emotion` | string | `flat` \| `neutral` \| `warm` \| `excited` \| `hype` — drives the model's emotion knob, or selects an acted variant. On `breeze-tts-2` (no variant found) it is phrased into the instruction after `instruct` |
 | `exaggeration` | float 0–1 | Chatterbox emotion knob override |
 | `speed` | float | Playback-speed multiplier (time-domain; extremes shift pitch) |
-| `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice |
+| `instruct` | string | Natural-language voice direction — required by `qwen3-design`, optional on `qwen3-custom` and `breeze-tts-2`. On `breeze-tts-2` it is honored *with* `voice` too (directs the cloned voice), and on its own it designs a voice. Omitted with a `voice` that has its own Breeze Direction (`engines/breeze-tts-2/voice.json`), that Direction and its CFG are used; send `"instruct": ""` for none |
 | `speaker` | string | Preset speaker — required by `qwen3-custom` |
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |

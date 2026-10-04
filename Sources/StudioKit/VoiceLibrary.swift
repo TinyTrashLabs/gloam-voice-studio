@@ -465,6 +465,50 @@ public struct VoiceLibrary: Sendable {
         return meta
     }
 
+    /// The voice's default Direction on `engine`, from its
+    /// `engines/<engine>/voice.json`: its own, else its base voice's (through
+    /// `variantOf`, as `gainDb` does — a longer reference of Benson is still
+    /// Benson), else nil. Unreadable, or a blank instruction, counts as unset.
+    public func direction(for slug: String, engine: String) -> VoiceDirection? {
+        guard Self.directionEngines.contains(engine) else { return nil }
+        func own(_ s: String) -> VoiceDirection? {
+            guard let url = (try? entry(s))?.engines[engine]?["voice.json"],
+                  let data = try? Data(contentsOf: url),
+                  let d = try? JSONDecoder().decode(VoiceDirection.self, from: data),
+                  !d.instruct.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return d
+        }
+        if let found = own(slug) { return found }
+        guard let base = (try? meta(slug))?.variantOf, base != slug else { return nil }
+        return own(base)
+    }
+
+    /// Engines whose `engines/<id>/voice.json` IS a voice Direction. Others
+    /// keep something else there — lux-tts its reference window, qwen3-custom
+    /// its preset speaker — which a Direction must never overwrite.
+    public static let directionEngines: Set<String> = ["breeze-tts-2"]
+
+    /// Whether `slug` carries its own Direction on `engine` (not inherited).
+    public func hasOwnDirection(_ slug: String, engine: String) -> Bool {
+        (try? entry(slug))?.engines[engine]?["voice.json"] != nil
+    }
+
+    /// Sets (or clears, with nil) the voice's default Direction on `engine`.
+    public func setDirection(_ slug: String, engine: String,
+                             _ direction: VoiceDirection?) throws {
+        guard Self.directionEngines.contains(engine) else {
+            throw StudioError.invalidArchive("\(engine) has no voice Direction")
+        }
+        guard let direction else {
+            try removeEngineAssets(slug, engine: engine)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try writeEngineAsset(slug, engine: engine, file: "voice.json",
+                             data: try encoder.encode(direction))
+    }
+
     /// Sets (or clears, with nil) the chat persona on a stored voice.
     @discardableResult
     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
