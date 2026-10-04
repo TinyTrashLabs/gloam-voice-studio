@@ -154,7 +154,7 @@ public enum QwenVoicePrep {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func cached(directory: URL, sha: String, text: String) -> QwenVoiceFiles? {
+    static func cached(directory: URL, sha: String, text: String) -> QwenVoiceFiles? {
         guard let raw = try? Data(contentsOf: directory.appendingPathComponent("voice.json")),
               let j = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
               j["source_sha256"] as? String == sha,
@@ -172,14 +172,21 @@ public enum QwenVoicePrep {
         // voice.json is the commit marker: remove it first, write it last.
         try? fm.removeItem(at: directory.appendingPathComponent("voice.json"))
         let T = v.refCodes[0].count
-        var codes = [Int32](); codes.reserveCapacity(16 * T)
-        for g in 0..<16 { codes.append(contentsOf: v.refCodes[g].map { Int32($0) }) }
-        try npy(codes, descr: "<i4", shape: "(1, 16, \(T))").write(to: directory.appendingPathComponent("ref_codes.npy"), options: .atomic)
-        try npy(v.spkEmbedding, descr: "<f4", shape: "(1024,)").write(to: directory.appendingPathComponent("spk_embed.npy"), options: .atomic)
+        let (codes, spk) = npyFiles(v)
+        try codes.write(to: directory.appendingPathComponent("ref_codes.npy"), options: .atomic)
+        try spk.write(to: directory.appendingPathComponent("spk_embed.npy"), options: .atomic)
         let meta: [String: Any] = ["ref_text": v.refText, "source_sha256": sha, "prep_version": prepVersion,
                                    "mel": melKind, "frames": T]
         try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys])
             .write(to: directory.appendingPathComponent("voice.json"), options: .atomic)
+    }
+
+    /// `ref_codes.npy` (int32 (1,16,T)) and `spk_embed.npy` (float32 (1024,)) bytes for a voice.
+    static func npyFiles(_ v: QwenVoiceFiles) -> (codes: Data, spk: Data) {
+        let T = v.refCodes[0].count
+        var codes = [Int32](); codes.reserveCapacity(16 * T)
+        for g in 0..<16 { codes.append(contentsOf: v.refCodes[g].map { Int32($0) }) }
+        return (npy(codes, descr: "<i4", shape: "(1, 16, \(T))"), npy(v.spkEmbedding, descr: "<f4", shape: "(1024,)"))
     }
 
     /// .npy v1.0, little-endian, C order.

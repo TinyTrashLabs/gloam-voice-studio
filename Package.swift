@@ -228,7 +228,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "spike",
-            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit"],
+            dependencies: ["EngineKit", "StudioKit", "GVoiceProductionKit", "GVoiceDemucsKit", "GVoiceKit", "QwenANE"],
             path: "Sources/spike"
         ),
         // The `.gvoice` pack format and nothing else: manifest, zip layout,
@@ -242,6 +242,11 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
             path: "Sources/GVoiceKit"
+        ),
+        .testTarget(
+            name: "GVoiceKitTests",
+            dependencies: ["GVoiceKit"],
+            path: "Tests/GVoiceKitTests"
         ),
         .target(
             name: "GloamVoiceUI",
@@ -357,7 +362,7 @@ let package = Package(
         ),
         .testTarget(
             name: "QwenANETests",
-            dependencies: ["QwenANE"],
+            dependencies: ["QwenANE", "GVoiceKit"],
             path: "Tests/QwenANETests",
             exclude: ["make_reference.py", "make_voice_prep_reference.py"],
             resources: [.copy("Fixtures")]
