@@ -241,6 +241,11 @@ enum MCPRoute {
                 return def.isEmpty ? nil : def
             }()
             let resolved: (path: String, text: String?)?
+            // Same rule as /v1/audio/speech: an acted take named directly
+            // already performs its emotion, so a `.directed` backend (Breeze)
+            // must not direct it again.
+            var resolvedIsTake = false
+            var voiceSlug: String? = nil
             if let voice = effectiveVoice {
                 guard let found = try? deps.voices.get(voice) else {
                     APIRouter.logError("mcp speak: voice '\(voice)' not found"
@@ -257,6 +262,8 @@ enum MCPRoute {
                 }
                 resolved = (found.refURL.path,
                             found.meta.refText.isEmpty ? nil : found.meta.refText)
+                resolvedIsTake = found.meta.isTake
+                voiceSlug = found.meta.slug.isEmpty ? voice : found.meta.slug
             } else if clones {
                 APIRouter.logError("mcp speak: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -267,8 +274,15 @@ enum MCPRoute {
             }
             let refPath = resolved?.path
             let refText = resolved?.text
-            let emotion = (arguments["emotion"] as? String)
+            let requested = (arguments["emotion"] as? String)
                 .flatMap(Emotion.init(rawValue:)) ?? .neutral
+            let emotion = backend.emotionMechanism == .directed && resolvedIsTake
+                ? Emotion.neutral : requested
+            // speak takes no instruction, so the voice's own Direction (Benson's
+            // accent fix) is the only one there is — as on /v1/audio/speech.
+            let voiceDirection = voiceSlug.flatMap {
+                deps.voices.direction(for: $0, engine: backend.rawValue)
+            }
             do {
                 let result = try await deps.gate.run {
                     await deps.prepareTTS()
@@ -276,7 +290,9 @@ enum MCPRoute {
                         backend: backend,
                         request: SynthesisRequest(
                             text: text, refAudioPath: refPath, refText: refText,
-                            emotion: emotion, speed: 1.0))
+                            emotion: emotion, speed: 1.0,
+                            instruct: voiceDirection?.instruct,
+                            cfgScaleOverride: voiceDirection?.cfgScale.map(Float.init)))
                 }
                 let wav = WAVEncoder.encode(
                     pcm16: PCM16.data(from: AudioAssembler.normalizePeak(floats: result.samples)),

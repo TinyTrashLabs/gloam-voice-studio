@@ -179,6 +179,26 @@ final class GVoiceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: try lib.get("cruz-hype").refURL), Data([2]))
     }
 
+    func testBreezeDirectionTravelsPerVariantInItsEngineMember() throws {
+        _ = try lib.save(name: "Benson", refWav: Data([1]), refText: "hi")
+        try lib.saveAt(slug: "benson-long", name: "Benson long", refWav: Data([2]), refText: "hello",
+                       variantOf: "benson")
+        let accent = VoiceDirection(instruct: "Speaks English with an Argentine accent.", cfgScale: 2)
+        let warm = VoiceDirection(instruct: "Warm and unhurried.")
+        try lib.setDirection("benson", engine: "breeze-tts-2", accent)
+        try lib.setDirection("benson-long", engine: "breeze-tts-2", warm)
+        let pack = try GVoice.export("benson", from: lib)
+        let breeze = try manifest(pack).engines?["breeze-tts-2"]
+        XCTAssertEqual(breeze?.keys.sorted(), ["base", "long"])
+        for paths in breeze?.values.map({ $0 }) ?? [] {
+            XCTAssertTrue(try members(pack).isSuperset(of: paths))
+        }
+        try lib.delete("benson")
+        _ = try GVoice.import(pack, into: lib)
+        XCTAssertEqual(lib.direction(for: "benson", engine: "breeze-tts-2"), accent)
+        XCTAssertEqual(lib.direction(for: "benson-long", engine: "breeze-tts-2"), warm)
+    }
+
     func testVariantStyleFilenamesCarrySuffix() throws {
         _ = try lib.save(name: "Cruz", refWav: nil, refText: "",
                          engines: ["supertonic-3": ["style.json": Self.style]])
@@ -187,6 +207,26 @@ final class GVoiceTests: XCTestCase {
         let m = try members(try GVoice.export("cruz", from: lib))
         XCTAssertTrue(m.contains("engines/supertonic-3/style.json"))
         XCTAssertTrue(m.contains("engines/supertonic-3/style-hype.json"))
+    }
+
+    func testATakesEngineFilesInstallUnderTheirPlainNames() throws {
+        // A take's lux-tts window is engines/lux-tts/voice-hype.json in the
+        // pack; installed as that name, lux looked up voice.json, missed, and
+        // the take rendered from its base's window.
+        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "calm",
+                         engines: ["lux-tts": ["voice.json": Data("{}".utf8)]])
+        try lib.saveAt(slug: "cruz-hype", name: "Cruz hype", refWav: Data([2]), refText: "loud",
+                       variantOf: "cruz", engines: ["lux-tts": ["voice.json": Data(#"{"h":1}"#.utf8),
+                                                                "ref.wav": Data([3])]])
+        let pack = try GVoice.export("cruz", from: lib)
+        try lib.delete("cruz")
+        _ = try GVoice.import(pack, into: lib)
+        XCTAssertEqual(try lib.entry("cruz-hype").engines["lux-tts"]?.keys.sorted(),
+                       ["ref.wav", "voice.json"])
+        XCTAssertEqual(GVoice.unstem("style-hype.json", key: "hype"), "style.json")
+        XCTAssertEqual(GVoice.unstem("style.json", key: "hype"), "style.json", "foreign names kept")
+        XCTAssertEqual(GVoice.unstem("voice-hype.json", key: "base"), "voice-hype.json")
+        XCTAssertEqual(GVoice.unstem("-hype.json", key: "hype"), "-hype.json", "never an empty name")
     }
 
     // MARK: forward compatibility

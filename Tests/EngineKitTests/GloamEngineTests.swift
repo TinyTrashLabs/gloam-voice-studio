@@ -107,6 +107,56 @@ final class GloamEngineTests: XCTestCase {
         XCTAssertEqual(provider.loads, [.fishS2Pro])
     }
 
+    func testBreezeWithoutAckThrows() async {
+        let provider = FakeProvider()
+        let engine = GloamEngine(provider: provider)
+        do {
+            _ = try await engine.synthesize(
+                backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+            XCTFail("expected licenseAckRequired")
+        } catch {
+            XCTAssertEqual(error as? EngineError, .licenseAckRequired(.breezeTTS2))
+        }
+        XCTAssertTrue(provider.loads.isEmpty, "the gate runs before any weights load")
+    }
+
+    func testBreezeLongLineSynthesizesInPiecesJoinedByAGap() async throws {
+        let provider = FakeProvider()
+        let model = FakeModel(samples: [0.5])
+        provider.models[.breezeTTS2] = model
+        let engine = GloamEngine(provider: provider)
+        await engine.acknowledgeLicense(for: .breezeTTS2)
+        let text = String(repeating: "A long sentence goes right here. ", count: 120)
+        let result = try await engine.synthesize(
+            backend: .breezeTTS2, request: SynthesisRequest(text: text))
+        XCTAssertGreaterThan(model.received.count, 1)
+        let gap = GloamEngine.passGap(sampleRate: model.sampleRate).count
+        XCTAssertEqual(result.samples.count, model.received.count + gap * (model.received.count - 1))
+        // No reference (design): every later pass clones the first one, so
+        // the line keeps one speaker. The anchor file is cleaned up after.
+        let first = model.received[0]
+        XCTAssertNil(first.refAudioPath)
+        for later in model.received.dropFirst() {
+            XCTAssertEqual(later.refText, first.text)
+            XCTAssertNotNil(later.refAudioPath)
+        }
+        let anchor = try XCTUnwrap(model.received.last?.refAudioPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: anchor))
+    }
+
+    func testFishAckDoesNotUnlockBreeze() async {
+        // Distinct licenses: one ack must never unlock the other.
+        let engine = GloamEngine(provider: FakeProvider())
+        await engine.acknowledgeLicense(for: .fishS2Pro)
+        do {
+            _ = try await engine.synthesize(
+                backend: .breezeTTS2, request: SynthesisRequest(text: "hi"))
+            XCTFail("expected licenseAckRequired")
+        } catch {
+            XCTAssertEqual(error as? EngineError, .licenseAckRequired(.breezeTTS2))
+        }
+    }
+
     func testValidationRunsBeforeModelLoad() async {
         // chatterbox with no ref must fail WITHOUT loading 2 GB of weights.
         let provider = FakeProvider()

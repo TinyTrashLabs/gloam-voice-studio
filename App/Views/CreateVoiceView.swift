@@ -415,15 +415,20 @@ struct CreateVoiceView: View {
                 Spacer()
                 Picker("", selection: $bakeBaker) {
                     Text("fish-s2-pro").tag(BackendID.fishS2Pro)
+                    Text("breeze-tts-2").tag(BackendID.breezeTTS2)
                     Text("chatterbox").tag(BackendID.chatterbox)
                 }.labelsHidden().frame(width: 150)
-                    .help("fish uses emotion markers (distinct emotions); chatterbox uses its "
-                        + "exaggeration knob (intensity only — for users who can't run fish)")
+                    .help("fish uses emotion markers (distinct emotions); breeze directs the clone "
+                        + "with the expression in words (distinct emotions, needs the voice's "
+                        + "transcript); chatterbox uses its exaggeration knob (intensity only — "
+                        + "for users who can't run fish or breeze)")
             }
             (Text("Acted takes of  ").font(.callout).foregroundStyle(.secondary)
                 + Text(name).font(.callout.weight(.bold)).foregroundStyle(Brand.accent)
                 + Text(bakeBaker == .fishS2Pro
                        ? "  · fish emotion markers (distinct)"
+                       : bakeBaker == .breezeTTS2
+                       ? "  · breeze directed clone (distinct)"
                        : "  · chatterbox intensity (fallback)")
                     .font(.caption2).foregroundStyle(Brand.fgFaint))
             Text("Each becomes a voice-expression clip the whole app and API can use."

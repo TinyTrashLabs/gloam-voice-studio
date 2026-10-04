@@ -11,6 +11,7 @@ Gloam Voice Studio is a SwiftUI macOS app that clones voices using optimized ML 
 - **Chatterbox** — Fast, lightweight real-time factor (RTF) ~2–3×
 - **Chatterbox-Turbo** — Higher quality, RTF ~1–2×
 - **Fish S2-Pro** — Premium quality, research/personal use license
+- **Breeze TTS 2** — BreezeBlue's 3B English + Chinese model: clone a voice, design one from a description, or do both at once to direct a cloned voice's tone and pace (`breeze-tts-2`). Inline `(laugh)`-style sounds. Non-commercial license that covers the generated audio too.
 - **Qwen3-TTS** — A multilingual family: clone a voice (`qwen3-0.6b` / `qwen3-1.7b`), invent one from a natural-language description (`qwen3-design`), or direct a preset speaker with natural-language instructions (`qwen3-custom`). See [`docs/gloam-fm-qwen-controls-handoff.md`](docs/gloam-fm-qwen-controls-handoff.md) for the API control surface.
 - **Dia2** — Two speakers in one streaming pass: a whole exchange with real turn-taking, overlaps and nonverbal tags like `(laughs)`, rather than two single-voice takes stitched together. English only, 24 kHz, Apache-2.0. Defaults to the 2B tier with a lighter 1B tier for smaller machines. Reachable over the [HTTP API](docs/api.md) as well as Script mode and Chat.
 
@@ -132,6 +133,7 @@ Model weights are licensed separately:
 - **Chatterbox & Chatterbox-Turbo:** MIT
 - **Qwen3-TTS:** [Apache-2.0](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) (commercial use permitted)
 - **Fish S2-Pro:** [Fish Audio Research License](https://huggingface.co/fishaudio/fish-speech-1.5) (personal/research use; commercial use requires a license from business@fish.audio)
+- **Breeze TTS 2:** [BreezeBlue Research and Non-Commercial License](https://huggingface.co/BreezeBlue/Breeze-TTS-2) — weights *and* the audio you generate locally are research/non-commercial only; a BreezeBlue subscription does not grant commercial rights to self-hosted output. The app downloads the [mlx-community conversions](https://huggingface.co/mlx-community/Breeze-TTS-2-mlx-8bit) and requires an explicit in-app acknowledgement first.
 - **Kokoro:** [Apache-2.0](https://huggingface.co/hexgrad/Kokoro-82M) (commercial use permitted)
 - **Dia2:** [Apache-2.0](https://huggingface.co/nari-labs/Dia2) (commercial use permitted)
 - **SuperTonic:** [BigScience Open RAIL-M](https://huggingface.co/Supertone/supertonic-3) — permissive on IP, but carries use-based restrictions (no impersonation/deepfakes without consent, no harassment or disinformation, and more); the app requires an explicit in-app acknowledgement before downloading. See [`docs/supertonic-licensing.md`](docs/supertonic-licensing.md).
