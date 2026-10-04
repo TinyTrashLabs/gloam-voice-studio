@@ -13,6 +13,13 @@ let r = try engine.render(text: "Good evening.", voice: voice, seed: 7,
 // r.samples: [Float] mono, r.sampleRate == 24000, r.frames, r.stopReason, r.timings
 ```
 
+Streaming: pass `onAudio: { chunk in ... }` to `render` to receive each decoded vocoder chunk (12 frames,
+0.96 s) as soon as it is ready, in order, from the vocoder queue. The chunks are trimmed by
+`QwenStreamTrimmer`: leading silence is capped at 0.05 s, trailing silence is held back (at most 0.1 s is
+delivered at the end), and internal pauses are NOT shortened (the finished `QwenRender.samples` still gets
+`Options.capPauses`, unchanged). Each delivered sample is a sample of the un-capped line, so the
+concatenation is a contiguous slice of it.
+
 One engine renders one line at a time (an internal lock serialises callers). `render` blocks for
 about the length of the audio; call it off the main thread. `pace` runs between stages and after
 every frame; sleeping in it is how a host limits the duty cycle.

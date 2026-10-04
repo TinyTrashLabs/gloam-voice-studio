@@ -140,8 +140,16 @@ public final class QwenANEEngine: @unchecked Sendable {
     ///   - cancelled: polled once per frame; return true to stop. The render then returns no samples.
     ///   - pace: called between stages and after every frame, on the rendering thread. A host app
     ///     can sleep in it to hold a duty cycle (thermal / battery); a sleep adds directly to wall time.
+    ///   - onAudio: streaming hook. Called with each decoded vocoder chunk (12 frames, 0.96 s) as soon as it
+    ///     is ready, in order, from the vocoder queue (`overlapVocoder`) or the rendering thread (inline), so it
+    ///     must return quickly (yield to a stream, never wait on the network). The audio is trimmed with
+    ///     `QwenStreamTrimmer`: leading silence is capped at 0.05 s, trailing silence is held back (at most
+    ///     0.1 s is delivered at the end), and internal pauses are NOT shortened. The delivered samples are
+    ///     a contiguous slice, bit for bit, of the un-capped line; `QwenRender.samples` is unchanged by
+    ///     this hook (it still gets `Options.capPauses`). Nothing is delivered for a cancelled render.
     public func render(text: String, voice: QwenVoiceFiles, seed: UInt64? = nil, maxFrames: Int? = nil,
-                       cancelled: () -> Bool = { false }, pace: () -> Void = {}) throws -> QwenRender {
+                       cancelled: () -> Bool = { false }, pace: () -> Void = {},
+                       onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
         guard voice.spkEmbedding.count == HostTables.H else {
@@ -155,7 +163,13 @@ public final class QwenANEEngine: @unchecked Sendable {
         let voc = vocoder
         voc.overlap = options.overlapVocoder
         let overlapped = voc.overlap
-        voc.resetStats(); voc.begin(context: voice.referenceFrames)
+        voc.resetStats()
+        let trimmer = onAudio.map { _ in QwenStreamTrimmer(sampleRate: sampleRate) }
+        voc.onChunk = onAudio.map { deliver in
+            { chunk in let out = trimmer!.push(chunk); if !out.isEmpty { deliver(out) } }
+        }
+        defer { voc.onChunk = nil }
+        voc.begin(context: voice.referenceFrames)
         let g: GenResult
         do {
             g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: maxFrames,
@@ -172,6 +186,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         pace()
         var wav: [Float]
         do { wav = try voc.finish() } catch { voc.drain(); throw error }   // flushes the partial last chunk, waits for the queue
+        if let onAudio, let trimmer { let tail = trimmer.finish(); if !tail.isEmpty { onAudio(tail) } }
         pace()
         var stop = g.stop
         var codes = g.codes

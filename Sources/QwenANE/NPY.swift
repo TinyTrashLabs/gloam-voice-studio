@@ -67,10 +67,12 @@ final class NPY {
     var count: Int { shape.reduce(1, *) }
     var f32: UnsafePointer<Float> { precondition(descr == "<f4"); return data.assumingMemoryBound(to: Float.self) }
     var u32: UnsafePointer<UInt32> { precondition(descr == "<u4"); return data.assumingMemoryBound(to: UInt32.self) }
-    var f16: UnsafePointer<Float16> { precondition(descr == "<f2"); return data.assumingMemoryBound(to: Float16.self) }
+    /// fp16 elements as raw IEEE half bits (UInt16, not Float16: Float16 doesn't exist for x86_64 macOS
+    /// slices, which Xcode still compiles for package targets).
+    var f16: UnsafePointer<UInt16> { precondition(descr == "<f2"); return data.assumingMemoryBound(to: UInt16.self) }
     var isHalf: Bool { descr == "<f2" }
     /// Element `i` as fp32, whether the file stores fp32 or fp16.
-    @inline(__always) func float(at i: Int) -> Float { isHalf ? Float(f16[i]) : f32[i] }
+    @inline(__always) func float(at i: Int) -> Float { isHalf ? halfBitsToFloat(f16[i]) : f32[i] }
     /// Copies `n` elements starting at `start` into `dst` as fp32 (fp16 files are widened).
     func copyFloats(from start: Int, count n: Int, to dst: UnsafeMutablePointer<Float>) {
         if isHalf { widenHalf(f16 + start, dst, n) } else { memcpy(dst, f32 + start, n * 4) }
@@ -82,8 +84,20 @@ final class NPY {
 }
 
 /// fp16 -> fp32 (vImage; fast in debug builds too).
-func widenHalf(_ src: UnsafePointer<Float16>, _ dst: UnsafeMutablePointer<Float>, _ n: Int) {
+func widenHalf(_ src: UnsafePointer<UInt16>, _ dst: UnsafeMutablePointer<Float>, _ n: Int) {
     var s = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: src), height: 1, width: vImagePixelCount(n), rowBytes: n * 2)
     var d = vImage_Buffer(data: UnsafeMutableRawPointer(dst), height: 1, width: vImagePixelCount(n), rowBytes: n * 4)
     vImageConvert_Planar16FtoPlanarF(&s, &d, 0)
+}
+
+/// IEEE 754 half (as bits) -> Float, exact for every value including subnormals, inf and NaN.
+@inline(__always) func halfBitsToFloat(_ h: UInt16) -> Float {
+    let sign = UInt32(h & 0x8000) << 16
+    let exp = Int((h >> 10) & 0x1F), man = UInt32(h & 0x3FF)
+    if exp == 0 {
+        if man == 0 { return Float(bitPattern: sign) }
+        return (sign != 0 ? -1 : 1) * Float(man) * 0x1p-24             // subnormal: man * 2^-24
+    }
+    if exp == 31 { return Float(bitPattern: sign | 0x7F80_0000 | (man << 13)) }
+    return Float(bitPattern: sign | UInt32(exp - 15 + 127) << 23 | (man << 13))
 }

@@ -224,6 +224,11 @@ public enum APIRouter {
                 throw APIError(status: .badRequest,
                                detail: "only response_format=wav is supported")
             }
+            if let format = req.stream_format, format != "audio" {
+                throw APIError(status: .badRequest,
+                               detail: "only stream_format=audio is supported (a streaming WAV)")
+            }
+            let wantsStream = req.stream == true || req.stream_format == "audio"
             guard !req.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw APIError(status: .badRequest, detail: "input is empty")
             }
@@ -397,8 +402,31 @@ public enum APIRouter {
                 return resolved.clamped()
             }()
             do {
-                let result: SynthesisResult
                 let synthRefPath = refPath, synthRefText = refText
+                let synthRequest = SynthesisRequest(
+                    text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
+                    emotion: knobEmotion,
+                    speed: req.speed ?? 1.0,
+                    temperatureOverride: req.temperature,
+                    exaggerationOverride: req.exaggeration,
+                    exaggerationCeiling: req.exaggeration_ceiling,
+                    instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
+                    styleURL: styleURL, language: req.language,
+                    topP: req.top_p, topK: req.top_k,
+                    repetitionPenalty: req.repetition_penalty,
+                    dialoguePrefix: speechPrefix,
+                    fx: fxPreset)
+                if wantsStream {
+                    let gainDb = trimSlug.map { deps.voices.gainDb(for: $0) } ?? 0
+                    let response = try await streamedSpeech(
+                        backend: backend, request: synthRequest, gainDb: gainDb, deps: deps)
+                    deps.log.record(.init(
+                        method: "POST", path: "/v1/audio/speech", status: 200,
+                        model: backend.rawValue, voice: req.voice, instruct: req.instruct ?? "stream",
+                        durationMs: Int(Date().timeIntervalSince(start) * 1000)))
+                    return response
+                }
+                let result: SynthesisResult
                 do {
                     // Same utility-priority hop as the chat route — see the
                     // note there and gloam-dj #297. Synthesis is the measured
@@ -411,20 +439,7 @@ public enum APIRouter {
                             // between its deltas (speak-while-generating); with
                             // none it is exactly `synthesize`.
                             return try await deps.engine.synthesizeInterleaved(
-                                backend: backend,
-                                request: SynthesisRequest(
-                                    text: req.input, refAudioPath: synthRefPath, refText: synthRefText,
-                                    emotion: knobEmotion,
-                                    speed: req.speed ?? 1.0,
-                                    temperatureOverride: req.temperature,
-                                    exaggerationOverride: req.exaggeration,
-                                    exaggerationCeiling: req.exaggeration_ceiling,
-                                    instruct: req.instruct, speaker: packSpeaker ?? effectiveSpeaker,
-                                    styleURL: styleURL, language: req.language,
-                                    topP: req.top_p, topK: req.top_k,
-                                    repetitionPenalty: req.repetition_penalty,
-                                    dialoguePrefix: speechPrefix,
-                                    fx: fxPreset))
+                                backend: backend, request: synthRequest)
                         }
                     }.value
                 } catch is RequestGate.Busy {
@@ -456,7 +471,7 @@ public enum APIRouter {
             } catch EngineError.speakerRequired(let b) {
                 throw APIError(status: .badRequest, detail: "\(b.rawValue) requires a preset 'speaker'")
             } catch let error as EngineError {
-                throw APIError(status: .internalServerError, detail: "\(error)")
+                throw speechAPIError(error)
             }
         }
 
@@ -774,6 +789,104 @@ private func dialoguePrefixes(_ voices: [String?],
         prefixes = Array(repeating: nil, count: prefixes.count)
     }
     return prefixes
+}
+
+/// How an `EngineError` from the speech route reaches the client: a missing
+/// model set is a 503 (the server cannot serve it right now), a voice whose
+/// reference cannot be used is a 400, everything else a 500 with its reason.
+func speechAPIError(_ error: EngineError) -> APIError {
+    switch error {
+    case .modelNotInstalled:
+        return APIError(status: .serviceUnavailable, detail: error.localizedDescription)
+    case .referenceTooLong:
+        return APIError(status: .badRequest, detail: error.localizedDescription)
+    default:
+        return APIError(status: .internalServerError, detail: "\(error)")
+    }
+}
+
+/// One piece of a streamed speech response: PCM16 bytes at `sampleRate`.
+struct SpeechPiece: Sendable {
+    let sampleRate: Int
+    let pcm: Data
+}
+
+/// The not-yet-sent remainder of a streamed speech response. A class so the
+/// response body (a `@Sendable` closure) can own the iterator.
+private final class SpeechPieces: @unchecked Sendable {
+    var iterator: AsyncThrowingStream<SpeechPiece, Error>.AsyncIterator
+    init(_ stream: AsyncThrowingStream<SpeechPiece, Error>) { iterator = stream.makeAsyncIterator() }
+    func next() async throws -> SpeechPiece? { try await iterator.next() }
+}
+
+/// `stream: true` on /v1/audio/speech: renders through the engine's streaming
+/// path (`synthesizeStreamInterleaved`, so it interleaves with a streamed chat
+/// reply exactly as the whole-take route does) and sends a streaming WAV.
+///
+/// Admission matches the whole-take route: the request holds the gate for the
+/// whole render, so bursts still queue (up to the gate's limit) and overflow is
+/// a 503. Nothing is sent until the FIRST audio exists, which is what lets a
+/// model that is not installed, a voice that cannot be used, or a busy server
+/// still be an ordinary 4xx/5xx instead of a 200 with a broken body. A failure
+/// after that cuts the stream (the headers are out) and is logged.
+///
+/// Backends without a native stream (and requests with `speed` != 1 or `fx`,
+/// which are whole-take effects) render whole and arrive as one piece.
+private func streamedSpeech(backend: BackendID, request: SynthesisRequest, gainDb: Double,
+                            deps: APIDependencies) async throws -> Response {
+    let (pieces, continuation) = AsyncThrowingStream<SpeechPiece, Error>.makeStream()
+    let work = Task(priority: GloamEngine.modelWorkPriority) {
+        do {
+            try await deps.gate.run {
+                await deps.prepareTTS()
+                for try await chunk in await deps.engine.synthesizeStreamInterleaved(
+                    backend: backend, request: request)
+                {
+                    let samples = AudioAssembler.applyGain(floats: chunk.samples, db: gainDb)
+                    continuation.yield(SpeechPiece(sampleRate: chunk.sampleRate,
+                                                   pcm: PCM16.data(from: samples)))
+                }
+            }
+            continuation.finish()
+        } catch {
+            continuation.finish(throwing: error)
+        }
+    }
+    // Client gone (or the body finished): stop rendering.
+    continuation.onTermination = { _ in work.cancel() }
+    let source = SpeechPieces(pieces)
+    let first: SpeechPiece?
+    do {
+        first = try await source.next()
+    } catch is RequestGate.Busy {
+        throw APIError(status: .serviceUnavailable, detail: "server busy — try again")
+    }
+    guard let first else {
+        throw APIError(status: .internalServerError, detail: "\(backend.rawValue) rendered no audio")
+    }
+    return streamingSpeechResponse(first: first) { try await source.next() }
+}
+
+/// The streaming WAV for `streamedSpeech`: header (open-ended sizes) at the
+/// first piece's sample rate, then every piece's PCM as it comes.
+func streamingSpeechResponse(first: SpeechPiece,
+                             next: @escaping @Sendable () async throws -> SpeechPiece?) -> Response {
+    Response(
+        status: .ok,
+        headers: [.contentType: "audio/wav", .cacheControl: "no-cache"],
+        body: ResponseBody { writer in
+            try await writer.write(ByteBuffer(data: WAVEncoder.streamingHeader(sampleRate: first.sampleRate)))
+            try await writer.write(ByteBuffer(data: first.pcm))
+            do {
+                while let piece = try await next() {
+                    try await writer.write(ByteBuffer(data: piece.pcm))
+                }
+            } catch {
+                APIRouter.logError("/v1/audio/speech stream cut after headers: \(error)")
+                throw error
+            }
+            try await writer.finish(nil)
+        })
 }
 
 /// Streams a WAV whose length is not known up front: a 44-byte header with

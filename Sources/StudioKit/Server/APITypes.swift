@@ -182,6 +182,12 @@ struct SpeechRequest: Codable {
     /// "whisper") or an inline preset object. Absent = unprocessed audio, so
     /// the endpoint stays OpenAI-compatible for clients that never send it.
     let fx: FXSelector?
+    /// OpenAI-style streaming. `true` returns an open-ended streaming WAV (44-byte header with
+    /// 0xFFFFFFFF sizes, then PCM16 as it is rendered) instead of one finished WAV.
+    let stream: Bool?
+    /// OpenAI's `stream_format`. Only `"audio"` (the raw audio stream, which is what `stream: true`
+    /// means here) is supported; `"sse"` is a 400. `"audio"` alone also turns streaming on.
+    let stream_format: String?
 }
 
 /// Thrown by the default STT closures when the server was built without a

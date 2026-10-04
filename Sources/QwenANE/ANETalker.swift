@@ -21,6 +21,7 @@ struct GenResult {
 /// * cp_ane.mlmodelc: one call per frame, 15 greedy sub-codes unrolled (argmax on the ANE).
 /// Host side per frame (fp32): next talker input = codec[g0] + sum cp[k][code] + tts_pad, the RoPE
 /// row and the mask/one-hot rows. CPU cost is ~1 ms per 80 ms frame on the Mac.
+#if arch(arm64)
 @available(iOS 18.0, macOS 15.0, *)
 final class ANETalkerEngine {
     static let H = 1024, LMAX = 1024, P = 64, HD = 128
@@ -260,4 +261,27 @@ final class ANETalkerEngine {
                          prefillWall: prefillWall, loopWall: Date().timeIntervalSince(t1))
     }
 }
+#else
+/// x86_64 macOS slice: Xcode compiles package targets for Intel even when the app is arm64-only,
+/// and Float16 (the ANE models' I/O type) doesn't exist there. There's no Neural Engine on Intel
+/// either, so the engine simply refuses to load.
+@available(iOS 18.0, macOS 15.0, *)
+final class ANETalkerEngine {
+    static let LMAX = 1024
+    var forced: [[Int]]? = nil
+    private(set) var forcedPicks: [[Int]] = []
+    var injectNaNLogitsAtFrame: Int? = nil
+    var injectNaNSubCodesAtFrame: Int? = nil
+    init(coreMLDirectory dir: URL, host: HostTables) throws {
+        throw QwenANEError.invalid("the Neural Engine voice needs a Mac with Apple silicon")
+    }
+    static func allFinite(_ v: [Float]) -> Bool { v.allSatisfy { $0.isFinite } }
+    func resetStates() {}
+    static func windowFrames(promptRows T: Int) -> Int { max(0, LMAX - T) }
+    func generate(prompt: Prompt, sampler: inout Sampler, eos: Int, maxNew: Int?,
+                  cancelled: () -> Bool, onFrame: (Int, ArraySlice<Int64>) throws -> Void) throws -> GenResult {
+        throw QwenANEError.invalid("the Neural Engine voice needs a Mac with Apple silicon")
+    }
+}
+#endif
 

@@ -39,10 +39,49 @@ curl -s http://127.0.0.1:8790/v1/audio/speech \
 | `language` | string | Qwen language hint |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty` | number | Sampler overrides where the backend supports them |
 | `response_format` | string | Only `wav` |
+| `stream` | bool | `true` returns a streaming WAV — see "Streaming" below |
+| `stream_format` | string | `audio` (same as `stream: true`); `sse` is a 400 |
 | `fx` | string or object | Character-voice effects. Either a built-in preset name (`"demon"`, `"glitch"`, `"whisper"`) or an inline preset object with the same shape as the bundled JSON. Omitted means unprocessed audio. An unknown name returns 400 rather than silently falling back. |
 
 Backend gating errors are 400s (e.g. `qwen3-design requires 'instruct'`).
 Fish returns `403` with the license notice until acknowledged in-app.
+
+#### Streaming (`stream: true`)
+
+`"stream": true` (or `"stream_format": "audio"`; `"sse"` is a 400) returns a **streaming WAV**
+instead of one finished file: a 44-byte header with `0xFFFFFFFF` RIFF/data sizes (the
+convention players accept for an open-ended stream), then mono PCM16 little-endian at the
+backend's sample rate, written as it is rendered. Read the body incrementally and play from the first
+bytes; a client that needs a normal WAV should leave `stream` off.
+
+```bash
+curl -sN http://127.0.0.1:8790/v1/audio/speech \
+  -H 'content-type: application/json' \
+  -d '{"input": "You should not have come.", "model": "qwen3-0.6b-ane", "voice": "demon-titan", "stream": true}' \
+  -o line.wav        # first audio ~1 s after the request on qwen3-0.6b-ane
+```
+
+- Native streaming: `qwen3-0.6b-ane` (one chunk per 0.96 s), and the MLX Qwen Base models
+  (`qwen3-0.6b`, `qwen3-0.6b-mobile`, `qwen3-1.7b`; one chunk per 1.0 s). Other backends, and requests
+  with `speed` != 1 or `fx` (whole-take effects), render whole and arrive as one piece.
+- Errors that are known before the first audio (unknown voice, model not installed, busy) are ordinary
+  4xx/5xx statuses. A failure after the headers cut the stream.
+- The request takes the same gate slot as a whole-take request and interleaves with a streamed chat
+  reply the same way (it runs between the reply's token pulls), so it cannot deadlock against one.
+- The loudness trim of the voice is applied per chunk; leading silence is trimmed on `qwen3-0.6b-ane` only
+  (to 0.05 s) and internal pauses are not shortened on a stream.
+
+#### `qwen3-0.6b-ane` (Neural Engine)
+
+Qwen3-TTS 0.6B on the Apple Neural Engine (macOS 15+), no GPU, so it runs beside a GPU-bound LLM.
+Clone-only: `voice` is required, and the voice needs a transcript. A voice's `source/` reference up to
+20 s is used as is; a longer one needs its `lux-tts` window (`engines/lux-tts`, audio + transcript of
+the window) or the request is a 400. The model set is not on Hugging Face yet: put it in
+`~/Library/Application Support/GloamVoiceStudio/Models/qwen3-0.6b-ane/` (or point
+`GLOAM_QWEN_ANE_MODELS` / the `qwenANEModelsPath` default at it); without it the request is a `503`
+that names the expected path. The first request after launch spends tens of seconds compiling the
+Core ML graphs for the ANE (cached by the system afterwards), plus a few seconds preparing the voice
+(cached on disk).
 
 ### `POST /v1/audio/dialogue`
 

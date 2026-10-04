@@ -37,6 +37,10 @@ final class ANEVocoder {
     private let errLock = NSLock()
     private var firstError: Error?
     private(set) var waitWall = 0.0
+    /// Streaming hook: each decoded chunk (up to 12 x 1920 samples, the exact samples `finish()` later returns)
+    /// right after it is decoded, in order, on the vocoder queue (or inline when `overlap` is off). Set it
+    /// between lines; it must not block. nil (the default) changes nothing about the returned audio.
+    var onChunk: (([Float]) -> Void)?
 
     init(modelsDirectory: URL) throws {
         head = try VocoderHead(dir: modelsDirectory.appendingPathComponent("vochead").path)
@@ -194,6 +198,7 @@ final class ANEVocoder {
         }
         let out = try predict(window: win, first: first)          // the C*1920 samples of the new frames
         wav.append(contentsOf: out[0..<(n * 1920)])
+        if let onChunk { onChunk(Array(out[0..<(n * 1920)])) }
         first = false
         wall += ProcessInfo.processInfo.systemUptime - w0
     }
