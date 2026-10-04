@@ -71,6 +71,9 @@ public enum GVoice {
         public var slug: String?
         public var createdAt: String?
         public var variants: [String]?
+        /// BCP-47 default language of the voice (its `base` take). Absent means unstated. Other
+        /// languages are variants whose `source` entry carries its own `language`.
+        public var language: String?
         /// Delivery pace for this voice, 1.0 = the reference's own pace.
         ///
         /// Belongs to the VOICE, not to the listener or the app: a slow,
@@ -124,7 +127,8 @@ public enum GVoice {
                     pace: Double? = nil, enginePace: [String: Double]? = nil,
                     gain: Double? = nil, source: [String: Source]? = nil,
                     engines: [String: [String: [String]]]? = nil,
-                    provenance: JSONValue? = nil, avatar: String? = nil) {
+                    provenance: JSONValue? = nil, avatar: String? = nil, language: String? = nil) {
+            self.language = language
             self.gvoice = gvoice
             self.name = name
             self.slug = slug
