@@ -92,11 +92,23 @@ open build-app/Build/Products/Release/GloamVoiceStudio.app
 
 ### Package Tests
 
-The underlying EngineKit and StudioKit packages have unit test suites:
+The underlying EngineKit and StudioKit packages have unit test suites. The default run is the fast one:
 
 ```bash
 swift test
 ```
+
+Model-backed Qwen tests run only with `QWEN_ANE_MODELS` pointing at a model set (e.g.
+`~/Library/Application Support/GloamVoiceStudio/Models/qwen3-0.6b-ane`), and even then the default run keeps only
+the fast checks (pure logic, RNG parity, header/table parsing, a few frame-capped smoke renders on one shared engine).
+Full-line renders, Python/ORT parity, timing/measurement runs and the ~60 s Benson session render are opt-in with
+`QWEN_SLOW_TESTS=1`. Run the full model suite, optimised, before merging any engine change:
+
+```bash
+QWEN_SLOW_TESTS=1 QWEN_ANE_MODELS=... GLOAM_QWEN_ANE_MODELS=... swift test -c release --filter QwenANE
+```
+
+(Lux/Supertonic live tests are likewise opt-in with `ENGINEKIT_LIVE_TESTS=1`.)
 
 ### UI Tests
 

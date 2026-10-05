@@ -93,10 +93,8 @@ final class QwenBreakTests: XCTestCase {
     // MARK: render
 
     func testRenderBreakJoinsThePartsAndReportsEach() throws {
-        guard let p = ProcessInfo.processInfo.environment["QWEN_ANE_MODELS"], !p.isEmpty else {
-            throw XCTSkip("QWEN_ANE_MODELS is not set")
-        }
-        let e = try QwenANEEngine(modelsDirectory: URL(fileURLWithPath: p))
+        try QwenTestModels.requireSlow()
+        let e = try QwenTestModels.engine()
         let voice = try e.loadVoice(named: "jeff")
         let parts = QwenTalkSessionTests.parts
         let s = QwenTalkSession(engine: e, voice: voice, seed: 42)

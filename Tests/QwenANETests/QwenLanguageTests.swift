@@ -81,7 +81,8 @@ final class QwenLanguageTests: XCTestCase {
 
     @available(iOS 18.0, macOS 15.0, *)
     func testRenderWithoutLanguageIsUnchangedAndLanguageChangesIt() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let v = try engine.loadVoice(named: "jeff")
         let text = "Good evening, you are tuned in."
         let base = try engine.render(text: text, voice: v, seed: 5, maxFrames: 24)

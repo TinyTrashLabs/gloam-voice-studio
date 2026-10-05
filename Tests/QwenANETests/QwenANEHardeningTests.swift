@@ -112,7 +112,7 @@ final class QwenANEHardeningTests: XCTestCase {
     }
 
     func testNonFiniteOutputThrowsAndEngineRecovers() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let text = "Good evening, you are tuned in."
         let base = try engine.render(text: text, voice: voice, seed: 3, maxFrames: 20)
@@ -129,7 +129,7 @@ final class QwenANEHardeningTests: XCTestCase {
     }
 
     func testMaxFramesReportsTheKVWindow() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let short = try engine.maxFrames(text: "Hello there.", voice: voice)
         XCTAssertEqual(short, 75)

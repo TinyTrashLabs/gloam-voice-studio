@@ -21,6 +21,7 @@ public struct ReferencePreparer: Sendable {
             try Task.checkCancellation()
             var piece = try NativeAudioProcessor.slice(source, segment: segment)
             if recipe.mode == .isolateVocals {
+                piece = NativeAudioProcessor.stereo(piece)   // Demucs separates stereo; a mono source is upmixed
                 guard piece.channelCount == 2 else { throw ReferencePreparationError.stereoSourceRequired }
                 piece = try await separator!.isolateVocals(piece)
             }

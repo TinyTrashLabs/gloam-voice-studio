@@ -142,10 +142,8 @@ final class QwenSilenceTests: XCTestCase {
     /// Model-backed: render the ad read that had dead air and report the silence.
     @available(macOS 15.0, iOS 18.0, *)
     func testRenderReportsSilence() throws {
-        guard let p = ProcessInfo.processInfo.environment["QWEN_ANE_MODELS"], !p.isEmpty else {
-            throw XCTSkip("QWEN_ANE_MODELS is not set")
-        }
-        let engine = try QwenANEEngine(modelsDirectory: URL(fileURLWithPath: p))
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "benson")
         let text = "Visit tinytrashlabs.com today. Tune your dial to 104.9 for the best of Gloam F M, all night long."
         let r = try engine.render(text: text, voice: voice, seed: 7)

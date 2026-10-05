@@ -137,6 +137,9 @@ final class QwenANEBackendTests: XCTestCase {
     /// every part rendered through one session, not cut at the talker's window.
     @available(macOS 15.0, iOS 18.0, *)
     func testALongLineRendersEveryPart() async throws {
+        // ~60 s of Benson rendered for real: minutes in a debug build. Opt in with QWEN_SLOW_TESTS=1.
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["QWEN_SLOW_TESTS"] == "1",
+                          "slow real-model test: set QWEN_SLOW_TESTS=1 to run it")
         guard let p = ProcessInfo.processInfo.environment[QwenANEModelLocation.environmentKey], !p.isEmpty else {
             throw XCTSkip("\(QwenANEModelLocation.environmentKey) is not set")
         }

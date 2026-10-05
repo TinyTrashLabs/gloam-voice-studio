@@ -103,7 +103,8 @@ final class QwenStreamingTests: XCTestCase {
     /// streamed render's own result equals the non-streamed one, and nothing is delivered after cancel.
     @available(iOS 18.0, macOS 15.0, *)
     func testStreamedChunksAreAnExactSliceOfTheNonStreamedLine() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let text = QwenANETests.jeffText
         engine.options.capPauses = false
@@ -135,7 +136,7 @@ final class QwenStreamingTests: XCTestCase {
 
     @available(iOS 18.0, macOS 15.0, *)
     func testCancelledRenderDeliversNothing() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         var n = 0
         var delivered = 0

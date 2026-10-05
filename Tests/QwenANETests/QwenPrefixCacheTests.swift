@@ -78,9 +78,11 @@ final class QwenPrefixCacheTests: XCTestCase {
     func testPromptRowsAreBitIdenticalToTheLegacyConstruction() throws {
         let dir = try modelsDirectory()
         let host = try HostTables(dir: dir.appendingPathComponent("host").path)
-        for name in ["jeff", "cruz", "benson"] {
+        // Debug builds take ~40 s for the whole matrix: the default run checks one voice, QWEN_SLOW_TESTS=1 all of them.
+        let full = ProcessInfo.processInfo.environment["QWEN_SLOW_TESTS"] == "1"
+        for name in full ? ["jeff", "cruz", "benson"] : ["jeff"] {
             let base = try QwenVoiceFiles(directory: dir.appendingPathComponent("voices/\(name)"))
-            for voice in [base, longVoice(base, repeats: 3)] {
+            for voice in full ? [base, longVoice(base, repeats: 3)] : [base] {
                 let vp = VoicePrompt(host: host, voice: voice)
                 var prefixes: [[Float]] = []
                 for text in Self.lines {
@@ -116,7 +118,8 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// voices whose prefix covers one, two and no whole prefill chunk, over several lines, interleaved.
     @available(iOS 18.0, macOS 15.0, *)
     func testCachedPrefillGivesTheSameCodesAsUncached() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let jeff = try engine.loadVoice(named: "jeff")
         let voices: [(String, QwenVoiceFiles, Int)] = [
             ("jeff x1", jeff, 64), ("jeff x2", longVoice(jeff, repeats: 2), 64), ("jeff x3", longVoice(jeff, repeats: 3), 128),
@@ -151,7 +154,8 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// picks (sampler g0, code predictor sub-codes) are those same codes.
     @available(iOS 18.0, macOS 15.0, *)
     func testTeacherForcedPicksMatchWithTheCache() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = longVoice(try engine.loadVoice(named: "jeff"), repeats: 3)
         let text = Self.lines[1]
         let base = try run(engine, text, voice, cache: false)
@@ -167,7 +171,8 @@ final class QwenPrefixCacheTests: XCTestCase {
 
     @available(iOS 18.0, macOS 15.0, *)
     func testCacheIsBoundedAndDropCachesClearsIt() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let jeff = try engine.loadVoice(named: "jeff")
         for n in 1...(QwenANEEngine.maxCachedVoices + 2) {
             let v = QwenVoiceFiles(refText: jeff.refText + String(repeating: " word", count: n),
@@ -186,7 +191,8 @@ final class QwenPrefixCacheTests: XCTestCase {
 
     @available(iOS 18.0, macOS 15.0, *)
     func testWarmFillsTheVoiceCache() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = longVoice(try engine.loadVoice(named: "jeff"), repeats: 3)
         engine.options.prefixCache = true
         let secs = try engine.warm(voice: voice)
@@ -198,7 +204,8 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// Prompt + prefill wall, cache off vs on (printed; a measurement, not a gate).
     @available(iOS 18.0, macOS 15.0, *)
     func testMeasurePromptAndPrefill() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let jeff = try engine.loadVoice(named: "jeff")
         let cases: [(String, QwenVoiceFiles)] = [("jeff", jeff), ("cruz", try engine.loadVoice(named: "cruz")),
                                                  ("benson", try engine.loadVoice(named: "benson")),
@@ -223,7 +230,8 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// default whole-chunk path is the bit-exact one). Streamed pieces, concatenated, are the same line.
     @available(iOS 18.0, macOS 15.0, *)
     func testShortFirstChunkGivesTheSameAudioToRounding() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         for name in ["jeff", "cruz"] {
             let voice = try engine.loadVoice(named: name)
             for text in [Self.lines[1], "Hello there."] {
@@ -251,7 +259,8 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// First audio (render start to the first delivered chunk), cache on/off and chunk schedules (printed).
     @available(iOS 18.0, macOS 15.0, *)
     func testMeasureFirstAudio() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let jeff = try engine.loadVoice(named: "jeff")
         let voices: [(String, QwenVoiceFiles)] = [("jeff", jeff), ("cruz", try engine.loadVoice(named: "cruz")),
                                                   ("jeff x3", longVoice(jeff, repeats: 3))]

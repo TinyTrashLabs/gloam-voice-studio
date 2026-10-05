@@ -56,7 +56,8 @@ final class QwenANETests: XCTestCase {
     /// (host fp32 sums differ from numpy in the last ulp) sends the two trajectories apart for good.
     @available(iOS 18.0, macOS 15.0, *)
     func testForcedParityWithPythonCodes() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let ref = frames(try loadInt16("jeff_codes").values)
         engine.talker.forced = ref
@@ -87,7 +88,8 @@ final class QwenANETests: XCTestCase {
     /// the shape of the result, pacing, and that a re-run with the same seed is identical.
     @available(iOS 18.0, macOS 15.0, *)
     func testRenderIsDeterministicAndTracksPython() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let ref = frames(try loadInt16("jeff_codes").values)
         var paced = 0
@@ -112,6 +114,7 @@ final class QwenANETests: XCTestCase {
     /// voice, a cold start (no context), and a whole render.
     @available(iOS 18.0, macOS 15.0, *)
     func testOverlappedVocoderIsBitIdenticalToInline() throws {
+        try QwenTestModels.requireSlow()
         let dir = try modelsDirectory()
         let codes = try loadInt16("jeff_codes")
         let frames = codes.values.count / 16
@@ -133,7 +136,7 @@ final class QwenANETests: XCTestCase {
             let b = try voc.decode(codes: c, frames: n, context: ctx)
             XCTAssertTrue(a == b)
         }
-        let engine = try QwenANEEngine(modelsDirectory: dir)
+        let engine = try QwenTestModels.engine()
         let v = try engine.loadVoice(named: "jeff")
         engine.options.overlapVocoder = false
         let r0 = try engine.render(text: Self.jeffText, voice: v, seed: 7)
@@ -146,7 +149,8 @@ final class QwenANETests: XCTestCase {
     /// Prints per-stage timings for a short and a long line, inline vs overlapped, 2 runs each.
     @available(iOS 18.0, macOS 15.0, *)
     func testOverlapTimings() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        try QwenTestModels.requireSlow()
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         let long = Self.jeffText + " Stay with us. We have an hour of warm bass, soft keys, and a few voices you might not have heard in a while. The night is long, the dial is low, and nobody is in any kind of hurry. So settle in, and let the music find you."
         for (name, text) in [("short", Self.jeffText), ("long", long)] {
@@ -163,7 +167,7 @@ final class QwenANETests: XCTestCase {
 
     @available(iOS 18.0, macOS 15.0, *)
     func testCancelReturnsNoSamples() throws {
-        let engine = try QwenANEEngine(modelsDirectory: try modelsDirectory())
+        let engine = try QwenTestModels.engine()
         let voice = try engine.loadVoice(named: "jeff")
         var calls = 0
         let r = try engine.render(text: Self.jeffText, voice: voice, seed: 1, cancelled: { calls += 1; return calls > 3 })
@@ -175,6 +179,7 @@ final class QwenANETests: XCTestCase {
     /// codes ahead of the line, their audio dropped).
     @available(iOS 18.0, macOS 15.0, *)
     func testPrimedVocoderMatchesORT() throws {
+        try QwenTestModels.requireSlow()
         let dir = try modelsDirectory()
         let codes = try loadInt16("jeff_codes"), want = try loadInt16("jeff_vocoder_ref")
         let frames = want.values.count / 1920

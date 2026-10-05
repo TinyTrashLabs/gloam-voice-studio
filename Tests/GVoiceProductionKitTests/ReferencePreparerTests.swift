@@ -39,11 +39,33 @@ final class ReferencePreparerTests: XCTestCase {
         await XCTAssertThrowsErrorAsync { _ = try await ReferencePreparer(separator: nil).prepare(.init(sourceURL: source, transcript: "", recipe: .standard(segments: [.init(startSeconds: 0, endSeconds: 0.1)]))) }
     }
 
-    private func makeSource() throws -> URL {
+    func testStereoUpmixDuplicatesTheMonoChannel() {
+        let mono = ReferenceAudioBuffer(sampleRate: 24_000, channels: [[0.1, -0.2, 0.3]])
+        let up = NativeAudioProcessor.stereo(mono)
+        XCTAssertEqual(up.channels, [[0.1, -0.2, 0.3], [0.1, -0.2, 0.3]])
+        XCTAssertEqual(up.sampleRate, 24_000)
+        let stereo = ReferenceAudioBuffer(sampleRate: 24_000, channels: [[1, 2], [3, 4]])
+        XCTAssertEqual(NativeAudioProcessor.stereo(stereo), stereo)
+        XCTAssertEqual(NativeAudioProcessor.mono(up), mono)
+    }
+
+    func testIsolationUpmixesAMonoSourceInsteadOfRefusing() async throws {
+        let source = try makeSource(channels: 1)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let separator = CountingSeparator()
+        let recipe = ReferenceCleanupRecipe.isolateVocals(segments: [.init(startSeconds: 0, endSeconds: 0.1)])
+        _ = try await ReferencePreparer(separator: separator).prepare(.init(sourceURL: source, transcript: "One.", recipe: recipe))
+        XCTAssertEqual(separator.calls, 1)
+        let got = try XCTUnwrap(separator.received.first)
+        XCTAssertEqual(got.channelCount, 2)
+        XCTAssertEqual(got.channels[0], got.channels[1])
+    }
+
+    private func makeSource(channels: Int = 2) throws -> URL {
         let rate = 48_000, frames = 24_000
         let left = (0..<frames).map { Float(sin(2 * Double.pi * 440 * Double($0) / Double(rate))) * 0.1 }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("gvoice-source-\(UUID().uuidString).wav")
-        try NativeAudioProcessor.pcm16WAV(.init(sampleRate: rate, channels: [left, left])).write(to: url)
+        try NativeAudioProcessor.pcm16WAV(.init(sampleRate: rate, channels: Array(repeating: left, count: channels))).write(to: url)
         return url
     }
 }
