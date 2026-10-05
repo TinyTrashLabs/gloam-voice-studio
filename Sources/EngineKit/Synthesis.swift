@@ -74,6 +74,11 @@ public struct SynthesisRequest: Sendable, Equatable {
     /// buffered ahead of playback, so the stream only plays without gaps while the render stays faster than real
     /// time. The samples are the same up to Neural Engine rounding (below -40 dBFS).
     public var firstChunkFrames: Int?
+    /// qwen3-0.6b-ane only: a talk session to render through. Calls carrying the same key (and voice and
+    /// language) continue one `QwenTalkSession`: one sampler stream seeded once, each line conditioned on the
+    /// one before, so the separate calls of one chat reply sound like one performance rather than restarting
+    /// from the reference every sentence. nil = an independent line (today's behaviour).
+    public var talkSession: String?
 
     public init(text: String, refAudioPath: String? = nil, refText: String? = nil,
                 emotion: Emotion = .neutral, emotionMarker: String? = nil, speed: Float = 1.0,
@@ -88,8 +93,10 @@ public struct SynthesisRequest: Sendable, Equatable {
                 referenceGuidanceOverride: Float? = nil, seed: UInt64? = nil,
                 dialoguePrefix: DialoguePrefix? = nil,
                 fx: FXPreset? = nil,
-                firstChunkFrames: Int? = nil) {
+                firstChunkFrames: Int? = nil,
+                talkSession: String? = nil) {
         self.firstChunkFrames = firstChunkFrames
+        self.talkSession = talkSession
         self.dialoguePrefix = dialoguePrefix
         self.fx = fx
         self.text = text
@@ -158,6 +165,8 @@ public struct ProviderRequest: Sendable, Equatable {
     public var returnSmooth: Bool?
     /// qwen3-0.6b-ane only: frames in the first streamed vocoder chunk (nil = 12).
     public var firstChunkFrames: Int?
+    /// qwen3-0.6b-ane only: the talk session this line continues (see `SynthesisRequest.talkSession`).
+    public var talkSession: String?
     /// Breeze only: classifier-free guidance scale (nil = model default 4).
     public var cfgScale: Float?
     /// Breeze only: identity strength (nil = off).
@@ -172,8 +181,10 @@ public struct ProviderRequest: Sendable, Equatable {
                 topP: Float? = nil, topK: Int? = nil, repetitionPenalty: Float? = nil,
                 speed: Float? = nil, numSteps: Int? = nil, guidanceScale: Float? = nil,
                 tShift: Float? = nil, returnSmooth: Bool? = nil, cfgScale: Float? = nil,
-                referenceGuidance: Float? = nil, seed: UInt64? = nil, firstChunkFrames: Int? = nil) {
+                referenceGuidance: Float? = nil, seed: UInt64? = nil, firstChunkFrames: Int? = nil,
+                talkSession: String? = nil) {
         self.firstChunkFrames = firstChunkFrames
+        self.talkSession = talkSession
         self.text = text; self.refAudioPath = refAudioPath; self.refText = refText
         self.temperature = temperature; self.exaggeration = exaggeration; self.cfgWeight = cfgWeight
         self.instruct = instruct; self.speaker = speaker; self.styleURL = styleURL
@@ -359,7 +370,8 @@ enum RequestPlanner {
                     .flatMap { $0 > 1 ? $0 : nil }
             },
             seed: knobs.seed == true ? request.seed : nil,
-            firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil
+            firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil,
+            talkSession: backend == .qwen06BANE ? request.talkSession : nil
         )
     }
 }

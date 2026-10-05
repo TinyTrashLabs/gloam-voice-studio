@@ -574,13 +574,14 @@ final class ChatController {
     }
 
     /// Speak-while-generating pipeline: one sequential consumer drains the
-    /// sentence queue, synthesizes through the engine's interleaved path (it
-    /// runs in the GPU-idle gaps between token pulls), and hands audio to the
-    /// playback queue in order. Each pass takes EVERYTHING queued (capped) as
-    /// one TTS call: the first sentence goes out alone for fastest first
-    /// audio, and the batching then amortizes the ~5s per-call fixed cost
-    /// (clone-reference processing) across the sentences that accumulated
-    /// while the previous call rendered.
+    /// sentence queue, renders each segment, and hands audio to the playback
+    /// queue in order. What a segment is depends on the backend
+    /// (`ChatSpeechScheduling`): a GPU clone backend takes EVERYTHING queued
+    /// (capped) as one whole TTS call — the first sentence alone for fastest
+    /// first audio, then batches that amortize the ~5s per-call fixed cost;
+    /// a streaming backend (qwen3-0.6b-ane) sends each sentence as soon as it
+    /// is complete and plays its audio from the first vocoder chunk, every
+    /// segment of the reply continuing one talk session.
     private func startLiveSpeech(voiceSlug: String, convoID: String) {
         speechTask?.cancel()
         speech.stop()
@@ -607,35 +608,17 @@ final class ChatController {
                     self.finishPendingSave()
                 }
             }
+            var reply = ReplySpeech(backend: self.app.chatTTSBackend)
             for await _ in signals {
-                while !self.liveQueue.isEmpty {
+                // Batched backends: capped so one giant paragraph doesn't
+                // become a single long stall.
+                while let chunk = ChatSpeechScheduling.nextSegment(
+                    from: &self.liveQueue, streaming: reply.streaming) {
                     if Task.isCancelled { return }
-                    // Batch what's queued, capped so one giant paragraph
-                    // doesn't become a single long stall.
-                    var chunk = self.liveQueue.removeFirst()
-                    while let next = self.liveQueue.first, chunk.count + next.count < 280 {
-                        self.liveQueue.removeFirst()
-                        chunk += " " + next
-                    }
                     do {
-                        self.setSynthesizing(true, ifGeneration: generation)
-                        let result = try await self.synthesizeChatLine(chunk, voiceSlug: voiceSlug)
-                        self.setSynthesizing(false, ifGeneration: generation)
-                        if Task.isCancelled { return }
-                        self.pendingSaveChunks.append(result.samples)
-                        self.pendingSaveSampleRate = result.sampleRate
-                        self.pendingSaveBackend = self.app.chatTTSBackend
-                        // Edge fades: consecutive chunks play back-to-back;
-                        // without them the seams can click.
-                        let faded = AudioAssembler.fadeEdges(
-                            result.samples, sampleRate: result.sampleRate)
-                        let wav = WAVEncoder.encode(
-                            pcm16: PCM16.data(from: faded),
-                            sampleRate: result.sampleRate)
-                        self.speech.enqueue(
-                            wav: wav, text: chunk,
-                            voiced: ChatSpeechQueue.voicedBounds(
-                                samples: faded, sampleRate: result.sampleRate))
+                        guard try await self.speakSegment(
+                            chunk, voiceSlug: voiceSlug, generation: generation, reply: &reply)
+                        else { return }
                         self.liveSpokeAnything = true
                     } catch {
                         self.setSynthesizing(false, ifGeneration: generation)
@@ -683,28 +666,14 @@ final class ChatController {
                     self.finishPendingSave()
                 }
             }
+            var reply = ReplySpeech(backend: self.app.chatTTSBackend)
             // Reasoning is never spoken (idempotent when already clean).
             for sentence in SentenceSplitter.split(stripThinking(text)) {
                 if Task.isCancelled { return }
                 do {
-                    self.setSynthesizing(true, ifGeneration: generation)
-                    let result = try await self.synthesizeChatLine(sentence, voiceSlug: voiceSlug)
-                    self.setSynthesizing(false, ifGeneration: generation)
-                    // Re-check after the await: stop() may have cleared the
-                    // queue while this sentence was mid-synthesis.
-                    if Task.isCancelled { return }
-                    self.pendingSaveChunks.append(result.samples)
-                    self.pendingSaveSampleRate = result.sampleRate
-                    self.pendingSaveBackend = self.app.chatTTSBackend
-                    let faded = AudioAssembler.fadeEdges(
-                        result.samples, sampleRate: result.sampleRate)
-                    let wav = WAVEncoder.encode(
-                        pcm16: PCM16.data(from: faded),
-                        sampleRate: result.sampleRate)
-                    self.speech.enqueue(
-                        wav: wav, text: sentence,
-                        voiced: ChatSpeechQueue.voicedBounds(
-                            samples: faded, sampleRate: result.sampleRate))
+                    guard try await self.speakSegment(
+                        sentence, voiceSlug: voiceSlug, generation: generation, reply: &reply)
+                    else { return }
                 } catch {
                     self.setSynthesizing(false, ifGeneration: generation)
                     if error is CancellationError || Task.isCancelled { return }
@@ -756,6 +725,99 @@ final class ChatController {
         convo.messages[index].audioTakeIDs = (convo.messages[index].audioTakeIDs ?? []) + [entry.id]
         convo.messages[index].currentTakeID = entry.id
         commit(convo)
+    }
+
+    /// How one reply is spoken, fixed when it starts: whether it streams, and
+    /// the talk session its streamed segments continue (one per reply, so the
+    /// seed, pace and tone carry from sentence to sentence).
+    private struct ReplySpeech {
+        let backend: BackendID
+        let streaming: Bool
+        let talkSession = UUID().uuidString
+        var segmentsSpoken = 0
+        init(backend: BackendID) {
+            self.backend = backend
+            streaming = ChatSpeechScheduling.streams(backend)
+        }
+    }
+
+    /// The breath between two streamed segments of a reply: the same 150 ms a
+    /// split line gets between its parts.
+    private static let streamedSegmentGap: Double = 0.15
+
+    /// Renders one segment of a reply into the playback queue and the
+    /// auto-save accumulator. Streamed: audio is queued piece by piece as the
+    /// render makes it. Whole: rendered, edge-faded, then queued. Returns
+    /// false when the speech task was cancelled meanwhile (the caller stops).
+    private func speakSegment(_ text: String, voiceSlug: String, generation: Int,
+                              reply: inout ReplySpeech) async throws -> Bool {
+        setSynthesizing(true, ifGeneration: generation)
+        defer { setSynthesizing(false, ifGeneration: generation) }
+        if reply.streaming {
+            let gapSeconds = reply.segmentsSpoken > 0 ? Self.streamedSegmentGap : 0
+            let line = try await app.streamLine(
+                text: text, voiceSlug: voiceSlug,
+                interleaved: !app.chatParallelSpeech,
+                backendOverride: reply.backend,
+                engineOverride: app.chatSpeechEngine,
+                firstChunkFrames: ChatSpeechScheduling.firstChunkFrames,
+                talkSession: reply.talkSession)
+            let sink = StreamSink(queue: speech, text: text, gapSeconds: gapSeconds)
+            let result = try await StreamedSegmentPump.run(line.chunks, gainDb: line.gainDb) { samples, rate in
+                // Stop may have cleared the queue since the pump last looked.
+                guard !Task.isCancelled else { return }
+                sink.deliver(samples, sampleRate: rate)
+            }
+            sink.close()
+            await app.refreshEngineStatus()   // the render loads implicitly
+            // What was heard is kept even when Stop cut it short.
+            if let rate = result.sampleRate, !result.samples.isEmpty {
+                pendingSaveChunks.append(sink.gap(sampleRate: rate) + result.samples)
+                pendingSaveSampleRate = rate
+                pendingSaveBackend = reply.backend
+                reply.segmentsSpoken += 1
+            }
+            return !(result.cancelled || Task.isCancelled)
+        }
+        let result = try await synthesizeChatLine(text, voiceSlug: voiceSlug)
+        // Re-check after the await: stop() may have cleared the queue while
+        // this segment was mid-synthesis.
+        if Task.isCancelled { return false }
+        pendingSaveChunks.append(result.samples)
+        pendingSaveSampleRate = result.sampleRate
+        pendingSaveBackend = reply.backend
+        // Edge fades: consecutive chunks play back-to-back; without them the
+        // seams can click.
+        let faded = AudioAssembler.fadeEdges(result.samples, sampleRate: result.sampleRate)
+        let wav = WAVEncoder.encode(pcm16: PCM16.data(from: faded), sampleRate: result.sampleRate)
+        speech.enqueue(wav: wav, text: text,
+                       voiced: ChatSpeechQueue.voicedBounds(samples: faded, sampleRate: result.sampleRate))
+        reply.segmentsSpoken += 1
+        return true
+    }
+
+    /// Opens the playback segment on the first piece (its sample rate is only
+    /// known then), leading with the gap between segments.
+    @MainActor private final class StreamSink {
+        private let queue: ChatSpeechQueue
+        private let text: String
+        private let gapSeconds: Double
+        private var segment: Int?
+        init(queue: ChatSpeechQueue, text: String, gapSeconds: Double) {
+            self.queue = queue; self.text = text; self.gapSeconds = gapSeconds
+        }
+        func gap(sampleRate: Int) -> [Float] {
+            [Float](repeating: 0, count: Int(gapSeconds * Double(sampleRate)))
+        }
+        func deliver(_ samples: [Float], sampleRate: Int) {
+            if segment == nil {
+                let id = queue.beginStream(text: text, sampleRate: sampleRate)
+                segment = id
+                queue.appendStream(id, samples: gap(sampleRate: sampleRate))
+            }
+            if let segment { queue.appendStream(segment, samples: samples) }
+        }
+        func close() { if let segment { queue.endStream(segment) } }
     }
 
     /// One chat speech render, using the chat voice engine. Parallel mode

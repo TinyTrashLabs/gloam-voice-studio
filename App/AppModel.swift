@@ -1385,6 +1385,67 @@ final class AppModel {
                         interleaved: Bool = false,
                         backendOverride: BackendID? = nil,
                         engineOverride: GloamEngine? = nil) async throws -> SynthesisResult {
+        let line = try await prepareLine(
+            text: text, voiceSlug: voiceSlug, emotion: emotion, expression: expression,
+            designing: designing, speed: speed,
+            backendOverride: backendOverride, engineOverride: engineOverride)
+        let backend = line.backend, engine = line.engine, request = line.request
+        let resolvedVoice = line.resolvedVoice
+        // Must precede queuing work on `engine` (see TTSResidencyPolicy's
+        // deadlock-safety contract). Not for the Neural Engine lane: the policy
+        // keeps one GPU model resident, and the ANE model is not one.
+        if backend.speechFamily == .gpu { await ttsResidency.willUse(engine) }
+        let raw = interleaved
+            ? try await engine.synthesizeInterleaved(backend: backend, request: request)
+            : try await engine.synthesize(backend: backend, request: request)
+        return await finishLine(raw, text: text, backend: backend, emotion: emotion,
+                              resolvedVoice: resolvedVoice, recordHistory: recordHistory)
+    }
+
+    /// The streaming counterpart of `synthesizeLine` (chat on a backend that
+    /// streams): the same voice resolution and request, rendered through the
+    /// engine's streaming entry point (`synthesizeStream`, or
+    /// `synthesizeStreamInterleaved` when `interleaved`), so audio can play
+    /// from the first chunk. No peak normalize — it needs the whole take — so
+    /// the caller applies only `gainDb`, the voice's trim, exactly as the API's
+    /// streamed `/v1/audio/speech` does. `talkSession` continues one
+    /// performance across calls (qwen3-0.6b-ane; see `SynthesisRequest.talkSession`).
+    func streamLine(text: String, voiceSlug: String?, emotion: Emotion = .neutral,
+                    interleaved: Bool = false,
+                    backendOverride: BackendID? = nil,
+                    engineOverride: GloamEngine? = nil,
+                    firstChunkFrames: Int? = nil,
+                    talkSession: String? = nil) async throws
+        -> (chunks: AsyncThrowingStream<SynthesisChunk, Error>, gainDb: Double)
+    {
+        let line = try await prepareLine(
+            text: text, voiceSlug: voiceSlug, emotion: emotion, expression: nil,
+            designing: false, speed: 1.0,
+            backendOverride: backendOverride, engineOverride: engineOverride)
+        var request = line.request
+        request.firstChunkFrames = firstChunkFrames
+        request.talkSession = talkSession
+        let backend = line.backend, engine = line.engine
+        if backend.speechFamily == .gpu { await ttsResidency.willUse(engine) }
+        let chunks = interleaved
+            ? await engine.synthesizeStreamInterleaved(backend: backend, request: request)
+            : await engine.synthesizeStream(backend: backend, request: request)
+        return (chunks, line.resolvedVoice.map { voices.gainDb(for: $0) } ?? 0)
+    }
+
+    private struct PreparedLine {
+        let backend: BackendID
+        let engine: GloamEngine
+        let request: SynthesisRequest
+        let resolvedVoice: String?
+    }
+
+    /// Everything `synthesizeLine` settles before it renders: the engine, the
+    /// preconditions, the voice and the request.
+    private func prepareLine(text: String, voiceSlug: String?, emotion: Emotion,
+                             expression: String?, designing: Bool, speed: Float,
+                             backendOverride: BackendID?,
+                             engineOverride: GloamEngine?) async throws -> PreparedLine {
         let backend = backendOverride ?? self.backend
         let engine = speechEngine(for: backend, default: engineOverride ?? self.engine)
         guard downloads.state(for: backend) == .ready else {
@@ -1554,13 +1615,14 @@ final class AppModel {
             referenceGuidanceOverride: backend == .breezeTTS2 ? breezeReferenceGuidance : nil,
             seed: backend == .breezeTTS2 && breezeSeedLocked ? UInt64(breezeSeed) : nil,
             dialoguePrefix: dialoguePrefix)
-        // Must precede queuing work on `engine` (see TTSResidencyPolicy's
-        // deadlock-safety contract). Not for the Neural Engine lane: the policy
-        // keeps one GPU model resident, and the ANE model is not one.
-        if backend.speechFamily == .gpu { await ttsResidency.willUse(engine) }
-        let raw = interleaved
-            ? try await engine.synthesizeInterleaved(backend: backend, request: request)
-            : try await engine.synthesize(backend: backend, request: request)
+        return PreparedLine(backend: backend, engine: engine, request: request,
+                            resolvedVoice: resolvedVoice)
+    }
+
+    /// Loudness and history for a finished `synthesizeLine` render.
+    private func finishLine(_ raw: SynthesisResult, text: String, backend: BackendID,
+                            emotion: Emotion, resolvedVoice: String?,
+                            recordHistory: Bool) async -> SynthesisResult {
         recordTTSSpeed(backend: backend,
                        audioSeconds: Double(raw.samples.count) / Double(raw.sampleRate),
                        wallSeconds: raw.wallSeconds)
