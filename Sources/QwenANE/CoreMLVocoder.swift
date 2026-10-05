@@ -5,6 +5,9 @@ import Foundation
 ///   head     codes -> hidden, Swift/Accelerate on the CPU, exact streaming (VocoderHead)
 ///   upF      Core ML fp32, CPU only: hidden window (1,1024,W) -> (1,1536,4W)   [W = 12 first chunk, 20 after]
 ///   upMall   Core ML fp16, ANE (cpuAndNeuralEngine): (1,1536,4W) -> waveform (1,1,W*1920)
+/// Both are fixed-shape multifunction models ("w12", "w20"). Core ML's CPU (BNNS) path traps on
+/// enumerated shapes, and the CPU is all the iOS Simulator has and what a device falls back to; an
+/// older enumerated-shape upMall (no functions) still loads, as one model serving both widths.
 /// A chunk is 12 frames with 8 frames of left context (the upsampler's receptive field), so each
 /// chunk is decoded the moment its 12th frame exists and the result is exact. The last chunk is
 /// zero-padded on the right (causal, no effect on the kept samples).
@@ -17,7 +20,7 @@ import Foundation
 final class ANEVocoder {
     static let C = 12, L = 8
     private let head: VocoderHead
-    private let upF12: MLModel, upF20: MLModel, upMall: MLModel
+    private let upF12: MLModel, upF20: MLModel, upMall12: MLModel, upMall20: MLModel
     private let in12: MLMultiArray, in20: MLMultiArray
     private var hist = [Float](repeating: 0, count: 1024 * ANEVocoder.L)    // (1024 x 8) channel-major
     private var pending: [Int64] = []          // caller thread only (frames not yet submitted as a chunk)
@@ -68,7 +71,12 @@ final class ANEVocoder {
         } else {
             upF12 = try load("upF_12", .cpuOnly); upF20 = try load("upF_20", .cpuOnly)
         }
-        upMall = try load("upMall", .cpuAndNeuralEngine)
+        if Self.functions(of: dir.appendingPathComponent("upMall.mlmodelc")).isSuperset(of: ["w12", "w20"]) {
+            upMall12 = try load("upMall", .cpuAndNeuralEngine, function: "w12")
+            upMall20 = try load("upMall", .cpuAndNeuralEngine, function: "w20")
+        } else {
+            upMall12 = try load("upMall", .cpuAndNeuralEngine); upMall20 = upMall12
+        }
         in12 = try MLMultiArray(shape: [1, 1024, 12], dataType: .float32)
         in20 = try MLMultiArray(shape: [1, 1024, 20], dataType: .float32)
         // warm-up: first predictions compile / specialise the graphs (ANE) and are cached by the system
@@ -242,6 +250,15 @@ final class ANEVocoder {
         wall += ProcessInfo.processInfo.systemUptime - w0
     }
 
+    /// The function names a compiled model declares (its metadata.json `functions`); empty for a
+    /// single-function model.
+    static func functions(of model: URL) -> Set<String> {
+        guard let d = try? Data(contentsOf: model.appendingPathComponent("metadata.json")),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]],
+              let fs = j.first?["functions"] as? [[String: Any]] else { return [] }
+        return Set(fs.compactMap { $0["name"] as? String })
+    }
+
     /// The C*1920 waveform samples belonging to the 12 newest frames of the window.
     private func predict(window: MLMultiArray, first: Bool) throws -> [Float] {
         try autoreleasepool {
@@ -249,7 +266,7 @@ final class ANEVocoder {
             let f = first ? upF12 : upF20
             let x = try f.prediction(from: MLDictionaryFeatureProvider(dictionary: ["hidden": window]))
             guard let xv = x.featureValue(for: "x") else { throw QwenANEError.invalid("upF: no output x") }
-            let y = try upMall.prediction(from: MLDictionaryFeatureProvider(dictionary: ["x": xv]))
+            let y = try (first ? upMall12 : upMall20).prediction(from: MLDictionaryFeatureProvider(dictionary: ["x": xv]))
             guard let wv = y.featureValue(for: "wav")?.multiArrayValue else { throw QwenANEError.invalid("upMall: no output wav") }
             guard wv.dataType == .float32 else { throw QwenANEError.invalid("upMall wav is not float32") }
             let st = wv.strides.last!.intValue
