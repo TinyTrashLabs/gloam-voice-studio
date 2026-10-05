@@ -340,6 +340,8 @@ let package = Package(
                 "GVoiceKit",
                 "EngineKit",
                 "VoiceFXKit",
+                // StudioVoiceEditorStore: the library as the shared editor's store.
+                "GloamVoiceEditing",
                 // Dia2 needs word timings for a conditioning clip, and the
                 // transcriber that produces them lives in SpeechKit.
                 "SpeechKit",
@@ -362,6 +364,7 @@ let package = Package(
             dependencies: [
                 "StudioKit",
                 "GVoiceKit",
+                "GloamVoiceEditing",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
             path: "Tests/StudioKitTests"
