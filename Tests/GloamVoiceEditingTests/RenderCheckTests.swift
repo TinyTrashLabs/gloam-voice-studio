@@ -147,4 +147,63 @@ final class RenderCheckTests: XCTestCase {
         XCTAssertTrue(ScriptLanguage.isEnglish(line))
         XCTAssertFalse(ScriptLanguage.isEnglish("Le renard brun rapide saute par-dessus le chien paresseux."))
     }
+
+    func testReferenceRateIsReadFromTheClip() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rate-\(UUID()).wav")
+        try VoicePlayer.wavData(samples: [Float](repeating: 0, count: 24000 * 10), sampleRate: 24000).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertEqual(RenderCheck.expectedRate(referenceTranscript: String(repeating: "a", count: 120),
+                                                referenceURL: url, pace: 1), 12, accuracy: 0.01)
+        XCTAssertEqual(RenderCheck.expectedRate(referenceTranscript: nil, referenceURL: nil, pace: 1),
+                       RenderCheck.defaultReferenceRate)
+    }
+
+    // MARK: a noise bed under the reference (Morgan, 2026-10-02)
+
+    /// Words at -15 dB over a steady bed of `bedDb`, and the bed alone.
+    private func overBed(_ bedDb: Float, voiced: Bool, seconds: Double) -> [Float] {
+        var state: UInt64 = 3
+        let peak = Float(pow(10, Double(bedDb) / 20) * 3.0.squareRoot())
+        return (0..<Int(seconds * Double(rate))).map { i in
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            let n = (Float(state >> 40) / Float(1 << 24) * 2 - 1) * peak
+            let t = Double(i) / Double(rate)
+            let on = voiced && t.truncatingRemainder(dividingBy: 0.6) < 0.4
+            return n + (on ? Float(0.25 * sin(2 * .pi * 180 * t)) : 0)
+        }
+    }
+    private let bedFloor = NoiseBed.speechFloorDb(noiseFloorDb: -35)
+
+    func testARenderOfPureBedPassesAsSpeechAtTheCleanFloor() {
+        // The bug: -35 dB bed is above the -45 floor, so it counts as voiced.
+        let s = RenderCheck.signal(overBed(-35, voiced: false, seconds: 4.2), sampleRate: rate)
+        XCTAssertFalse(RenderCheck.problems(text: line, signal: s, heard: nil).contains(.hiss))
+    }
+
+    func testARenderOfPureBedIsHissOverTheBedFloor() {
+        let s = RenderCheck.signal(overBed(-35, voiced: false, seconds: 4.2), sampleRate: rate, speechFloorDb: bedFloor)
+        XCTAssertTrue(RenderCheck.problems(text: line, signal: s, heard: nil).contains(.hiss))
+    }
+
+    func testAVoiceOverTheBedPassesTheBedFloor() {
+        let s = RenderCheck.signal(overBed(-35, voiced: true, seconds: 4.2), sampleRate: rate, speechFloorDb: bedFloor)
+        XCTAssertEqual(RenderCheck.problems(text: line, signal: s, heard: nil), [])
+    }
+
+    func testACleanVoiceIsJudgedExactlyAsBefore() {
+        let samples = speech(seconds: 4.2)
+        XCTAssertEqual(RenderCheck.signal(samples, sampleRate: rate),
+                       RenderCheck.signal(samples, sampleRate: rate, speechFloorDb: NoiseBed.speechFloorDb(noiseFloorDb: -57)))
+        XCTAssertEqual(RenderCheck.signal(samples, sampleRate: rate).floorDb, -45)
+    }
+}
+
+final class ScriptLanguageTests: XCTestCase {
+    func testQwenNameIsOnlyGivenForAConfidentNonEnglishScript() {
+        XCTAssertEqual(ScriptLanguage.qwenName("¿Dónde está la biblioteca? Necesito encontrar un libro sobre la historia de España."), "spanish")
+        XCTAssertEqual(ScriptLanguage.qwenName("Wo ist der Bahnhof? Ich muss heute Abend noch nach Berlin fahren."), "german")
+        XCTAssertNil(ScriptLanguage.qwenName("The quick brown fox jumps over the lazy dog near the river bank."),
+                     "English stays on Qwen's auto")
+        XCTAssertNil(ScriptLanguage.qwenName("ok"), "too little to be confident")
+    }
 }

@@ -147,8 +147,12 @@ public enum VoiceQualifier {
         let rate = RenderCheck.expectedRate(referenceChars: c.transcript.count,
                                             referenceSeconds: Double(c.samples24k.count) / Double(ClipImport.sampleRate),
                                             pace: 1)
-        let p = checker.signalProblems(text: line, samples48k: audio, expectedRate: rate)
-        return p.isEmpty ? await checker.transcriptProblems(text: line, samples48k: audio, expectedRate: rate) : p
+        // Over a reference with a noise bed, a render of pure bed must not pass as speech.
+        let floor = NoiseBed.speechFloorDb(noiseFloorDb: NoiseBed.floorDb(of: c.samples24k, sampleRate: ClipImport.sampleRate))
+        let p = checker.signalProblems(text: line, samples48k: audio, expectedRate: rate, speechFloorDb: floor)
+        return p.isEmpty
+            ? await checker.transcriptProblems(text: line, samples48k: audio, expectedRate: rate, speechFloorDb: floor)
+            : p
     }
 
     /// The candidate as `VoiceStore.referenceWav` will store it: trimmed and
@@ -214,9 +218,10 @@ public enum VoiceQualifier {
 public protocol PartChecker: Sendable {
     /// Milliseconds: hiss, silence, clipping, length against the text.
     /// `expectedRate` is the chars/s this voice should read at, at the pace
-    /// the engine honoured (`RenderCheck.expectedRate`).
-    func signalProblems(text: String, samples48k: [Float], expectedRate: Double) -> [RenderProblem]
+    /// the engine honoured (`RenderCheck.expectedRate`). `speechFloorDb` is
+    /// `NoiseBed.speechFloorDb` of the reference (pass it to `RenderCheck.signal`).
+    func signalProblems(text: String, samples48k: [Float], expectedRate: Double, speechFloorDb: Float) -> [RenderProblem]
     /// The transcript check; slower, and empty when it cannot run
     /// (non-English script, recogniser missing).
-    func transcriptProblems(text: String, samples48k: [Float], expectedRate: Double) async -> [RenderProblem]
+    func transcriptProblems(text: String, samples48k: [Float], expectedRate: Double, speechFloorDb: Float) async -> [RenderProblem]
 }

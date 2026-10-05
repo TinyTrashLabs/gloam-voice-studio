@@ -9,8 +9,8 @@ private struct FakeRenderer: TestRenderer {
     }
 }
 private struct FakeChecker: PartChecker {
-    func signalProblems(text: String, samples48k: [Float], expectedRate: Double) -> [RenderProblem] { samples48k.first == 0 ? [.hiss] : [] }
-    func transcriptProblems(text: String, samples48k: [Float], expectedRate: Double) async -> [RenderProblem] { [] }
+    func signalProblems(text: String, samples48k: [Float], expectedRate: Double, speechFloorDb: Float) -> [RenderProblem] { samples48k.first == 0 ? [.hiss] : [] }
+    func transcriptProblems(text: String, samples48k: [Float], expectedRate: Double, speechFloorDb: Float) async -> [RenderProblem] { [] }
 }
 private func cand(_ k: ReferenceCandidate.Kind) -> ReferenceCandidate {
     .init(kind: k, url: URL(fileURLWithPath: "/tmp/\(k.rawValue).wav"), samples24k: [], transcript: "hello there friend")
@@ -142,4 +142,85 @@ private final class Counter: @unchecked Sendable {
     private let lock = NSLock(); private var n = 0
     func bump() { lock.withLock { n += 1 } }
     var value: Int { lock.withLock { n } }
+}
+
+/// Halves the signal: stands in for a real model without loading one.
+private struct HalvingDenoiser: SpeechDenoiser {
+    let name = "halving"
+    func denoise(_ samples24k: [Float]) async throws -> [Float] { samples24k.map { $0 * 0.5 } }
+}
+
+final class VoiceQualifierCandidateTests: XCTestCase {
+    private var dir: URL!
+    override func setUp() {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("vq-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+
+    /// 3 s of a 220 Hz tone at -18 dBFS-ish, with or without a noise bed.
+    private func take(noise: Float) throws -> URL {
+        var rng = SystemRandomNumberGenerator()
+        let samples = (0..<(24_000 * 3)).map { i -> Float in
+            0.18 * sin(2 * .pi * 220 * Float(i) / 24_000) + noise * Float.random(in: -1...1, using: &rng)
+        }
+        let url = dir.appendingPathComponent("take-\(UUID().uuidString).wav")
+        try VoicePlayer.wavData(samples: samples, sampleRate: 24_000).write(to: url)
+        return url
+    }
+
+    func testACleanTakeIsOnlyTheOriginal() async throws {
+        let url = try take(noise: 0)
+        let c = await VoiceQualifier.candidates(original: url, raw: url, transcript: "hi",
+                                                quality: .init(seconds: 3, speechDb: -18, noiseFloorDb: -70, clippedFraction: 0),
+                                                denoiser: HalvingDenoiser())
+        XCTAssertEqual(c.map(\.kind), [.original])
+        XCTAssertFalse(c[0].samples24k.isEmpty)
+    }
+
+    func testANoisyTakeAddsACleanedCandidateOnDisk() async throws {
+        let url = try take(noise: 0.02)
+        let c = await VoiceQualifier.candidates(original: url, raw: url, transcript: "hi",
+                                                quality: .init(seconds: 3, speechDb: -18, noiseFloorDb: -40, clippedFraction: 0),
+                                                denoiser: HalvingDenoiser())
+        XCTAssertEqual(c.map(\.kind), [.original, .cleaned])
+        XCTAssertEqual(c[1].transcript, "hi")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: c[1].url.path))
+        XCTAssertEqual(try VoiceAudio.loadWav24k(c[1].url).count, c[1].samples24k.count)
+    }
+
+    func testNoDenoiserMeansNoCleanedCandidate() async throws {
+        let url = try take(noise: 0.02)
+        let c = await VoiceQualifier.candidates(original: url, raw: url, transcript: "hi",
+                                                quality: .init(seconds: 3, speechDb: -18, noiseFloorDb: -40, clippedFraction: 0),
+                                                denoiser: nil)
+        XCTAssertEqual(c.map(\.kind), [.original])
+    }
+
+    /// A take refused ONLY for noise still goes on when a denoiser ships:
+    /// the cleaned candidate is its chance. Anything else still stops it.
+    func testOnlyANoiseFailureIsLetThroughForCleaning() {
+        let noisy = RecordingCheck.Quality(seconds: 10, speechDb: -20, noiseFloorDb: -30, clippedFraction: 0)
+        XCTAssertNotNil(noisy.problem)
+        XCTAssertTrue(VoiceQualifier.failsOnlyOnNoise(noisy))
+        let noisyAndQuiet = RecordingCheck.Quality(seconds: 10, speechDb: -50, noiseFloorDb: -60, clippedFraction: 0)
+        XCTAssertFalse(VoiceQualifier.failsOnlyOnNoise(noisyAndQuiet))
+        let noisyAndShort = RecordingCheck.Quality(seconds: 1, speechDb: -20, noiseFloorDb: -30, clippedFraction: 0)
+        XCTAssertFalse(VoiceQualifier.failsOnlyOnNoise(noisyAndShort))
+        let fine = RecordingCheck.Quality(seconds: 10, speechDb: -20, noiseFloorDb: -70, clippedFraction: 0)
+        XCTAssertFalse(VoiceQualifier.failsOnlyOnNoise(fine))
+    }
+
+    /// Choosing the original over a cleaned winner stores the original's own verdict.
+    func testTheVerdictForAnOverriddenPickIsThatCandidates() async throws {
+        let quiet = RecordingCheck.Quality(seconds: 12, speechDb: -18, noiseFloorDb: -40, clippedFraction: 0)
+        let scored = try await VoiceQualifier.score([cand(.original), cand(.cleaned)],
+                                                    renderer: FakeRenderer(bad: [.original]), checker: FakeChecker())
+        let original = try XCTUnwrap(scored.first { $0.candidate.kind == .original })
+        let v = VoiceQualifier.verdict(for: original, quality: quiet, engine: "test")
+        XCTAssertEqual(v.chosen, .original)
+        XCTAssertFalse(v.problems.isEmpty)
+        XCTAssertTrue(VoiceQualifier.findings(quality: quiet, transcript: "hello there friend", chosen: .original)
+            .contains { $0.fix == .cleanUpNoise })
+    }
 }

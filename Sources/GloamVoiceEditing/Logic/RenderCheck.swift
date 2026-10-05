@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 /// One thing wrong with a rendered part, in words a person can act on.
-public enum RenderProblem: Equatable, Codable, Hashable {
+public enum RenderProblem: Equatable, Codable, Hashable, Sendable {
     case silent
     case hiss
     case clipped
@@ -40,7 +40,9 @@ public enum RenderProblem: Equatable, Codable, Hashable {
 /// Thresholds are the repo's measurements, re-derived from the Task 4
 /// corpus -- change the constants, not the shape:
 /// - hiss/silence: Qwen's non-speech mode sits at -49...-65 dBFS
-///   (LeadingSilenceGate); a quiet voice at -30...-40.
+///   (LeadingSilenceGate); a quiet voice at -30...-40. Over a reference with
+///   a noise bed the floor is the bed plus a margin (`NoiseBed`), since the
+///   bed itself sits above -45 and a render of pure bed would pass.
 /// - rate: relative to the voice. Both engines copy the pace of the
 ///   reference they clone from (LuxTTS sizes frames per token from it; Qwen
 ///   continues it), so a render is judged against its reference's own
@@ -71,14 +73,25 @@ public enum RenderCheck {
     public struct Signal: Equatable {
         public let seconds: Double
         public let speechDb: Float
-        public let voicedFraction: Double   // 50 ms blocks above speechFloorDb
+        public let voicedFraction: Double   // 50 ms blocks above `floorDb`
         public let clippedFraction: Double
+        /// The speech floor this was measured against: `speechFloorDb`, or
+        /// higher over a reference with a noise bed (`NoiseBed`).
+        public var floorDb: Float = RenderCheck.speechFloorDb
+
+        public init(seconds: Double, speechDb: Float, voicedFraction: Double, clippedFraction: Double,
+                    floorDb: Float = RenderCheck.speechFloorDb) {
+            self.seconds = seconds; self.speechDb = speechDb; self.voicedFraction = voicedFraction
+            self.clippedFraction = clippedFraction; self.floorDb = floorDb
+        }
     }
 
-    public static func signal(_ samples: [Float], sampleRate: Int) -> Signal {
+    /// `speechFloorDb` is `NoiseBed.speechFloorDb(noiseFloorDb:)` of the
+    /// reference the render cloned from; the default is a clean voice's.
+    public static func signal(_ samples: [Float], sampleRate: Int, speechFloorDb floorDb: Float = speechFloorDb) -> Signal {
         let q = RecordingCheck.measure(samples, sampleRate: sampleRate)
         let block = max(1, sampleRate / 20)
-        let floor = pow(10, speechFloorDb / 20)
+        let floor = pow(10, floorDb / 20)
         var voiced = 0, blocks = 0, i = 0
         while i + block <= samples.count {
             var acc: Float = 0
@@ -89,7 +102,7 @@ public enum RenderCheck {
         }
         return Signal(seconds: q.seconds, speechDb: q.speechDb,
                       voicedFraction: blocks == 0 ? 0 : Double(voiced) / Double(blocks),
-                      clippedFraction: q.clippedFraction)
+                      clippedFraction: q.clippedFraction, floorDb: floorDb)
     }
 
     /// The chars/s a render should read at: the reference's own rate (its
@@ -105,6 +118,13 @@ public enum RenderCheck {
         return rate * Double(pace > 0 ? pace : 1)
     }
 
+    /// `expectedRate` from the reference the engine clones from: its words
+    /// and its file (header read only, no decode).
+    public static func expectedRate(referenceTranscript: String?, referenceURL: URL?, pace: Float) -> Double {
+        expectedRate(referenceChars: referenceTranscript?.count,
+                     referenceSeconds: referenceURL.flatMap(VoiceAudio.seconds(of:)), pace: pace)
+    }
+
     /// Header read only; no samples are decoded.
     public static func seconds(of url: URL) -> Double? {
         guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { return nil }
@@ -116,7 +136,7 @@ public enum RenderCheck {
     public static func problems(text: String, signal: Signal, heard: String?,
                          expectedRate: Double = defaultReferenceRate) -> [RenderProblem] {
         if signal.speechDb < -80 { return [.silent] }
-        if signal.speechDb < speechFloorDb || signal.voicedFraction < minVoicedFraction { return [.hiss] }
+        if signal.speechDb < signal.floorDb || signal.voicedFraction < minVoicedFraction { return [.hiss] }
         var out: [RenderProblem] = []
         if signal.clippedFraction > maxClippedFraction { out.append(.clipped) }
         let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
