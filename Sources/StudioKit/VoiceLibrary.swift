@@ -92,11 +92,14 @@ public struct VoiceLibrary: Sendable {
     /// Chooses and stores, once, the sections of a voice's master for the engines that take a shorter
     /// reference (`ReferenceSections.prepare`): call after a voice is saved, imported or its master is
     /// replaced. Sections already stored for this master are kept; a replaced master invalidates the old
-    /// ones by hash. Never changes `source/`.
+    /// ones by hash. Never changes `source/`. A section written now is a change to the pack, so the
+    /// voice's `revision` is bumped (nothing written, nothing bumped).
     @discardableResult
     public func prepareSections(_ slug: String) async -> [String] {
         guard let (meta, refURL, _) = try? entry(slug), let refURL else { return [] }
-        return await ReferenceSections.prepare(referenceURL: refURL, refText: meta.refText)
+        let written = await ReferenceSections.prepare(referenceURL: refURL, refText: meta.refText)
+        if !written.isEmpty { _ = try? touchRevision(slug) }
+        return written
     }
 
     /// Prepares and stores the Qwen section of the voice and of every take (language references, emotions)
@@ -111,6 +114,8 @@ public struct VoiceLibrary: Sendable {
             let language = ReferenceSections.language(ofTakeKey: key)
             if await ReferenceSections.prepareQwen(referenceURL: refURL, refText: meta.refText, language: language) { done.append(vslug) }
         }
+        // A section is part of the pack: one computed now is a new version of the voice.
+        if !done.isEmpty { _ = try? touchRevision(slug) }
         return done
     }
 
