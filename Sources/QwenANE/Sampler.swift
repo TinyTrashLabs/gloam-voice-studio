@@ -132,4 +132,7 @@ struct Sampler {
     }
 }
 
-func effectiveMaxTokens(_ nTextTokens: Int, maxTokens: Int = 4096) -> Int { min(maxTokens, max(75, nTextTokens * 6)) }
+/// The fixed cap (`QwenReadRules.frameCap` without a voice pace).
+func effectiveMaxTokens(_ nTextTokens: Int, maxTokens: Int = 4096) -> Int {
+    min(maxTokens, QwenReadRules.frameCap(textTokens: nTextTokens, voiceFramesPerToken: nil))
+}

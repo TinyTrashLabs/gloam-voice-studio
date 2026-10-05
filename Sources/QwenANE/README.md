@@ -126,6 +126,11 @@ The rules behind it are `QwenReadRules` (split, `derailed`, `badness`, `carries`
 (gloam-voice-studio-ios `QwenMLXEngine`) applies the same ones: a part is carried only if it did not derail AND no
 check that ran before the next part flagged it.
 
+The runaway cap that stops a take that never ends follows the voice: `QwenReadRules.frameCap` allows the larger of
+6 frames a text token (the old fixed cap: a 44-token part stopped at 21.1 s) and 2x the voice's own pace, measured
+from its reference (`voiceFramesPerToken`: reference frames / transcript tokens, clamped to 3...20), within the
+KV window. `QwenRender.frameCap` and the part log line report it.
+
 Studio's `qwen3-0.6b-ane` backend (`QwenANESpeechModel`) does this for you: a line that fits one render is one
 render, as before; a longer one is split at sentences (~160 characters a part) and rendered through one session
 with a random seed (or the request's), so Regenerate still gives a new take.
