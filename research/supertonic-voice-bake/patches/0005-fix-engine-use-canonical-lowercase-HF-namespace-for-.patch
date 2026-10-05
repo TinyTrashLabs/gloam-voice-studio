@@ -1,0 +1,60 @@
+From 5127862584ed11d893d1ce4ff6b22faf5ed29f69 Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Tue, 21 Jul 2026 22:28:39 -0400
+Subject: [PATCH 05/12] fix(engine): use canonical lowercase HF namespace for
+ SuperTonic weights
+
+Published to huggingface.co/tinytrashlabs/supertonic-3-mlx (HF namespaces
+are lowercase/case-sensitive; the GitHub org is TinyTrashLabs but the HF org
+is tinytrashlabs). Point BackendSpec.modelRepo + test + license doc at the
+canonical id so the runtime download resolves.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/EngineKit/Backend.swift         | 2 +-
+ Tests/EngineKitTests/BackendTests.swift | 2 +-
+ docs/supertonic-licensing.md            | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Sources/EngineKit/Backend.swift b/Sources/EngineKit/Backend.swift
+index 3383fa47..6d8c2da5 100644
+--- a/Sources/EngineKit/Backend.swift
++++ b/Sources/EngineKit/Backend.swift
+@@ -296,7 +296,7 @@ extension BackendID {
+         case .supertonic:
+             // Weights are BigScience Open RAIL-M (use-based restrictions) — require
+             // an explicit ack like Fish. See docs/supertonic-licensing.md.
+-            BackendSpec(modelRepo: "TinyTrashLabs/supertonic-3-mlx",
++            BackendSpec(modelRepo: "tinytrashlabs/supertonic-3-mlx",
+                         defaultSampleRate: 44100, honorsTags: false,
+                         needsLicenseAck: true, needsRefAudio: false,
+                         minRAMBytes: 8_000_000_000)
+diff --git a/Tests/EngineKitTests/BackendTests.swift b/Tests/EngineKitTests/BackendTests.swift
+index 5822696a..127e24a2 100644
+--- a/Tests/EngineKitTests/BackendTests.swift
++++ b/Tests/EngineKitTests/BackendTests.swift
+@@ -174,7 +174,7 @@ final class BackendTests: XCTestCase {
+ 
+     func testSupertonicSpec() {
+         let spec = BackendID.supertonic.spec
+-        XCTAssertEqual(spec.modelRepo, "TinyTrashLabs/supertonic-3-mlx")
++        XCTAssertEqual(spec.modelRepo, "tinytrashlabs/supertonic-3-mlx")
+         XCTAssertEqual(spec.defaultSampleRate, 44100)
+         XCTAssertFalse(spec.honorsTags)
+         // Open RAIL-M use-based restrictions — explicit ack like Fish.
+diff --git a/docs/supertonic-licensing.md b/docs/supertonic-licensing.md
+index 095e5a32..ffe62362 100644
+--- a/docs/supertonic-licensing.md
++++ b/docs/supertonic-licensing.md
+@@ -13,7 +13,7 @@ the backend is gated behind an explicit in-app acknowledgement.
+ 
+ ## Converted weights are MODIFIED FILES
+ 
+-The weights the app downloads (`TinyTrashLabs/supertonic-3-mlx`) are
++The weights the app downloads (`tinytrashlabs/supertonic-3-mlx`) are
+ format-converted from the original ONNX exports (fp32, opset 19, the
+ `onnx/` dir of `Supertone/supertonic-3`): safetensors container, renamed
+ tensor keys, Conv axis order `[O,I,K] → [O,K,I]`, and the CFG scale (4.0) +
+-- 
+2.54.0 (Apple Git-157)
+

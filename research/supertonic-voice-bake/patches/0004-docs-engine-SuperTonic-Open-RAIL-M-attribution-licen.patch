@@ -1,0 +1,162 @@
+From 25c020c7dc7d0d6de11d71ea99aa6bf1e2bc5e6c Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Tue, 21 Jul 2026 22:19:43 -0400
+Subject: [PATCH 04/12] docs(engine): SuperTonic Open RAIL-M attribution +
+ license notice
+
+docs/supertonic-licensing.md: attribution string, modified-weights note,
+and the Attachment A EULA pass-down clause ready for the app's license
+surface, plus the exact App/Views + AppModel edits still needed (the ack
+sheet/state are Fish-hardcoded today).
+
+StudioKit: add supertonicLicenseNotice and route the API server's 403
+licenseAckRequired detail by backend instead of always returning the
+Fish notice.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/StudioKit/Server/APIRouter.swift |  4 +-
+ Sources/StudioKit/Server/APITypes.swift  | 19 ++++++
+ docs/supertonic-licensing.md             | 85 ++++++++++++++++++++++++
+ 3 files changed, 106 insertions(+), 2 deletions(-)
+ create mode 100644 docs/supertonic-licensing.md
+
+diff --git a/Sources/StudioKit/Server/APIRouter.swift b/Sources/StudioKit/Server/APIRouter.swift
+index 76ff0cff..88ca8a08 100644
+--- a/Sources/StudioKit/Server/APIRouter.swift
++++ b/Sources/StudioKit/Server/APIRouter.swift
+@@ -274,8 +274,8 @@ public enum APIRouter {
+                 return Response(status: .ok,
+                                 headers: [.contentType: "audio/wav"],
+                                 body: .init(byteBuffer: ByteBuffer(data: wav)))
+-            } catch EngineError.licenseAckRequired {
+-                throw APIError(status: .forbidden, detail: fishLicenseNotice)
++            } catch EngineError.licenseAckRequired(let b) {
++                throw APIError(status: .forbidden, detail: licenseNotice(for: b))
+             } catch EngineError.refAudioRequired(let b) {
+                 throw APIError(status: .badRequest,
+                                detail: "backend '\(b.rawValue)' requires reference audio")
+diff --git a/Sources/StudioKit/Server/APITypes.swift b/Sources/StudioKit/Server/APITypes.swift
+index 49be8099..934fd4dc 100644
+--- a/Sources/StudioKit/Server/APITypes.swift
++++ b/Sources/StudioKit/Server/APITypes.swift
+@@ -8,6 +8,25 @@ public let fishLicenseNotice =
+     + "personal/non-commercial use only. Commercial use requires a license from "
+     + "business@fish.audio. By enabling this backend you confirm your use is personal."
+ 
++/// In-app attribution + use-restriction notice for the SuperTonic backend.
++/// Shown by the license-ack surface and returned by the API server when the
++/// backend is used un-acked. Full text + EULA pass-down clause:
++/// docs/supertonic-licensing.md.
++public let supertonicLicenseNotice =
++    "SuperTonic voices are powered by SuperTonic 3 by Supertone Inc. "
++    + "(huggingface.co/Supertone/supertonic-3), used under the BigScience Open "
++    + "RAIL-M license; the weights are format-converted (modified) for MLX. The "
++    + "license carries use restrictions that pass down to you: no unlawful use, no "
++    + "impersonation or deepfakes of real people without their consent, no "
++    + "harassment or defamation, no generating harmful disinformation, and no "
++    + "undisclosed machine-generated content. By enabling this backend you agree "
++    + "to these restrictions."
++
++/// The license notice matching a backend that requires an ack.
++public func licenseNotice(for backend: BackendID) -> String {
++    backend == .supertonic ? supertonicLicenseNotice : fishLicenseNotice
++}
++
+ /// FastAPI-compatible HTTP error: serializes as {"detail": "<message>"}.
+ struct APIError: Error {
+     let status: HTTPResponse.Status
+diff --git a/docs/supertonic-licensing.md b/docs/supertonic-licensing.md
+new file mode 100644
+index 00000000..095e5a32
+--- /dev/null
++++ b/docs/supertonic-licensing.md
+@@ -0,0 +1,85 @@
++# SuperTonic 3 — licensing, attribution, and EULA pass-down
++
++The `.supertonic` backend uses weights converted from **SuperTonic 3 by
++Supertone Inc.** (https://huggingface.co/Supertone/supertonic-3), licensed
++under the **BigScience Open RAIL-M License** (dated 2022-08-18). Open RAIL-M
++is permissive on IP but carries **use-based restrictions (Attachment A)**
++that every distributor MUST pass down to end users — including us
++(License §5: "You shall require all of Your users who use the Model or a
++Derivative of the Model to comply with the terms of this paragraph").
++
++That is why `BackendID.supertonic.spec.needsLicenseAck == true`: like Fish,
++the backend is gated behind an explicit in-app acknowledgement.
++
++## Converted weights are MODIFIED FILES
++
++The weights the app downloads (`TinyTrashLabs/supertonic-3-mlx`) are
++format-converted from the original ONNX exports (fp32, opset 19, the
++`onnx/` dir of `Supertone/supertonic-3`): safetensors container, renamed
++tensor keys, Conv axis order `[O,I,K] → [O,K,I]`, and the CFG scale (4.0) +
++Euler step factored out of the graph into the runtime. Numerical values are
++unchanged. The converted repo carries the LICENSE, a NOTICE describing the
++modification, and Attachment A — any surface that credits the model should
++also say the weights are modified (Open RAIL-M requires marking changed
++files).
++
++## In-app attribution string
++
++The canonical string ships as `supertonicLicenseNotice` in
++`Sources/StudioKit/Server/APITypes.swift` (already used by the API server's
++403 response for an un-acked SuperTonic request):
++
++> SuperTonic voices are powered by SuperTonic 3 by Supertone Inc.
++> (huggingface.co/Supertone/supertonic-3), used under the BigScience Open
++> RAIL-M license; the weights are format-converted (modified) for MLX. The
++> license carries use restrictions that pass down to you: no unlawful use,
++> no impersonation or deepfakes of real people without their consent, no
++> harassment or defamation, no generating harmful disinformation, and no
++> undisclosed machine-generated content. By enabling this backend you agree
++> to these restrictions.
++
++## EULA / license-surface pass-down clause (ready to drop in)
++
++For the app's EULA / licenses screen (the full Attachment A, condensed to
++its operative text — keep all thirteen items when surfacing "full terms",
++e.g. by linking the LICENSE file in the weights repo):
++
++> **SuperTonic 3 voices — Open RAIL-M use restrictions.** The SuperTonic
++> voice model is licensed under the BigScience Open RAIL-M license, whose
++> use restrictions apply to you and to anything you generate with it. You
++> agree not to use the model or its output: (a) in violation of any law;
++> (b) to exploit or harm minors; (c) to generate or spread verifiably false
++> information intended to harm others; (d) to generate or disseminate
++> personal identifiable information to harm an individual; (e) to present
++> machine-generated content without clearly disclosing it is machine
++> generated; (f) to defame, disparage, or harass others; (g) to impersonate
++> any person — including voice deepfakes — without their consent; (h) for
++> fully automated decision-making that adversely affects a person's legal
++> rights or creates a binding obligation; (i)–(k) for any use that
++> discriminates against or harms individuals or groups based on social
++> behavior, personal characteristics, or legally protected categories;
++> (l) to provide medical advice or interpret medical results; (m) for
++> administration-of-justice, law-enforcement, immigration, or asylum
++> profiling. Full license: BigScience Open RAIL-M (2022-08-18), included
++> with the model download.
++
++## Where this goes in the app (deferred — App/Views has uncommitted WIP)
++
++Mirror the Fish Audio Research License ack path:
++
++1. **Ack sheet** — `App/Views/SettingsView.swift` has `FishLicenseSheet`
++   showing `fishLicenseNotice`. Add a SuperTonic equivalent (or generalize
++   the sheet to take `licenseNotice(for:)` + a title). The confirm button
++   should read "I Agree to the Use Restrictions" rather than the Fish
++   "Personal Use" wording — Open RAIL-M permits commercial use; the gate is
++   the Attachment A restrictions, not non-commerciality.
++2. **Ack state** — `App/AppModel.swift` gates on a Fish-specific
++   `didAckFishLicense` bool in ~6 places and always acks `.fishS2Pro`.
++   Generalize to a per-backend ack set (persisted) so `.supertonic` gets
++   its own ack and its own `engine.acknowledgeLicense(for: .supertonic)`.
++3. **Settings caption** — `SettingsView` line ~158 appends
++   "· research/personal license" when `needsLicenseAck`; SuperTonic should
++   instead read something like "· Open RAIL-M use restrictions".
++
++The engine (`GloamEngine`) and API server already enforce the ack; only the
++UI strings/sheet/persistence remain.
+-- 
+2.54.0 (Apple Git-157)
+

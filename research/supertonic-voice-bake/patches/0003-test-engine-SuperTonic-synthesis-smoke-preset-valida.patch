@@ -1,0 +1,169 @@
+From cc41d13fda4e103c932bc3c6f4402aa31d5655cd Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Tue, 21 Jul 2026 22:15:22 -0400
+Subject: [PATCH 03/12] test(engine): SuperTonic synthesis smoke + preset
+ validation
+
+Planner-level tests (run everywhere): unknown/missing speaker throws
+speakerRequired before any model load, un-acked synth throws
+licenseAckRequired, a valid preset reaches the provider with no clone
+or knob values. The real-weights smoke test is gated behind
+ENGINEKIT_LIVE_TESTS=1 (+ SUPERTONIC_WEIGHTS_DIR override) because SPM
+xctest can't load the MLX metallib from the CLI; the executable path is
+covered instead via spike, which gains --model-dir (local weights
+override) and a generic needsLicenseAck ack for the selected backend.
+
+Verified live: spike --backend supertonic --speaker M1 --model-dir
+.../weights-repo renders 3.27 s of 44.1 kHz audio at 2.54x realtime;
+--speaker NOPE fails with speakerRequired before load.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/spike/main.swift                      |  11 +-
+ .../SupertonicSynthesisTests.swift            | 109 ++++++++++++++++++
+ 2 files changed, 119 insertions(+), 1 deletion(-)
+ create mode 100644 Tests/EngineKitTests/SupertonicSynthesisTests.swift
+
+diff --git a/Sources/spike/main.swift b/Sources/spike/main.swift
+index c0c8571c..7cd000f3 100644
+--- a/Sources/spike/main.swift
++++ b/Sources/spike/main.swift
+@@ -221,10 +221,19 @@ guard let backendRaw = args["backend"], let backend = BackendID(rawValue: backen
+       let text = args["text"], let out = args["out"]
+ else { usage() }
+ 
+-let engine = GloamEngine(provider: MLXModelProvider())
++// `--model-dir <path>`: load the backend's weights from a local directory
++// (config.json + safetensors) instead of the HF repo — lets a converted-weights
++// checkout (e.g. SuperTonic) be smoke-tested before the repo is published.
++let modelDir = args["model-dir"]
++let resolver: (@Sendable (BackendID) -> String?)? =
++    modelDir.map { dir in { @Sendable _ in dir } }
++let engine = GloamEngine(provider: MLXModelProvider(modelPathResolver: resolver))
+ 
+ do {
+     if ackFish { await engine.acknowledgeLicense(for: .fishS2Pro) }
++    // A license-gated backend (fish, supertonic) can't synthesize un-acked; the
++    // CLI is a dev tool, so acking the selected backend here is the ack.
++    if backend.spec.needsLicenseAck { await engine.acknowledgeLicense(for: backend) }
+     let request = SynthesisRequest(
+         text: text,
+         refAudioPath: args["ref"],
+diff --git a/Tests/EngineKitTests/SupertonicSynthesisTests.swift b/Tests/EngineKitTests/SupertonicSynthesisTests.swift
+new file mode 100644
+index 00000000..14453921
+--- /dev/null
++++ b/Tests/EngineKitTests/SupertonicSynthesisTests.swift
+@@ -0,0 +1,109 @@
++import XCTest
++@testable import EngineKit
++
++/// SuperTonic synthesis wiring. The planner-level tests run everywhere; the
++/// real-model smoke test loads the converted weights from a local directory
++/// and needs Metal + the weights on disk, so it is gated behind
++/// ENGINEKIT_LIVE_TESTS=1 (mirroring SpeechKit's SPEECHKIT_LIVE_TESTS gate).
++final class SupertonicSynthesisTests: XCTestCase {
++    /// Local converted-weights checkout (config.json model_type "supertonic",
++    /// four safetensors, unicode_indexer.json, voice_styles/). Overridable so CI
++    /// or another machine can point elsewhere.
++    private static var localWeightsPath: String {
++        ProcessInfo.processInfo.environment["SUPERTONIC_WEIGHTS_DIR"]
++            ?? "/Users/david/projects/mlx-audio-swift-supertonic/weights-repo"
++    }
++
++    private static var liveTestsEnabled: Bool {
++        ProcessInfo.processInfo.environment["ENGINEKIT_LIVE_TESTS"] == "1"
++    }
++
++    // MARK: - Planner-level (no weights needed)
++
++    func testUnknownSpeakerFailsValidationBeforeModelLoad() async {
++        // Preset validation must reject a stale/unknown speaker loudly, without
++        // loading weights — same rule as Qwen CustomVoice / Kokoro.
++        let provider = FakeProvider()
++        let engine = GloamEngine(provider: provider)
++        await engine.acknowledgeLicense(for: .supertonic)
++        do {
++            _ = try await engine.synthesize(
++                backend: .supertonic,
++                request: SynthesisRequest(text: "hi", speaker: "af_heart"))
++            XCTFail("expected speakerRequired")
++        } catch {
++            XCTAssertEqual(error as? EngineError, .speakerRequired(.supertonic))
++        }
++        XCTAssertTrue(provider.loads.isEmpty, "validation must run before model load")
++    }
++
++    func testMissingSpeakerFailsValidation() async {
++        let engine = GloamEngine(provider: FakeProvider())
++        await engine.acknowledgeLicense(for: .supertonic)
++        do {
++            _ = try await engine.synthesize(
++                backend: .supertonic, request: SynthesisRequest(text: "hi"))
++            XCTFail("expected speakerRequired")
++        } catch {
++            XCTAssertEqual(error as? EngineError, .speakerRequired(.supertonic))
++        }
++    }
++
++    func testSynthesizeWithoutLicenseAckThrows() async {
++        // Open RAIL-M use restrictions require an explicit ack, like Fish.
++        let engine = GloamEngine(provider: FakeProvider())
++        do {
++            _ = try await engine.synthesize(
++                backend: .supertonic,
++                request: SynthesisRequest(text: "hi", speaker: "M1"))
++            XCTFail("expected licenseAckRequired")
++        } catch {
++            XCTAssertEqual(error as? EngineError, .licenseAckRequired(.supertonic))
++        }
++    }
++
++    func testValidSpeakerReachesProvider() async throws {
++        let provider = FakeProvider()
++        let model = FakeModel(sampleRate: 44100)
++        provider.models[.supertonic] = model
++        let engine = GloamEngine(provider: provider)
++        await engine.acknowledgeLicense(for: .supertonic)
++        let result = try await engine.synthesize(
++            backend: .supertonic,
++            request: SynthesisRequest(text: "hi", speaker: "F3"))
++        XCTAssertEqual(result.sampleRate, 44100)
++        XCTAssertEqual(model.received.count, 1)
++        XCTAssertEqual(model.received.first?.speaker, "F3")
++        // No clone / knobs on this backend — the plan must not carry them.
++        XCTAssertNil(model.received.first?.refAudioPath)
++        XCTAssertNil(model.received.first?.temperature)
++        XCTAssertNil(model.received.first?.exaggeration)
++    }
++
++    // MARK: - Live model smoke (local weights + Metal)
++
++    func testSupertonicSynthesisSmoke() async throws {
++        try XCTSkipUnless(Self.liveTestsEnabled, "set ENGINEKIT_LIVE_TESTS=1 to run")
++        let dir = Self.localWeightsPath
++        try XCTSkipUnless(
++            FileManager.default.fileExists(atPath: dir + "/config.json"),
++            "SuperTonic converted weights not found at \(dir)")
++
++        let provider = MLXModelProvider(modelPathResolver: { backend in
++            backend == .supertonic ? dir : nil
++        })
++        let engine = GloamEngine(provider: provider)
++        await engine.acknowledgeLicense(for: .supertonic)
++        let result = try await engine.synthesize(
++            backend: .supertonic,
++            request: SynthesisRequest(text: "The quick brown fox jumps over the lazy dog.",
++                                      speaker: "M1"))
++        XCTAssertEqual(result.sampleRate, 44100)
++        XCTAssertFalse(result.samples.isEmpty)
++        // Sanity: non-silent output of a plausible length (0.5–30 s).
++        let peak = result.samples.map(abs).max() ?? 0
++        XCTAssertGreaterThan(peak, 0.01, "output should not be silence")
++        XCTAssertGreaterThan(result.samples.count, 22_050)
++        XCTAssertLessThan(result.samples.count, 44_100 * 30)
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+

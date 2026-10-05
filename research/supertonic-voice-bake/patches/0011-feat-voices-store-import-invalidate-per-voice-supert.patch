@@ -1,0 +1,201 @@
+From a6360c5bd5ee623fcd5039337a6f6e24672652aa Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Wed, 22 Jul 2026 20:42:27 -0400
+Subject: [PATCH 11/12] feat(voices): store/import/invalidate per-voice
+ supertonic.json
+
+- writeSupertonicStyle/importVoiceFromSupertonic/deleteSupertonicStyle + markers
+- new reference audio invalidates a stale bake; style travels on rename
+- get() no longer requires ref.wav (SuperTonic-only imported voices)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/StudioKit/VoiceLibrary.swift         | 74 +++++++++++++++++++-
+ Tests/StudioKitTests/VoiceLibraryTests.swift | 69 ++++++++++++++++++
+ 2 files changed, 142 insertions(+), 1 deletion(-)
+
+diff --git a/Sources/StudioKit/VoiceLibrary.swift b/Sources/StudioKit/VoiceLibrary.swift
+index a42bf710..05a6d648 100644
+--- a/Sources/StudioKit/VoiceLibrary.swift
++++ b/Sources/StudioKit/VoiceLibrary.swift
+@@ -90,12 +90,14 @@ public struct VoiceLibrary: Sendable {
+         return meta
+     }
+ 
++    /// A voice is defined by its `meta.json`. `refURL` may point at a non-existent
++    /// file for a SuperTonic-only imported voice (no reference audio) — callers that
++    /// need the audio must check existence.
+     public func get(_ slug: String) throws -> (meta: VoiceMeta, refURL: URL) {
+         let voiceDir = directory.appendingPathComponent(slug)
+         let metaURL = voiceDir.appendingPathComponent("meta.json")
+         let refURL = voiceDir.appendingPathComponent("ref.wav")
+         guard FileManager.default.fileExists(atPath: metaURL.path),
+-              FileManager.default.fileExists(atPath: refURL.path),
+               let data = try? Data(contentsOf: metaURL),
+               let meta = try? JSONDecoder().decode(VoiceMeta.self, from: data)
+         else { throw StudioError.voiceNotFound(slug: slug) }
+@@ -185,11 +187,81 @@ public struct VoiceLibrary: Sendable {
+         if let refText { meta.refText = refText }
+         if let refWav, !refWav.isEmpty {
+             try refWav.write(to: voiceDir.appendingPathComponent("ref.wav"))
++            // New reference audio invalidates any SuperTonic style baked from the old
++            // audio (the style encodes the voice's acoustic identity). A transcript-only
++            // edit does NOT invalidate — the style is a function of the audio, not refText.
++            let styleURL = voiceDir.appendingPathComponent("supertonic.json")
++            if FileManager.default.fileExists(atPath: styleURL.path) {
++                try FileManager.default.removeItem(at: styleURL)
++                meta.supertonicSource = nil
++                meta.supertonicBakedAt = nil
++            }
+         }
+         try write(meta, to: voiceDir)
+         return meta
+     }
+ 
++    // MARK: SuperTonic style (per-voice `supertonic.json`)
++
++    /// URL of a voice's SuperTonic style descriptor (may not exist).
++    public func supertonicStyleURL(slug: String) -> URL {
++        directory.appendingPathComponent(slug).appendingPathComponent("supertonic.json")
++    }
++
++    /// Whether this voice has a baked/imported SuperTonic style.
++    public func hasSupertonicStyle(slug: String) -> Bool {
++        FileManager.default.fileExists(atPath: supertonicStyleURL(slug: slug).path)
++    }
++
++    /// Write a validated SuperTonic style into an existing voice, marking its source
++    /// ("bake" | "import"). Throws `SupertonicStyleError` for a malformed style.
++    public func writeSupertonicStyle(_ data: Data, slug: String, source: String) throws {
++        try SupertonicStyleFile.validate(data)
++        let voiceDir = directory.appendingPathComponent(slug)
++        guard FileManager.default.fileExists(atPath: voiceDir.path) else {
++            throw StudioError.voiceNotFound(slug: slug)
++        }
++        try data.write(to: voiceDir.appendingPathComponent("supertonic.json"), options: .atomic)
++        var (meta, _) = try get(slug)
++        meta.supertonicSource = source
++        meta.supertonicBakedAt = Self.timestamp()
++        try write(meta, to: voiceDir)
++    }
++
++    /// Remove a voice's SuperTonic style and clear its markers (no-op if absent).
++    public func deleteSupertonicStyle(slug: String) throws {
++        let url = supertonicStyleURL(slug: slug)
++        if FileManager.default.fileExists(atPath: url.path) {
++            try FileManager.default.removeItem(at: url)
++        }
++        if var meta = try? get(slug).meta,
++           meta.supertonicSource != nil || meta.supertonicBakedAt != nil {
++            meta.supertonicSource = nil
++            meta.supertonicBakedAt = nil
++            try write(meta, to: directory.appendingPathComponent(slug))
++        }
++    }
++
++    /// Create a new voice from a SuperTonic style JSON alone (e.g. a Voice Builder
++    /// export or a shared style) — no reference audio. The voice is SuperTonic-only
++    /// until a reference is added. Returns the new slug.
++    @discardableResult
++    public func importVoiceFromSupertonic(_ data: Data, name: String) throws -> String {
++        try SupertonicStyleFile.validate(data)
++        let slug = try Slug.slugify(name)
++        let voiceDir = directory.appendingPathComponent(slug)
++        guard !FileManager.default.fileExists(atPath: voiceDir.path) else {
++            throw StudioError.voiceExists(slug: slug)
++        }
++        try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
++        try data.write(to: voiceDir.appendingPathComponent("supertonic.json"), options: .atomic)
++        let now = Self.timestamp()
++        let meta = VoiceMeta(name: name, slug: slug, refText: "", createdAt: now,
++                             supertonicBakedAt: now, supertonicSource: "import")
++        try write(meta, to: voiceDir)
++        return slug
++    }
++
+     /// Sets (or clears, with nil) the chat persona on a stored voice.
+     @discardableResult
+     public func setPersona(_ slug: String, persona: Persona?) throws -> VoiceMeta {
+diff --git a/Tests/StudioKitTests/VoiceLibraryTests.swift b/Tests/StudioKitTests/VoiceLibraryTests.swift
+index 7173ea3e..0861caa2 100644
+--- a/Tests/StudioKitTests/VoiceLibraryTests.swift
++++ b/Tests/StudioKitTests/VoiceLibraryTests.swift
+@@ -202,6 +202,75 @@ final class VoiceLibraryTests: XCTestCase {
+ }
+ 
+ extension VoiceLibraryTests {
++    /// Minimal valid SuperTonic style JSON: unit-norm rows ([1,0,0,...]) at the right dims.
++    private func validStyleData() -> Data {
++        func tensor(_ dims: [Int]) -> [String: Any] {
++            let rowLen = dims.last!, rows = dims.reduce(1, *) / rowLen
++            var data: [Double] = []
++            for _ in 0..<rows { var row = [Double](repeating: 0, count: rowLen); row[0] = 1.0; data += row }
++            return ["dims": dims, "data": data]
++        }
++        return try! JSONSerialization.data(withJSONObject: [
++            "style_ttl": tensor([1, 50, 256]), "style_dp": tensor([1, 8, 16]),
++        ])
++    }
++
++    func testImportCreatesSupertonicOnlyVoice() throws {
++        let slug = try lib.importVoiceFromSupertonic(validStyleData(), name: "Imported DJ")
++        XCTAssertEqual(slug, "imported-dj")
++        XCTAssertTrue(lib.hasSupertonicStyle(slug: slug))
++        let (meta, refURL) = try lib.get(slug)
++        XCTAssertFalse(FileManager.default.fileExists(atPath: refURL.path)) // no ref.wav
++        XCTAssertEqual(meta.supertonicSource, "import")
++        XCTAssertTrue(meta.supertonicBakedAt?.hasSuffix("Z") ?? false)
++    }
++
++    func testImportRejectsInvalidStyle() {
++        XCTAssertThrowsError(try lib.importVoiceFromSupertonic(Data("nope".utf8), name: "Bad"))
++    }
++
++    func testWriteSupertonicStyleSetsMarkers() throws {
++        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
++        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
++        XCTAssertTrue(lib.hasSupertonicStyle(slug: "cruz"))
++        let meta = try lib.get("cruz").meta
++        XCTAssertEqual(meta.supertonicSource, "bake")
++        XCTAssertNotNil(meta.supertonicBakedAt)
++    }
++
++    func testDeleteSupertonicStyleClearsMarkers() throws {
++        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
++        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
++        try lib.deleteSupertonicStyle(slug: "cruz")
++        XCTAssertFalse(lib.hasSupertonicStyle(slug: "cruz"))
++        let meta = try lib.get("cruz").meta
++        XCTAssertNil(meta.supertonicSource)
++        XCTAssertNil(meta.supertonicBakedAt)
++    }
++
++    func testRefWavChangeInvalidatesSupertonicStyle() throws {
++        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
++        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
++        _ = try lib.update("cruz", refWav: Data([9, 9])) // new audio → stale bake
++        XCTAssertFalse(lib.hasSupertonicStyle(slug: "cruz"))
++        XCTAssertNil(try lib.get("cruz").meta.supertonicSource)
++    }
++
++    func testRefTextOnlyEditPreservesSupertonicStyle() throws {
++        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
++        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
++        _ = try lib.update("cruz", refText: "fixed typo") // transcript-only edit keeps the bake
++        XCTAssertTrue(lib.hasSupertonicStyle(slug: "cruz"))
++    }
++
++    func testRenameCarriesSupertonicStyle() throws {
++        _ = try lib.save(name: "Cruz", refWav: Data([1]), refText: "hi")
++        try lib.writeSupertonicStyle(validStyleData(), slug: "cruz", source: "bake")
++        let meta = try lib.update("cruz", name: "Night Cruz") // dir moves; style travels with it
++        XCTAssertEqual(meta.slug, "night-cruz")
++        XCTAssertTrue(lib.hasSupertonicStyle(slug: "night-cruz"))
++    }
++
+     func testRenameCarriesVariantDirectories() throws {
+         let lib = VoiceLibrary(directory: FileManager.default.temporaryDirectory
+             .appendingPathComponent("voicelib-rename-\(UUID().uuidString)"))
+-- 
+2.54.0 (Apple Git-157)
+

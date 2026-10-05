@@ -1,0 +1,71 @@
+From a4a40e48a364438b7a5a24146127d97b8089840b Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Wed, 22 Jul 2026 20:44:24 -0400
+Subject: [PATCH 12/12] feat(engine): BackendSpec.supportsOfflineBake (true for
+ SuperTonic)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/EngineKit/Backend.swift         | 19 ++++++++++++++++++-
+ Tests/EngineKitTests/BackendTests.swift |  8 ++++++++
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/Sources/EngineKit/Backend.swift b/Sources/EngineKit/Backend.swift
+index 6d8c2da5..81d1c7df 100644
+--- a/Sources/EngineKit/Backend.swift
++++ b/Sources/EngineKit/Backend.swift
+@@ -248,6 +248,22 @@ public struct BackendSpec: Sendable, Equatable {
+     public let needsRefAudio: Bool
+     /// Minimum physical RAM (decimal bytes) to safely load/run this backend.
+     public let minRAMBytes: Int64
++    /// The engine can bake a custom voice offline from a reference clip (produces a
++    /// per-voice SuperTonic style). Distinct from `ControlSurface.voiceClone`, which
++    /// means clone *at synth time*; a bake is an offline job whose result is stored.
++    public let supportsOfflineBake: Bool
++
++    public init(modelRepo: String, defaultSampleRate: Int, honorsTags: Bool,
++                needsLicenseAck: Bool, needsRefAudio: Bool, minRAMBytes: Int64,
++                supportsOfflineBake: Bool = false) {
++        self.modelRepo = modelRepo
++        self.defaultSampleRate = defaultSampleRate
++        self.honorsTags = honorsTags
++        self.needsLicenseAck = needsLicenseAck
++        self.needsRefAudio = needsRefAudio
++        self.minRAMBytes = minRAMBytes
++        self.supportsOfflineBake = supportsOfflineBake
++    }
+ }
+ 
+ extension BackendID {
+@@ -299,7 +315,8 @@ extension BackendID {
+             BackendSpec(modelRepo: "tinytrashlabs/supertonic-3-mlx",
+                         defaultSampleRate: 44100, honorsTags: false,
+                         needsLicenseAck: true, needsRefAudio: false,
+-                        minRAMBytes: 8_000_000_000)
++                        minRAMBytes: 8_000_000_000,
++                        supportsOfflineBake: true)
+         }
+     }
+ }
+diff --git a/Tests/EngineKitTests/BackendTests.swift b/Tests/EngineKitTests/BackendTests.swift
+index 127e24a2..38b84a5a 100644
+--- a/Tests/EngineKitTests/BackendTests.swift
++++ b/Tests/EngineKitTests/BackendTests.swift
+@@ -24,6 +24,14 @@ final class BackendTests: XCTestCase {
+         XCTAssertFalse(BackendID.chatterbox.isQwen)
+     }
+ 
++    func testSupertonicSupportsOfflineBake() {
++        XCTAssertTrue(BackendID.supertonic.spec.supportsOfflineBake)
++        XCTAssertFalse(BackendID.chatterbox.spec.supportsOfflineBake)
++        XCTAssertFalse(BackendID.qwenCustom.spec.supportsOfflineBake)
++        // Offline bake is a distinct capability from clone-at-synth-time.
++        XCTAssertEqual(BackendID.supertonic.controls.voiceClone, .none)
++    }
++
+     func testLegacyQwenMigration() {
+         XCTAssertEqual(BackendID.migrating(rawValue: "qwen3"), .qwen06B)
+         XCTAssertEqual(BackendID.migrating(rawValue: "fish-s2-pro"), .fishS2Pro)
+-- 
+2.54.0 (Apple Git-157)
+
