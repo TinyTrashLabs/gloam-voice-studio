@@ -665,7 +665,7 @@ struct StudioView: View {
     private func directExplainer(_ b: BackendID) -> String {
         switch b {
         case .qwen06BANE:
-            "Clones a voice from a reference clip on the Neural Engine, and streams the first words while the line renders. (API server only.)"
+            "Clones a voice from a reference clip and its transcript on the Neural Engine, so it runs beside a chat model on the GPU. Voices without a transcript can't use it."
         case .qwen06B, .qwen06BMobile, .qwen17B:
             "Clones a voice from a reference clip — pick one above. (To steer delivery with words, use qwen3-design or qwen3-custom instead.)"
         case .qwenDesign:

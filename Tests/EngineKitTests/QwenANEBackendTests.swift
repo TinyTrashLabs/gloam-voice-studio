@@ -38,9 +38,15 @@ final class QwenANEBackendTests: XCTestCase {
         XCTAssertTrue(b.needsRefText)
         XCTAssertTrue(b.spec.needsRefAudio)
         XCTAssertEqual(b.spec.defaultSampleRate, 24000)
-        XCTAssertEqual(b.surfaces, [.apiServer], "hand-installed model set: API only, not in pickers or the downloader")
-        XCTAssertTrue(b.installsManually)
-        XCTAssertFalse(BackendID.qwen06BMobile.installsManually)
+        XCTAssertEqual(b.surfaces, [.studio, .chatVoice, .apiServer, .downloadable])
+        XCTAssertTrue(BackendID.on(.studio).contains(b))
+        XCTAssertTrue(BackendID.on(.chatVoice).contains(b))
+        XCTAssertEqual(b.spec.modelRepo, "tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE")
+        XCTAssertEqual(b.modelRepo(quant: nil), "tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE")
+        XCTAssertEqual(b.modelRepo(quant: .q4), "tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE", "one fixed set, no precisions")
+        XCTAssertEqual(b.diskFolder(quantRaw: nil), QwenANEModelLocation.folderName)
+        XCTAssertTrue(b.sharesFolderWithUser)
+        XCTAssertFalse(BackendID.qwen06BMobile.sharesFolderWithUser)
         XCTAssertEqual(b.availableQuants, [])
     }
 

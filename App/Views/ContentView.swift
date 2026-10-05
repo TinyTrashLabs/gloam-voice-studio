@@ -279,6 +279,7 @@ struct ContentView: View {
         switch b {
         case .qwen06B: "qwen3-0.6b · clone a voice"
         case .qwen06BMobile: "qwen3-0.6b-mobile · clone a voice (smaller, phone bake)"
+        case .qwen06BANE: "qwen3-0.6b-ane · clone a voice (Neural Engine)"
         case .qwen17B: "qwen3-1.7b · clone a voice"
         case .qwenDesign: "qwen3-design · design from text"
         case .qwenCustom: "qwen3-custom · direct a preset voice"

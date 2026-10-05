@@ -1245,11 +1245,15 @@ final class AppModel {
     // MARK: model residency
 
     func refreshEngineStatus() async {
-        loadedBackend = await engine.loadedBackend()
+        // A Neural Engine model sits in its own engine (shared with the API lane), so it reads as the Studio's
+        // loaded model only while it is the selected one; it never displaces a GPU model's status otherwise.
+        let neural = await neuralSpeechEngine.loadedBackend()
+        loadedBackend = neural != nil && neural == backend ? neural : await engine.loadedBackend()
         loadedChatTTS = await chatSpeechEngine.loadedBackend()
         loadedLLM = await engine.loadedLLM()
         let footprints = await engine.measuredFootprints()
             .merging(await chatSpeechEngine.measuredFootprints()) { a, _ in a }
+            .merging(await neuralSpeechEngine.measuredFootprints()) { a, _ in a }
         measuredGB = footprints.mapValues { Double($0) / 1_073_741_824 }
         // Residency DRIVES selection: what is in memory is what is selected,
         // so a picker can never name a model that isn't loaded. Without this
@@ -1291,10 +1295,18 @@ final class AppModel {
         modelOpInFlight = true
         loadingBackend = backend
         defer { modelOpInFlight = false; loadingBackend = nil }
-        await ttsResidency.willUse(engine)
-        do { try await engine.preload(backend: backend) }
+        let target = speechEngine(for: backend, default: engine)
+        if backend.speechFamily == .gpu { await ttsResidency.willUse(target) }
+        do { try await target.preload(backend: backend) }
         catch { generationError = describeAny(error) }
         await refreshEngineStatus()
+    }
+
+    /// The engine `backend` renders on from the Studio and chat: the API's Neural Engine lane for a Neural
+    /// Engine backend — one loaded Core ML model shared with the API (and its prewarm), serialized by that
+    /// engine's task chain, rendering beside GPU work — else `fallback`.
+    func speechEngine(for backend: BackendID, default fallback: GloamEngine) -> GloamEngine {
+        backend.speechFamily == .neuralEngine ? neuralSpeechEngine : fallback
     }
 
     /// Load the chat LLM into residency now, rather than waiting for the first
@@ -1374,7 +1386,7 @@ final class AppModel {
                         backendOverride: BackendID? = nil,
                         engineOverride: GloamEngine? = nil) async throws -> SynthesisResult {
         let backend = backendOverride ?? self.backend
-        let engine = engineOverride ?? self.engine
+        let engine = speechEngine(for: backend, default: engineOverride ?? self.engine)
         guard downloads.state(for: backend) == .ready else {
             throw AppGenerationError(
                 message: "Download the \(backend.rawValue) model in Settings → Models first.")
@@ -1543,8 +1555,9 @@ final class AppModel {
             seed: backend == .breezeTTS2 && breezeSeedLocked ? UInt64(breezeSeed) : nil,
             dialoguePrefix: dialoguePrefix)
         // Must precede queuing work on `engine` (see TTSResidencyPolicy's
-        // deadlock-safety contract).
-        await ttsResidency.willUse(engine)
+        // deadlock-safety contract). Not for the Neural Engine lane: the policy
+        // keeps one GPU model resident, and the ANE model is not one.
+        if backend.speechFamily == .gpu { await ttsResidency.willUse(engine) }
         let raw = interleaved
             ? try await engine.synthesizeInterleaved(backend: backend, request: request)
             : try await engine.synthesize(backend: backend, request: request)
@@ -2054,8 +2067,9 @@ final class AppModel {
                     : SynthesisRequest(text: text, refAudioPath: refURL.path,
                                        refText: baseRefText,
                                        exaggerationOverride: expr.chatterboxExaggeration)
-                await ttsResidency.willUse(engine)
-                let raw = try await engine.synthesize(backend: baker, request: request)
+                let bakeEngine = speechEngine(for: baker, default: engine)
+                if baker.speechFamily == .gpu { await ttsResidency.willUse(bakeEngine) }
+                let raw = try await bakeEngine.synthesize(backend: baker, request: request)
                 let samples = AudioAssembler.normalizePeak(floats: raw.samples)
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
                 try voices.saveAt(slug: "\(baseSlug)-\(expr.rawValue)",
