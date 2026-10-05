@@ -64,4 +64,5 @@ final class TakeCombinerTests: XCTestCase {
             XCTAssertFalse(line.contains("cap") || line.contains("over") || line.contains("window"), line)
         }
     }
+
 }

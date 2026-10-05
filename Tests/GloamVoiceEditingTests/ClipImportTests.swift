@@ -56,6 +56,13 @@ final class ClipImportTests: XCTestCase {
         let imported = try ClipImport.prepare(try wav(speech(seconds: 150)))
         XCTAssertEqual(imported.seconds, 150, accuracy: 0.5)
         XCTAssertEqual(Double(imported.samples.count) / Double(sr), imported.seconds, accuracy: 0.01)
+        XCTAssertFalse(imported.cleaned)
+    }
+
+    /// A recorded take is already cleaned; the store must not clean it twice.
+    func testAPreparedTakeSaysItIsAlreadyCleaned() throws {
+        let take = try ClipImport.prepareTake(try wav(speech(seconds: 5)))
+        XCTAssertTrue(take.cleaned)
     }
 
     func testAQuietClipIsFlaggedInFileWords() throws {

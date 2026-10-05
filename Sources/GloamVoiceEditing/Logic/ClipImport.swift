@@ -53,16 +53,24 @@ public enum ClipImport {
         public let samples: [Float]
         /// Level, noise, clipping — the same measurement a recording gets.
         public let quality: RecordingCheck.Quality
+        /// True when `samples` / the file already went through
+        /// `RecordingCleanup` (a recorded take, `prepareTake`) -- the store
+        /// must not clean it a second time on save.
+        public var cleaned = false
 
-        public init(url: URL, seconds: Double, samples: [Float], quality: RecordingCheck.Quality) {
+        public init(url: URL, seconds: Double, samples: [Float], quality: RecordingCheck.Quality,
+                    cleaned: Bool = false) {
             self.url = url; self.seconds = seconds
             self.samples = samples; self.quality = quality
+            self.cleaned = cleaned
         }
     }
 
     /// Decode, downmix, resample, length-check, and write a clean 24 kHz mono
     /// WAV into the app's temp directory. The whole clip is kept: it is the
     /// voice's master, and each engine picks the section it can use.
+    /// (The iPhone's copy cut an import to LuxTTS's 15 s here; deliberately
+    /// not ported: sections are the pack's, prepared by the library.)
     public static func prepare(_ src: URL) throws -> Imported {
         // Files handed over by the document picker live outside the sandbox.
         let scoped = src.startAccessingSecurityScopedResource()
@@ -111,6 +119,6 @@ public enum ClipImport {
             .appendingPathComponent("take-\(UUID().uuidString).wav")
         try VoicePlayer.wavData(samples: cleaned, sampleRate: sampleRate).write(to: url)
         return Imported(url: url, seconds: Double(cleaned.count) / Double(sampleRate),
-                        samples: cleaned, quality: quality)
+                        samples: cleaned, quality: quality, cleaned: true)
     }
 }

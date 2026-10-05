@@ -15,8 +15,6 @@ public enum VoiceStoreError: Error, Equatable {
     case emptyTranscript
     /// `rebuildMaster` was asked to build from no takes.
     case noTakes
-    /// `clearWindow` on a master past the engine's cap: without a window
-    /// the voice could not render.
 }
 
 /// Turns an error from the import/save path into one plain sentence for an
@@ -33,9 +31,9 @@ public func userMessage(for error: Error) -> String {
             // Those read very differently to a user, so split on the detail.
             if detail.localizedCaseInsensitiveContains("nothing to install")
                 || detail.localizedCaseInsensitiveContains("no base variant") {
-                return "This pack has nothing to install."
+                return "This voice file has nothing to install."
             }
-            return "This file isn't a voice pack."
+            return "This file isn't a Gloam voice."
         case .voiceExists:
             return "A voice with that name already exists."
         case .invalidName:
@@ -51,7 +49,7 @@ public func userMessage(for error: Error) -> String {
     if let store = error as? VoiceStoreError {
         switch store {
         case .packTooLarge:
-            return "This voice pack is too large to import (limit 64 MB)."
+            return "This voice file is too large to import (limit 64 MB)."
         case .notFoundAfterSave:
             return "That voice couldn't be saved."
         case .unreadableImage:

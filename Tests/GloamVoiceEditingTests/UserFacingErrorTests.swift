@@ -5,12 +5,12 @@ import GVoiceKit
 final class UserFacingErrorTests: XCTestCase {
     func testNothingToInstallMapsToAPlainSentence() {
         let error = StudioError.invalidArchive("archive has no base variant to install")
-        XCTAssertEqual(userMessage(for: error), "This pack has nothing to install.")
+        XCTAssertEqual(userMessage(for: error), "This voice file has nothing to install.")
     }
 
     func testUnrecognizedArchiveMapsToAPlainSentence() {
         let error = StudioError.invalidArchive("not a valid .gvoice archive: corrupt zip")
-        XCTAssertEqual(userMessage(for: error), "This file isn't a voice pack.")
+        XCTAssertEqual(userMessage(for: error), "This file isn't a Gloam voice.")
     }
 
     func testVoiceExistsMapsToAPlainSentence() {
@@ -32,7 +32,7 @@ final class UserFacingErrorTests: XCTestCase {
         XCTAssertEqual(userMessage(for: VoiceStoreError.unreadableImage),
                        "That picture couldn't be read.")
         XCTAssertEqual(userMessage(for: VoiceStoreError.packTooLarge),
-                       "This voice pack is too large to import (limit 64 MB).")
+                       "This voice file is too large to import (limit 64 MB).")
     }
 
     /// Anything not specially handled falls back to the error's own description.
@@ -42,4 +42,5 @@ final class UserFacingErrorTests: XCTestCase {
         }
         XCTAssertEqual(userMessage(for: OtherError()), "Something unrelated went wrong.")
     }
+
 }

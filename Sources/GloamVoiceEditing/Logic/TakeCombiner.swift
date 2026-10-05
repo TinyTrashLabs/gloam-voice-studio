@@ -38,8 +38,10 @@ public enum TakeCombiner {
 /// `RecordingCheck`'s (tuned on real takes, 2026-09-09); this decides which
 /// of them stop a Save and which only warn.
 public enum TakeRules {
-    // No length cap: a master may be any reasonable length, and each engine
-    // that listens to less picks its own section of it.
+    // No length cap, and no length warning: a master may be any length, and
+    // each length-limited engine's section is prepared into the pack. (The
+    // iPhone's copy still capped takes at LuxTTS's 30 s; deliberately not
+    // ported.)
 
     public enum Verdict: Equatable {
         case good
