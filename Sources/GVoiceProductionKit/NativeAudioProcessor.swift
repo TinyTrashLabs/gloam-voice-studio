@@ -40,6 +40,13 @@ public enum NativeAudioProcessor {
         return .init(sampleRate: input.sampleRate, channels: input.channels.map { Array($0[start..<end]) })
     }
 
+    /// Upmixes a mono buffer to stereo by duplicating its one channel (the vocal separator needs two);
+    /// a buffer that already has two or more channels is returned unchanged.
+    public static func stereo(_ input: ReferenceAudioBuffer) -> ReferenceAudioBuffer {
+        guard input.channelCount == 1 else { return input }
+        return .init(sampleRate: input.sampleRate, channels: [input.channels[0], input.channels[0]])
+    }
+
     public static func mono(_ input: ReferenceAudioBuffer) -> ReferenceAudioBuffer {
         guard input.channelCount > 1 else { return input }
         var output = [Float](repeating: 0, count: input.frameCount)

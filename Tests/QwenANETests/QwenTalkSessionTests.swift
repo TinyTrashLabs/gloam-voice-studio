@@ -8,10 +8,7 @@ import XCTest
 @available(macOS 15.0, iOS 18.0, *)
 final class QwenTalkSessionTests: XCTestCase {
     private func engine() throws -> QwenANEEngine {
-        guard let p = ProcessInfo.processInfo.environment["QWEN_ANE_MODELS"], !p.isEmpty else {
-            throw XCTSkip("QWEN_ANE_MODELS is not set")
-        }
-        return try QwenANEEngine(modelsDirectory: URL(fileURLWithPath: p))
+        try QwenTestModels.engine()
     }
 
     static let parts = [
@@ -42,6 +39,7 @@ final class QwenTalkSessionTests: XCTestCase {
     }
 
     func testABreakIsReproducibleAndEachPartContinuesThePreviousOne() throws {
+        try QwenTestModels.requireSlow()
         let e = try engine()
         let voice = try e.loadVoice(named: "jeff")
         func renderBreak(carry: Bool) throws -> [QwenRender] {
@@ -63,6 +61,7 @@ final class QwenTalkSessionTests: XCTestCase {
     }
 
     func testAPlainRenderIsUnchangedBySessions() throws {
+        try QwenTestModels.requireSlow()
         let e = try engine()
         let voice = try e.loadVoice(named: "jeff")
         let before = try e.render(text: Self.parts[1], voice: voice, seed: 7)

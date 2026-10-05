@@ -156,6 +156,7 @@ final class QwenVoicePrepTests: XCTestCase {
     // MARK: with models
 
     func testParityAgainstCoreMLPythonReference() throws {
+        try QwenTestModels.requireSlow()
         try Self.requirePacks()
         let models = try modelsDirectory()
         for slug in Self.slugs {
@@ -190,6 +191,7 @@ final class QwenVoicePrepTests: XCTestCase {
     }
 
     func testCacheRoundTripWithModels() throws {
+        try QwenTestModels.requireSlow()
         try Self.requirePacks()
         let models = try modelsDirectory()
         guard let ref = try? Data(contentsOf: URL(fileURLWithPath: "\(Self.packs)/benson/source/ref.wav")) else { throw XCTSkip("no benson clip") }
