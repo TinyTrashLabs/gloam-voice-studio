@@ -76,37 +76,10 @@ public enum LuxReferenceWindow {
     /// signal is a spec that drifts. Shipping the audio makes the reference
     /// the pack's, not the reader's. `derivedFrom` keeps the provenance so the
     /// window is still traceable to the master it came out of.
-    public struct Rendition: Codable, Equatable, Sendable {
-        public struct DerivedFrom: Codable, Equatable, Sendable {
-            /// Pack-relative path of the master this was cut from.
-            public var audio: String?
-            public var startSeconds: Double
-            public var endSeconds: Double
-            /// Length of the master at derivation time. A master that no
-            /// longer matches has been replaced, and this window with it.
-            public var sourceSeconds: Double
-            /// How the transcript was produced: "on-device-asr", "transcript-slice"
-            /// (the master's own transcript cut to the span) or "user".
-            public var by: String?
-            /// SHA-256 of the master's bytes when the section was cut. A section
-            /// whose master no longer hashes to this is stale and is replaced.
-            /// Absent on sections written before this field existed (accepted).
-            public var sourceSha256: String?
-            public init(audio: String? = nil, startSeconds: Double, endSeconds: Double,
-                        sourceSeconds: Double, by: String? = nil, sourceSha256: String? = nil) {
-                self.audio = audio; self.startSeconds = startSeconds; self.endSeconds = endSeconds
-                self.sourceSeconds = sourceSeconds; self.by = by; self.sourceSha256 = sourceSha256
-            }
-        }
-        /// Pack-relative path of the window audio.
-        public var audio: String
-        /// Transcript of the WINDOW, not of the master.
-        public var text: String
-        public var derivedFrom: DerivedFrom?
-        public init(audio: String, text: String, derivedFrom: DerivedFrom? = nil) {
-            self.audio = audio; self.text = text; self.derivedFrom = derivedFrom
-        }
-    }
+    /// The format type lives in GVoiceKit (`ReferenceWindowRendition`) so a
+    /// client without EngineKit -- GloamVoiceEditing, the iPhone and radio
+    /// editors -- reads and writes the same JSON. Source compatible.
+    public typealias Rendition = ReferenceWindowRendition
 
     /// Where a voice's section for `engine` lives on disk, mirroring its layout
     /// inside a pack (`engines/<engine>/…` beside `source/`). VoiceLibrary

@@ -76,4 +76,16 @@ final class ReferenceSectionsPackTests: XCTestCase {
         let written = await lib.prepareSections("cruz")
         XCTAssertEqual(written, [])
     }
+
+    /// A section is part of the pack: writing one is a new revision; keeping one is not.
+    func testWritingASectionBumpsTheRevisionAndKeepingOneDoesNot() async throws {
+        _ = try lib.save(name: "Cruz", refWav: master(seconds: 70), refText: words)
+        let before = try lib.meta("cruz").revision ?? 0
+        let written = await lib.prepareSections("cruz")
+        XCTAssertFalse(written.isEmpty)
+        XCTAssertEqual(try lib.meta("cruz").revision, before + 1)
+        let again = await lib.prepareSections("cruz")
+        XCTAssertEqual(again, [])
+        XCTAssertEqual(try lib.meta("cruz").revision, before + 1)
+    }
 }

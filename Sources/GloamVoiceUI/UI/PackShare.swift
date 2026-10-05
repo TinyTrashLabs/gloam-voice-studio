@@ -121,7 +121,7 @@ private final class PackActivityItem: NSObject, UIActivityItemSource {
                                 itemForActivityType _: UIActivity.ActivityType?) -> Any? { url }
     func activityViewController(_: UIActivityViewController,
                                 subjectForActivityType _: UIActivity.ActivityType?) -> String {
-        "\(voice.name) — Gloam voice pack"
+        "\(voice.name) — Gloam voice"
     }
     func activityViewControllerLinkMetadata(_: UIActivityViewController) -> LPLinkMetadata? {
         let meta = LPLinkMetadata()
@@ -147,7 +147,7 @@ private struct MacShareSheet: View {
             Text("Gloam voice pack · \(ready.url.lastPathComponent)")
                 .font(t.console(11)).foregroundStyle(t.fgFaint)
             HStack(spacing: 12) {
-                ShareLink(item: ready.url, subject: Text("\(ready.voice.name) — Gloam voice pack")) {
+                ShareLink(item: ready.url, subject: Text("\(ready.voice.name) — Gloam voice")) {
                     Label("Share…", systemImage: "square.and.arrow.up")
                 }
                 Button("Show in Finder", systemImage: "folder") {

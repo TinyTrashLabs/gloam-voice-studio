@@ -52,16 +52,14 @@ public struct TakesSection: View {
             Button(transcribing ? "Listening to the file…" : "Import a take", systemImage: "square.and.arrow.down") {
                 player.stop()
                 // The importer opens only after the host's one-time consent.
-                if host.capabilities.consent?.isRequired() == true { askingConsent = true } else { importing = true }
+                if host.needsConsent { askingConsent = true } else { importing = true }
             }
             .font(t.sans(14)).tint(t.accent)
             .disabled(transcribing)
             .sheet(isPresented: $askingConsent) {
-                if let gate = host.capabilities.consent {
-                    gate.sheet(
-                        { askingConsent = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importing = true } },
-                        { askingConsent = false })
-                }
+                host.consentView(
+                        onAccept: { askingConsent = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importing = true } },
+                        onCancel: { askingConsent = false })
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
                 switch result {
