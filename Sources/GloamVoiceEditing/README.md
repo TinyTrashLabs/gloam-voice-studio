@@ -4,7 +4,7 @@ The shared voice-editing API. Every app that edits a Gloam voice -- the iPhone
 Studio, the Mac Studio, the radio -- uses it.
 
 **Apps own their screens; behaviour lives here.** No SwiftUI, no UIKit/AppKit
-views (`grep -rn "import SwiftUI" Sources/GloamVoiceEditing` stays empty).
+views: nothing in this target imports a UI framework.
 Foundation, Combine, AVFoundation, Accelerate, NaturalLanguage and GVoiceKit
 only -- no EngineKit, so it links on iOS without MLX. `GloamVoiceUI` is a set of
 reference SwiftUI screens built on it (and re-exports it); an app may use those
