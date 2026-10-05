@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class PromptCacheTests: XCTestCase {
     private var cache: PromptCache<FakePrompt>!

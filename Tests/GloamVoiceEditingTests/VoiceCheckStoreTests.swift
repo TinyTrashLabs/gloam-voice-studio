@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class VoiceCheckStoreTests: XCTestCase {
     private var dir: URL!

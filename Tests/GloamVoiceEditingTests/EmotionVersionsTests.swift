@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class EmotionVersionsTests: XCTestCase {
     func testVariantSlugAndNameFollowTheLibraryRule() {

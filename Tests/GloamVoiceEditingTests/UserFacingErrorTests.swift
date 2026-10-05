@@ -1,6 +1,6 @@
 import XCTest
 import GVoiceKit
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class UserFacingErrorTests: XCTestCase {
     func testNothingToInstallMapsToAPlainSentence() {

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftUI
+import Combine
 
 /// What the takes tell the editor: whether Save has work to do (the master
 /// is stale), what stops it if anything does, and how much there is.

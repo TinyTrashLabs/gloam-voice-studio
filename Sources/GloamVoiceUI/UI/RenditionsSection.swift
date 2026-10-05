@@ -12,27 +12,15 @@ public struct RenditionsSection: View {
 
     public init(voice: Voice) { self.voice = voice }
 
-    /// Engine id → (file name, size) rows, engines sorted.
+    /// The rows and labels are `Renditions`' (GloamVoiceEditing); these
+    /// forward so existing callers keep compiling.
     public static func rows(engines: [String: [String: URL]]) -> [(engine: String, files: [(name: String, bytes: Int)])] {
-        engines.keys.sorted().map { engine in
-            let files = (engines[engine] ?? [:]).keys.sorted().map { name -> (String, Int) in
-                let bytes = (try? FileManager.default.attributesOfItem(atPath: engines[engine]![name]!.path)[.size] as? Int) ?? 0
-                return (name, bytes)
-            }
-            return (engine, files)
-        }
+        Renditions.rows(engines: engines)
     }
-
-    /// The overrides worth listing beside the Pace slider: every engine's
-    /// but `lux-tts`, whose override the slider itself shows.
     public static func paceOverrides(_ enginePace: [String: Double]?) -> [(engine: String, pace: Double)] {
-        (enginePace ?? [:]).filter { $0.key != "lux-tts" && $0.value > 0 }
-            .keys.sorted().map { ($0, enginePace![$0]!) }
+        Renditions.paceOverrides(enginePace)
     }
-
-    public static func sizeLabel(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-    }
+    public static func sizeLabel(_ bytes: Int) -> String { Renditions.sizeLabel(bytes) }
 
     public var body: some View {
         let engines = host.store.engineFiles(of: voice.slug)

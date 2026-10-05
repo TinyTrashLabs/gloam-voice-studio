@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 /// A clone recording is checked, not trusted: the script must have been
 /// read (or what was said becomes the transcript), and the take must be

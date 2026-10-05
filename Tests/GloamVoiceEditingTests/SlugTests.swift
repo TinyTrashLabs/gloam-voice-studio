@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 /// Copied from StudioKit's `Slug` (gloam-voice-studio) so both apps mint the
 /// same slug for the same name. Keep the cases in sync with SlugTests there.

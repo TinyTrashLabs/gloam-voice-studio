@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class TakeCombinerTests: XCTestCase {
     private let sr = 24_000

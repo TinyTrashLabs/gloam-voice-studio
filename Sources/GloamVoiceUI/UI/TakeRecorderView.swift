@@ -61,15 +61,13 @@ public struct TakeRecorderView: View {
         .preferredColorScheme(.dark)
         // The mic prompt waits for consent: it must not stack on the sheet.
         .onAppear {
-            if host.capabilities.consent?.isRequired() == true { needsConsent = true } else { rec.prewarm() }
+            if host.needsConsent { needsConsent = true } else { rec.prewarm() }
         }
         .onDisappear { rec.stop() }
         .sheet(isPresented: $needsConsent) {
-            if let gate = host.capabilities.consent {
-                gate.sheet(
-                    { needsConsent = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { rec.prewarm() } },
-                    { needsConsent = false; rec.stop(); onCancel() })
-            }
+            host.consentView(
+                    onAccept: { needsConsent = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { rec.prewarm() } },
+                    onCancel: { needsConsent = false; rec.stop(); onCancel() })
         }
     }
 

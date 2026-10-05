@@ -1,6 +1,6 @@
 import XCTest
 import GVoiceKit
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class ProvenanceLinesTests: XCTestCase {
     func testFlattensNestedObjectsAndArraysInKeyOrder() {

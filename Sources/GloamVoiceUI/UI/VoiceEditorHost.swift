@@ -1,78 +1,6 @@
 import Combine
 import SwiftUI
 
-/// What a host app does that the editor cannot: engine renders, recognition,
-/// the consent it owes before a microphone opens. Every member is optional; a
-/// section that needs a capability the host did not provide is not drawn.
-public struct VoiceEditorCapabilities {
-    /// On-device transcription of an audio file (ASR). Absent: "Listen for the
-    /// words" and "Transcribe window" are hidden, a recorded take is trusted to
-    /// say the script, and an imported take starts with empty words to type.
-    public var transcribe: (@Sendable (URL) async throws -> String)?
-    /// "Check this voice": test-renders the master (and a noise-cleaned
-    /// version of it) the way the voice is used and judges the result.
-    /// Absent: the row is hidden.
-    public var voiceCheck: VoiceCheckCapability?
-    /// Recording a take with the microphone. False hides "Record another
-    /// take", "Record a take" and "Add emotion version…".
-    public var canRecord = true
-    /// Asked once before a microphone or a file importer opens for a take.
-    public var consent: ConsentGate?
-    /// "this phone" in the editor's copy; "this Mac" on a Mac host.
-    public var deviceNoun = "this phone"
-
-    public init(transcribe: (@Sendable (URL) async throws -> String)? = nil,
-                voiceCheck: VoiceCheckCapability? = nil,
-                canRecord: Bool = true,
-                consent: ConsentGate? = nil,
-                deviceNoun: String = "this phone") {
-        self.transcribe = transcribe
-        self.voiceCheck = voiceCheck
-        self.canRecord = canRecord
-        self.consent = consent
-        self.deviceNoun = deviceNoun
-    }
-
-    public static let none = VoiceEditorCapabilities(canRecord: false)
-}
-
-/// The engine half of "Check this voice". The editor owns the flow (candidates
-/// → scoring → the person's pick); the host owns the engine.
-public struct VoiceCheckCapability {
-    /// Bring the render engine up (the Studio app activates its ONNX engine).
-    public var prepare: @Sendable () async -> Void
-    /// The original master, plus a noise-cleaned version when the take's noise
-    /// makes one worth offering and the host ships a denoiser.
-    public var candidates: @Sendable (_ master: URL, _ transcript: String, _ quality: RecordingCheck.Quality) async
-        -> [ReferenceCandidate]
-    public var renderer: TestRenderer
-    public var checker: PartChecker
-    /// Name of the engine that rendered, stored with the verdict.
-    public var engineName: @Sendable () -> String
-
-    public init(prepare: @escaping @Sendable () async -> Void,
-                candidates: @escaping @Sendable (URL, String, RecordingCheck.Quality) async -> [ReferenceCandidate],
-                renderer: TestRenderer, checker: PartChecker,
-                engineName: @escaping @Sendable () -> String) {
-        self.prepare = prepare; self.candidates = candidates
-        self.renderer = renderer; self.checker = checker; self.engineName = engineName
-    }
-}
-
-/// A one-time question a host asks before audio is added to a voice (the
-/// Studio app's "whose voice is this?"). The editor asks `isRequired`, shows
-/// `sheet` when it is, and carries on only once `onAccept` fires.
-public struct ConsentGate {
-    public var isRequired: @MainActor () -> Bool
-    public var sheet: @MainActor (_ onAccept: @escaping () -> Void, _ onCancel: @escaping () -> Void) -> AnyView
-
-    public init(isRequired: @escaping @MainActor () -> Bool,
-                sheet: @escaping @MainActor (_ onAccept: @escaping () -> Void, _ onCancel: @escaping () -> Void) -> AnyView) {
-        self.isRequired = isRequired
-        self.sheet = sheet
-    }
-}
-
 /// The editor's one environment object: a store, what the host can do beside
 /// it, and how it should look. Republishes the store's changes, so a view
 /// reading `host.store.voices` redraws when they change.
@@ -82,19 +10,49 @@ public struct ConsentGate {
 ///
 /// Attach it ABOVE the navigation stack: the editor is pushed and presented,
 /// and both inherit it from there.
+/// The host's consent screen: call the first closure when the person agrees,
+/// the second when they back out.
+public typealias ConsentSheet = @MainActor (_ onAccept: @escaping () -> Void, _ onCancel: @escaping () -> Void) -> AnyView
+
+/// A plain consent question for a host that set a `ConsentGate` but no sheet.
+struct DefaultConsentSheet: View {
+    let deviceNoun: String
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+    @Environment(\.voiceEditorTheme) private var t
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("Is this your voice?").font(t.mastheadItalic(26)).foregroundStyle(t.fg)
+            Text("Only add a voice that is yours, or one you have permission to use. It stays on \(deviceNoun).")
+                .font(t.sans(15)).foregroundStyle(t.fgDim).multilineTextAlignment(.center)
+            Button("It's mine, or I have permission", action: onAccept).buttonStyle(.borderedProminent).tint(t.accent)
+            Button("Cancel", role: .cancel, action: onCancel).tint(t.fgDim)
+        }
+        .padding(28)
+        .presentationDetents([.medium])
+    }
+}
+
 @MainActor
 public final class VoiceEditorHost: ObservableObject {
     public let store: any VoiceLibraryStore
     public var capabilities: VoiceEditorCapabilities
+    /// How the host asks for `capabilities.consent`: its own sheet, given
+    /// what to call when the person agrees or backs out. Nil draws
+    /// `DefaultConsentSheet`. Only consulted when the gate says it is required.
+    public var consentSheet: ConsentSheet?
     public var theme: VoiceEditorTheme
 
     private var forward: AnyCancellable?
 
     public init(store: any VoiceLibraryStore,
                 capabilities: VoiceEditorCapabilities = .none,
+                consentSheet: ConsentSheet? = nil,
                 theme: VoiceEditorTheme = .gloam) {
         self.store = store
         self.capabilities = capabilities
+        self.consentSheet = consentSheet
         self.theme = theme
         forward = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
@@ -102,13 +60,24 @@ public final class VoiceEditorHost: ObservableObject {
     public var features: VoiceLibraryFeatures { store.features }
 
     /// The reference's words, falling back to the voice's own `refText`.
-    func referenceText(for voice: Voice) -> String {
-        store.referenceText(of: voice.slug) ?? voice.refText
-    }
+    func referenceText(for voice: Voice) -> String { store.referenceText(for: voice) }
 
     /// Playback level for `voice`: the app's 0.8 default times its own trim.
-    func outputGain(for voice: Voice) -> Float {
-        VoicePlayer.outputGain(voiceGainDb: store.features.contains(.gain) ? voice.meta.gain : nil)
+    func outputGain(for voice: Voice) -> Float { store.outputGain(for: voice) }
+
+    /// Whether adding audio must first ask the host's consent question.
+    var needsConsent: Bool { capabilities.consent?.isRequired() == true }
+
+    /// The consent question, drawn by the host's sheet or the default one.
+    /// Agreeing records it through the gate before `onAccept` runs.
+    @ViewBuilder
+    func consentView(onAccept: @escaping () -> Void, onCancel: @escaping () -> Void) -> some View {
+        let accept = { [capabilities] in capabilities.consent?.accept(); onAccept() }
+        if let consentSheet {
+            consentSheet(accept, onCancel)
+        } else {
+            DefaultConsentSheet(deviceNoun: capabilities.deviceNoun, onAccept: accept, onCancel: onCancel)
+        }
     }
 }
 

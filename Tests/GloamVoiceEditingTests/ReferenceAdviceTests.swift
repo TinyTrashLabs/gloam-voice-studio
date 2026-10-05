@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class ReferenceAdviceTests: XCTestCase {
     private func q(seconds: Double = 12, speech: Float = -18, floor: Float = -60, clipped: Double = 0) -> RecordingCheck.Quality {

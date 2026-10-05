@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 /// Renders a stand-in per candidate: `bad` kinds come back as hiss (0s).
 private struct FakeRenderer: TestRenderer {

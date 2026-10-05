@@ -1,6 +1,6 @@
 import XCTest
 import GVoiceKit
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 final class VoiceFilterTests: XCTestCase {
     private func voice(_ name: String, notes: String? = nil, starter: Bool = false) -> Voice {

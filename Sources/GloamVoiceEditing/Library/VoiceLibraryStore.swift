@@ -236,3 +236,16 @@ extension VoiceLibraryStore {
 
     public func packExport(for voice: Voice, includeSource: Bool) -> (@Sendable () throws -> Data)? { nil }
 }
+
+public extension VoiceLibraryStore {
+    /// The reference's words, falling back to the voice's own `refText`.
+    func referenceText(for voice: Voice) -> String {
+        referenceText(of: voice.slug) ?? voice.refText
+    }
+
+    /// Playback level for `voice`: the app's 0.8 default times its own trim
+    /// (ignored when the store does not back `.gain`).
+    func outputGain(for voice: Voice) -> Float {
+        VoicePlayer.outputGain(voiceGainDb: features.contains(.gain) ? voice.meta.gain : nil)
+    }
+}

@@ -1,5 +1,5 @@
 import XCTest
-@testable import GloamVoiceUI
+@testable import GloamVoiceEditing
 
 /// The recogniser writes numbers as digits ("4:30", "9"); a script says
 /// them in words. Word matching normalises both sides to words first.
