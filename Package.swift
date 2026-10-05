@@ -107,7 +107,7 @@ let package = Package(
         // one performance like QwenTalkSession.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "233c0d71da3dfd8d83a4b51549e1ae01c50b11b8"),
+            revision: "0e87cace3a6ee948c6f7cd51de4a3cb5daa255b2"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
