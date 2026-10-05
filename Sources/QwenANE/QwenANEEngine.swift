@@ -30,7 +30,7 @@ public enum QwenANEError: Error, LocalizedError {
 }
 
 /// Per-line wall-clock timings, in seconds.
-public struct QwenTimings: Sendable {
+public struct QwenTimings: Sendable, Equatable {
     /// Prompt build: text projection, tokenizer, ICL rows.
     public var prompt: Double
     /// Talker prefill plus the first decode step.

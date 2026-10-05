@@ -182,6 +182,9 @@ public struct QwenBreakPart: Sendable, Equatable {
     public var renderSeconds: Double
     /// The most frames the part could generate (`QwenRender.frameCap`).
     public var frameCap: Int = 0
+    /// Engine stage timings of the take that was kept (prompt, prefill, loop, vocoder busy/wait), for hosts
+    /// that log where render time went. Nil when built outside `renderBreak`.
+    public var timings: QwenTimings? = nil
 
     public var logLine: String {
         String(format: "part %d: %d frames (cap %d), %.2f s audio in %.2f s, stop %@, takes %d, context %d frames, longest pause %.2f s%@ -- %@",
@@ -232,7 +235,8 @@ extension QwenTalkSession {
             let report = QwenBreakPart(index: i, text: part, frames: r.frames, takes: r.takes, stopReason: r.stopReason,
                                        contextFrames: r.contextFrames, longestPause: r.silenceBefore.longestPause,
                                        derailed: Self.derailed(r), audioSeconds: r.audioSeconds,
-                                       renderSeconds: Date().timeIntervalSince(t0), frameCap: r.frameCap)
+                                       renderSeconds: Date().timeIntervalSince(t0), frameCap: r.frameCap,
+                                       timings: r.timings)
             out.parts.append(report)
             onPart?(report)
             if r.stopReason == .cancelled { break }
