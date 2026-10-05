@@ -1,4 +1,5 @@
 import AVFAudio
+import EngineKit
 import Foundation
 import Observation
 
@@ -13,6 +14,11 @@ import Observation
 ///   streamed render plays gaplessly from its first piece; consecutive streamed
 ///   segments chain on the same node with no hand-off gap either. The caller
 ///   owns the fades (only at a segment's edges, see `StreamEdgeFader`).
+///
+/// A streamed reply is **paced** (`beginPacing` … `finishPacing`): the node holds until the queued
+/// audio covers the shortfall `PlaybackPacer` projects over the rest of the reply, so a render near real
+/// time plays through instead of underrunning between chunks; if it still runs dry mid-reply, the node
+/// pauses and re-buffers once (a longer lead each time) rather than stuttering chunk by chunk.
 ///
 /// Each item carries the text it voices so the transcript can karaoke-highlight
 /// the word being spoken: there is no word-level alignment from the TTS, so the
@@ -53,13 +59,23 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
     /// The segment whose pieces go straight to the node as they arrive.
     @ObservationIgnored private var feeding: Segment?
     /// Buffers scheduled on the node and not yet played, oldest first.
-    @ObservationIgnored private var outstanding: [(segment: Segment, firstOfSegment: Bool)] = []
+    @ObservationIgnored private var outstanding: [(segment: Segment, firstOfSegment: Bool, frames: Int)] = []
     /// The segment audible now, and where in the node's timeline it began.
     @ObservationIgnored private var sounding: Segment?
     @ObservationIgnored private var soundingStart: Double = 0
     /// Bumped by `stop()`: completions from before it are ignored.
     @ObservationIgnored private var epoch = 0
     @ObservationIgnored private var nextSegmentID = 0
+
+    // Pacing (a streamed reply, `beginPacing` … `finishPacing`).
+    @ObservationIgnored private var pacer: PlaybackPacer?
+    @ObservationIgnored private var pacingStart = ContinuousClock.now
+    /// The node is holding for lead: buffers are scheduled but it is not playing.
+    @ObservationIgnored private var held = false
+    /// The node's sample time when it was paused (a paused node reports none).
+    @ObservationIgnored private var heldAt: Double = 0
+    /// Audio queued when the reply first started sounding.
+    @ObservationIgnored private var initialLead: Double?
 
     /// `voiced` is the chunk's speech window in seconds (silence trimmed) —
     /// the karaoke estimate maps progress across it instead of the whole file,
@@ -83,6 +99,7 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
     /// when the segment is playing, held until its turn otherwise.
     func appendStream(_ id: Int, samples: [Float]) {
         guard !samples.isEmpty, let segment = segment(id) else { return }
+        pacer?.chunkArrived(seconds: Double(samples.count) / Double(segment.sampleRate), at: pacingElapsed)
         if feeding === segment {
             schedule(samples, of: segment)
         } else {
@@ -97,7 +114,41 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
         if feeding === segment { feedingClosed() }
     }
 
+    /// A streamed reply starts: hold playback until the pacer says it can play through.
+    /// `expectedSeconds` is the reply's whole expected audio (update it with `pacingExpects`).
+    func beginPacing(expectedSeconds: Double) {
+        pacer = PlaybackPacer(tuning: .mac, expectedSeconds: expectedSeconds)
+        pacingStart = .now
+        initialLead = nil
+        if outstanding.isEmpty {
+            heldAt = nodeSampleTime ?? 0
+            held = true
+            if node?.isPlaying == true { node?.pause() }
+        }
+    }
+
+    /// The reply's expected audio changed (more text arrived, or its speech rate was measured).
+    func pacingExpects(seconds: Double) {
+        guard pacer != nil else { return }
+        pacer?.expectedSeconds = seconds
+        releaseIfReady()
+    }
+
+    /// The reply has rendered all its audio: play out whatever is held, then go idle.
+    func finishPacing() {
+        guard pacer != nil else { return }
+        logPacing()
+        pacer = nil
+        releaseIfReady()
+        if held, outstanding.isEmpty { held = false }
+        if outstanding.isEmpty, feeding == nil { playNextIfIdle() }
+    }
+
     func stop() {
+        if pacer != nil { logPacing() }
+        pacer = nil
+        held = false
+        initialLead = nil
         epoch += 1
         queue.removeAll()
         player?.stop()
@@ -135,8 +186,44 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
 
     private var nodeSampleTime: Double? {
         guard let node, let renderTime = node.lastRenderTime,
-              let t = node.playerTime(forNodeTime: renderTime) else { return nil }
+              let t = node.playerTime(forNodeTime: renderTime) else { return held ? heldAt : nil }
         return Double(t.sampleTime)
+    }
+
+    private var pacingElapsed: Double {
+        let d = pacingStart.duration(to: .now).components
+        return Double(d.seconds) + Double(d.attoseconds) / 1e18
+    }
+
+    /// Audio scheduled on the node and not yet played (exact while held).
+    private var queuedSeconds: Double {
+        guard nodeRate > 0 else { return 0 }
+        return Double(outstanding.reduce(0) { $0 + $1.frames }) / Double(nodeRate)
+    }
+
+    /// Starts (or resumes) a held node once the pacer says the queue will play through.
+    private func releaseIfReady() {
+        guard held, let node, !outstanding.isEmpty else { return }
+        let queued = queuedSeconds
+        if let pacer, !pacer.mayPlay(queued: queued, renderFinished: false) { return }
+        held = false
+        if initialLead == nil { initialLead = queued }
+        node.play()
+    }
+
+    /// The node ran dry mid-reply: pause it and hold again, with a longer lead.
+    private func drained() {
+        pacer?.drained()
+        heldAt = nodeSampleTime ?? heldAt
+        node?.pause()
+        held = true
+    }
+
+    private func logPacing() {
+        guard let pacer else { return }
+        let rate = pacer.renderRate.map { String(format: "%.2fx", $0) } ?? "n/a"
+        let lead = initialLead.map { String(format: "%.1fs", $0) } ?? "n/a"
+        AppLog.chat.log("[chat-speech] pacer: rate \(rate, privacy: .public), lead \(lead, privacy: .public), drains \(pacer.drains, privacy: .public)")
     }
 
     private func segment(_ id: Int) -> Segment? {
@@ -166,7 +253,8 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
                 return
             }
         }
-        if outstanding.isEmpty { becameIdle() }
+        // A paced reply between segments (the next one still in prefill) is not idle.
+        if outstanding.isEmpty, pacer == nil { becameIdle() }
     }
 
     private func startFeeding(_ segment: Segment) {
@@ -205,7 +293,7 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
         let first = segment.frames == 0
         segment.frames += samples.count
         let starved = outstanding.isEmpty
-        outstanding.append((segment, first))
+        outstanding.append((segment, first, samples.count))
         if starved {
             // Nothing ahead of it: it sounds from now.
             if first || sounding == nil {
@@ -218,7 +306,11 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor [weak self] in self?.bufferPlayed(epoch: epoch) }
         }
-        if !node.isPlaying { node.play() }
+        if held {
+            releaseIfReady()
+        } else if !node.isPlaying {
+            node.play()
+        }
     }
 
     private func bufferPlayed(epoch: Int) {
@@ -229,7 +321,15 @@ final class ChatSpeechQueue: NSObject, AVAudioPlayerDelegate {
             soundingStart = nodeSampleTime ?? soundingStart
             nowPlayingText = next.segment.text
         }
-        if outstanding.isEmpty, feeding == nil {
+        guard outstanding.isEmpty else { return }
+        if pacer != nil {
+            // Ran dry before the reply finished rendering: re-buffer instead of
+            // playing each late chunk the moment it lands.
+            if feeding == nil { sounding = nil }
+            drained()
+            return
+        }
+        if feeding == nil {
             sounding = nil
             playNextIfIdle()
         }

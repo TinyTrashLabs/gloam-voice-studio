@@ -93,6 +93,14 @@ final class ChatController {
     private var pendingSaveConvoID: String?
     private var pendingSaveMessageID: String?
 
+    // Pacing a streamed reply (`ChatSpeechQueue.beginPacing`): the characters
+    // handed to it so far, and what its finished segments measured, so the
+    // pacer knows how much audio is still to come and at what speech rate.
+    private var paceFedChars = 0
+    private var paceDoneChars = 0
+    private var paceDoneSeconds = 0.0
+    private var paceVoiceSeconds = 0.0
+
     // Dia2 speaks a whole reply in one streamed pass, so there is nothing to
     // chunk: words go in as the LLM produces them and audio comes back while
     // it is still producing. The sentence queue above stays untouched for
@@ -570,7 +578,36 @@ final class ChatController {
     private func feedLiveSentences(_ sentences: [String]) {
         guard liveSignal != nil, !sentences.isEmpty else { return }
         liveQueue.append(contentsOf: sentences)
+        paceFedChars += sentences.reduce(0) { $0 + $1.count }
+        refreshPacing()
         liveSignal?.yield(())
+    }
+
+    private func resetPacing() {
+        paceFedChars = 0
+        paceDoneChars = 0
+        paceDoneSeconds = 0
+        paceVoiceSeconds = 0
+    }
+
+    /// The reply's expected audio: what its finished segments produced, plus
+    /// the text still to speak at the voice's measured rate (the Qwen reads'
+    /// typical 17 chars/s until a second of it has been heard). While the
+    /// model is still writing, the text it has written so far counts too.
+    private var pacingExpectedSeconds: Double {
+        var known = paceFedChars
+        if liveSignal != nil, isStreaming {
+            known = max(known, stripThinking(streamingText).count)
+        }
+        let cps = paceVoiceSeconds >= 1
+            ? min(30, max(10, Double(paceDoneChars) / paceVoiceSeconds))
+            : PlaybackPacer.charactersPerSecond
+        return paceDoneSeconds + PlaybackPacer.estimateSeconds(
+            characters: max(0, known - paceDoneChars), charactersPerSecond: cps)
+    }
+
+    private func refreshPacing() {
+        speech.pacingExpects(seconds: pacingExpectedSeconds)
     }
 
     /// Speak-while-generating pipeline: one sequential consumer drains the
@@ -594,6 +631,7 @@ final class ChatController {
         pendingSaveBackend = nil
         pendingSaveConvoID = convoID
         pendingSaveMessageID = nil
+        resetPacing()
         // pendingSaveMessageID is stamped later by finishReply.
         let (signals, continuation) = AsyncStream<Void>.makeStream()
         liveSignal = continuation
@@ -605,6 +643,7 @@ final class ChatController {
                 if self.speechGeneration == generation {
                     self.speechTask = nil
                     self.isSynthesizing = false
+                    self.speech.finishPacing()
                     self.finishPendingSave()
                 }
             }
@@ -657,18 +696,22 @@ final class ChatController {
         pendingSaveSampleRate = nil
         pendingSaveBackend = nil
         pendingSaveConvoID = convoID
+        resetPacing()
+        let sentences = SentenceSplitter.split(stripThinking(text))
+        paceFedChars = sentences.reduce(0) { $0 + $1.count }
         speechTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if self.speechGeneration == generation {
                     self.speechTask = nil
                     self.isSynthesizing = false
+                    self.speech.finishPacing()
                     self.finishPendingSave()
                 }
             }
             var reply = ReplySpeech(backend: self.app.chatTTSBackend)
             // Reasoning is never spoken (idempotent when already clean).
-            for sentence in SentenceSplitter.split(stripThinking(text)) {
+            for sentence in sentences {
                 if Task.isCancelled { return }
                 do {
                     guard try await self.speakSegment(
@@ -735,6 +778,8 @@ final class ChatController {
         let streaming: Bool
         let talkSession = UUID().uuidString
         var segmentsSpoken = 0
+        /// The playback queue is pacing this reply (from its first streamed segment).
+        var paced = false
         init(backend: BackendID) {
             self.backend = backend
             streaming = ChatSpeechScheduling.streams(backend)
@@ -755,6 +800,10 @@ final class ChatController {
         defer { setSynthesizing(false, ifGeneration: generation) }
         if reply.streaming {
             let gapSeconds = reply.segmentsSpoken > 0 ? Self.streamedSegmentGap : 0
+            if !reply.paced {
+                reply.paced = true
+                speech.beginPacing(expectedSeconds: pacingExpectedSeconds)
+            }
             let line = try await app.streamLine(
                 text: text, voiceSlug: voiceSlug,
                 interleaved: !app.chatParallelSpeech,
@@ -776,6 +825,11 @@ final class ChatController {
                 pendingSaveSampleRate = rate
                 pendingSaveBackend = reply.backend
                 reply.segmentsSpoken += 1
+                let voiced = Double(result.samples.count) / Double(rate)
+                paceDoneChars += text.count
+                paceVoiceSeconds += voiced
+                paceDoneSeconds += voiced + gapSeconds
+                refreshPacing()
             }
             return !(result.cancelled || Task.isCancelled)
         }
@@ -813,7 +867,9 @@ final class ChatController {
             if segment == nil {
                 let id = queue.beginStream(text: text, sampleRate: sampleRate)
                 segment = id
-                queue.appendStream(id, samples: gap(sampleRate: sampleRate))
+                // The gap goes with the first piece: one arrival for the pacer.
+                queue.appendStream(id, samples: gap(sampleRate: sampleRate) + samples)
+                return
             }
             if let segment { queue.appendStream(segment, samples: samples) }
         }
