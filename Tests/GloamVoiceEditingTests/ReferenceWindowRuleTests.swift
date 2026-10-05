@@ -1,4 +1,5 @@
 import XCTest
+import GVoiceKit
 @testable import GloamVoiceEditing
 
 final class ReferenceWindowRuleTests: XCTestCase {
@@ -75,5 +76,46 @@ final class ReferenceWindowRuleTests: XCTestCase {
         XCTAssertEqual(ReferenceWindowRule.envelope([], bins: 4), [0, 0, 0, 0])
     }
 
+    func testCutIsTheEnginesOwn() {
+        let c = clip(leadIn: 2, seconds: 40)
+        let ours = ReferenceWindowRule.cut(samples: c, sampleRate: sr, maxSeconds: 15)
+        let engines = ReferenceSection.cut(samples: c, sampleRate: sr, maxSeconds: 15)
+        XCTAssertEqual(ours.start, engines.start)
+        XCTAssertEqual(ours.samples, engines.samples)
+    }
+
+    /// "Propose" ends on a complete sentence, with the words to match.
+    func testProposalEndsOnASentence() {
+        let c = clip(leadIn: 1, seconds: 40)
+        let transcript = (1...40).map { "Sentence number \($0) is here." }.joined(separator: " ")
+        let p = ReferenceWindowRule.propose(samples: c, sampleRate: sr, transcript: transcript)
+        XCTAssertLessThanOrEqual(p.bounds.seconds, ReferenceWindowRule.proposedSeconds + 0.01)
+        XCTAssertGreaterThan(p.bounds.seconds, 5)
+        XCTAssertTrue(ReferenceSection.endsSentence(p.text), p.text)
+        XCTAssertTrue(transcript.contains(p.text))
+    }
+
     // MARK: derivedFrom
+
+    /// A hand-set window records its master's hash, so a new master makes it stale.
+    func testAHandSetWindowRecordsItsMasterAndGoesStaleWithIt() throws {
+        let master = FileManager.default.temporaryDirectory.appendingPathComponent("master-\(UUID()).wav")
+        defer { try? FileManager.default.removeItem(at: master) }
+        try VoicePlayer.wavData(samples: clip(leadIn: 0, seconds: 6), sampleRate: sr).write(to: master)
+        let d = ReferenceWindowRule.derivedFrom(bounds: .init(start: 1, end: 5), sourceSeconds: 6,
+                                                transcribedOnDevice: false, master: master)
+        XCTAssertEqual(d.by, "user")
+        XCTAssertEqual(d.sourceSha256, ReferenceSection.sha256Hex(ofFile: master))
+        let window = ReferenceWindowMeta(audio: "engines/lux-tts/ref.wav", text: "words", derivedFrom: d)
+        XCTAssertFalse(ReferenceWindowRule.isStale(window, master: master))
+        // The format round-trips through the type the engines decode.
+        let data = try JSONEncoder().encode(window)
+        XCTAssertEqual(try JSONDecoder().decode(ReferenceWindowRendition.self, from: data), window)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try VoicePlayer.wavData(samples: clip(leadIn: 0.5, seconds: 7), sampleRate: sr).write(to: master)
+        XCTAssertTrue(ReferenceWindowRule.isStale(window, master: master))
+        let legacy = ReferenceWindowMeta(audio: "a", text: "b", derivedFrom: .init(startSeconds: 0, endSeconds: 1, sourceSeconds: 6))
+        XCTAssertFalse(ReferenceWindowRule.isStale(legacy, master: master), "no hash recorded: accepted")
+    }
 }

@@ -2,43 +2,17 @@ import AVFoundation
 import Foundation
 import GVoiceKit
 
+/// `engines/lux-tts/voice.json`, the way docs/gvoice-format.md spells it:
+/// GVoiceKit's `ReferenceWindowRendition`, the very type EngineKit reads
+/// (`LuxReferenceWindow.Rendition`). It records the master's SHA-256, so a
+/// new master makes a hand-set window stale.
+public typealias ReferenceWindowMeta = ReferenceWindowRendition
+
 /// The rules behind the reference-window editor: how a window may sit in
-/// the master, the energy-based cut "Propose" offers, and the gate on its
-/// transcript. Pure; tested in the Simulator.
-///
-/// The cut is a port of `LuxReferenceWindow.window` (EngineKit keeps it
-/// internal) and the gate uses that file's numbers, so a window made here
-/// is one the engine would have made for itself -- the point of the format
-/// carrying it (docs/gvoice-format.md, "The lux-tts reference window").
-/// `engines/lux-tts/voice.json`, the way docs/gvoice-format.md spells it.
-/// EngineKit's `LuxReferenceWindow.Rendition` reads the same keys but has
-/// no public initialiser, so the phone writes through this mirror.
-public struct ReferenceWindowMeta: Codable, Equatable {
-    public struct DerivedFrom: Codable, Equatable {
-        /// Pack-relative path of the master this was cut from.
-        public var audio: String?
-        public var startSeconds: Double
-        public var endSeconds: Double
-        /// Length of the master at derivation time.
-        public var sourceSeconds: Double
-        /// "on-device-asr" or "user".
-        public var by: String?
-
-        public init(audio: String? = nil, startSeconds: Double, endSeconds: Double, sourceSeconds: Double, by: String? = nil) {
-            self.audio = audio; self.startSeconds = startSeconds; self.endSeconds = endSeconds
-            self.sourceSeconds = sourceSeconds; self.by = by
-        }
-    }
-    public var audio: String
-    /// Transcript of the WINDOW, not of the master.
-    public var text: String
-    public var derivedFrom: DerivedFrom?
-
-    public init(audio: String, text: String, derivedFrom: DerivedFrom? = nil) {
-        self.audio = audio; self.text = text; self.derivedFrom = derivedFrom
-    }
-}
-
+/// the master, the cut "Propose" offers, and the gate on its transcript.
+/// Pure. The cut and the sentence ending are GVoiceKit's `ReferenceSection`
+/// (the engines' own), so a window made here is one the engine would have
+/// made for itself.
 public enum ReferenceWindowRule {
     /// Shorter than this and there is nothing to learn from.
     public static let minSeconds = RecordingCheck.minSeconds
@@ -56,8 +30,8 @@ public enum ReferenceWindowRule {
     /// inflates LuxTTS's frames-per-token ratio and the predicted duration
     /// runs away with it (a 30 s window read as ten words once aborted the
     /// process), which is why this is a gate and not a note.
-    public static let minWordsPerSecond = 1.0
-    public static let maxWordsPerSecond = 6.0
+    public static let minWordsPerSecond = ReferenceSection.minWordsPerSecond
+    public static let maxWordsPerSecond = ReferenceSection.maxWordsPerSecond
 
     public struct Bounds: Equatable {
         public var start: Double
@@ -108,73 +82,50 @@ public enum ReferenceWindowRule {
         "\(VoiceTime.string(start))–\(VoiceTime.string(end))"
     }
 
-    /// The provenance beside a window, as the format spells it.
-    public static func derivedFrom(bounds: Bounds, sourceSeconds: Double, transcribedOnDevice: Bool)
-        -> ReferenceWindowMeta.DerivedFrom
-    {
+    /// The provenance beside a window, as the format spells it. `master` is
+    /// the master file the window was cut from: its SHA-256 is recorded, so a
+    /// new master invalidates the window (`LuxReferenceWindow.storedRendition`).
+    public static func derivedFrom(bounds: Bounds, sourceSeconds: Double, transcribedOnDevice: Bool,
+                                   master: URL? = nil) -> ReferenceWindowMeta.DerivedFrom {
         .init(audio: "source/ref.wav", startSeconds: bounds.start, endSeconds: bounds.end,
-              sourceSeconds: sourceSeconds, by: transcribedOnDevice ? "on-device-asr" : "user")
+              sourceSeconds: sourceSeconds, by: transcribedOnDevice ? "on-device-asr" : "user",
+              sourceSha256: master.flatMap(ReferenceSection.sha256Hex(ofFile:)))
     }
 
-    /// The energy-based cut: start at the first speech (lead-in silence
-    /// would otherwise eat the window), end in a pause near the tail where
-    /// one is available so the reference does not stop mid-phoneme. Returns
-    /// the whole clip when it already fits.
+    /// Whether a stored window was cut from a different master than `master`
+    /// (a window written before the hash was recorded is not stale).
+    public static func isStale(_ window: ReferenceWindowMeta, master: URL) -> Bool {
+        guard let cutFrom = window.derivedFrom?.sourceSha256 else { return false }
+        return cutFrom != ReferenceSection.sha256Hex(ofFile: master)
+    }
+
+    /// The energy-based cut (`ReferenceSection.cut`, the engines' own):
+    /// first speech to a pause near the tail. The whole clip when it fits.
     public static func cut(samples: [Float], sampleRate: Int, maxSeconds: Double) -> (samples: [Float], start: Int) {
-        let maxSamples = Int(maxSeconds * Double(sampleRate))
-        guard samples.count > maxSamples, maxSamples > 0 else { return (samples, 0) }
+        ReferenceSection.cut(samples: samples, sampleRate: sampleRate, maxSeconds: maxSeconds)
+    }
 
-        let frame = max(1, Int(Double(sampleRate) * 0.02))
-        let frameCount = (samples.count + frame - 1) / frame
-        var energy = [Float](repeating: 0, count: frameCount)
-        var loudest: Float = 0
-        for f in 0 ..< frameCount {
-            let from = f * frame, to = min(from + frame, samples.count)
-            var sumSq: Float = 0
-            for i in from ..< to { sumSq += samples[i] * samples[i] }
-            let e = (sumSq / Float(to - from)).squareRoot()
-            energy[f] = e
-            loudest = max(loudest, e)
-        }
-        let floor = max(loudest * 0.08, 0.008)
+    public struct Proposal: Equatable {
+        public var bounds: Bounds
+        /// The master's transcript sliced to the window and ended on the same
+        /// sentence as the audio: a draft until the window is transcribed.
+        public var text: String
+    }
 
-        // Skip lead-in silence, but only lead-in: an unbounded scan slides
-        // the window down the clip whenever a quiet opening sits under a
-        // floor set by a loud passage later.
-        let onsetLimit = min(frameCount, Int(5.0 / 0.02))
-        var startFrame = 0
-        while startFrame < onsetLimit, energy[startFrame] <= floor { startFrame += 1 }
-        if startFrame >= onsetLimit { startFrame = 0 }
-        var start = max(0, startFrame * frame - Int(Double(sampleRate) * 0.1))
-        start = min(start, samples.count - maxSamples)
-        var end = start + maxSamples
-
-        let searchFloorFrame = (end - Int(Double(maxSamples) * 0.25)) / frame
-        let minQuietFrames = 10  // 200 ms
-        var quietRun = 0
-        var f = end / frame - 1
-        while f >= max(0, searchFloorFrame) {
-            if energy[f] <= floor {
-                quietRun += 1
-            } else {
-                if quietRun >= minQuietFrames {
-                    let cut = min(end, (f + 1) * frame + Int(Double(sampleRate) * 0.08))
-                    if cut - start >= Int(Double(maxSamples) * 0.6) { end = cut }
-                    break
-                }
-                quietRun = 0
-            }
-            f -= 1
-        }
-
-        var out = Array(samples[start ..< end])
-        let fade = min(out.count / 2, Int(Double(sampleRate) * 0.01))
-        for i in 0 ..< fade {
-            let ramp = Float(i) / Float(fade)
-            out[i] *= ramp
-            out[out.count - 1 - i] *= ramp
-        }
-        return (out, start)
+    /// What "Propose" offers: `cut` to `proposedSeconds`, then
+    /// `ReferenceSection.endAtSentence` so the window ends on a complete
+    /// sentence and a pause (a continuing engine carries on a sentence a
+    /// reference stops in the middle of). `transcript` is the master's.
+    public static func propose(samples: [Float], sampleRate: Int, transcript: String,
+                               seconds: Double = proposedSeconds) -> Proposal {
+        let total = samples.count
+        let cut = cut(samples: samples, sampleRate: sampleRate, maxSeconds: seconds)
+        let draft = ReferenceSection.approximateText(transcript, windowStart: cut.start,
+                                                     windowCount: cut.samples.count, totalCount: total)
+        let ended = ReferenceSection.endAtSentence(samples: cut.samples, text: draft, sampleRate: sampleRate)
+        let start = Double(cut.start) / Double(sampleRate)
+        let end = start + Double(ended.samples.count) / Double(sampleRate)
+        return Proposal(bounds: Bounds(start: start, end: min(end, Double(total) / Double(sampleRate))), text: ended.text)
     }
 
     /// The window's samples, with the same short fade the cut applies so a

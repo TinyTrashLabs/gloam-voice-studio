@@ -161,7 +161,8 @@ public struct ReferenceWindowEditor: View {
             let seconds = Double(s.count) / Double(ClipImport.sampleRate)
             await MainActor.run {
                 samples = s; envelope = env; sourceSeconds = seconds
-                if let stored, let d = stored.derivedFrom, abs(d.sourceSeconds - seconds) < 0.5 {
+                if let stored, let d = stored.derivedFrom, abs(d.sourceSeconds - seconds) < 0.5,
+                   !ReferenceWindowRule.isStale(stored, master: url) {
                     let b = ReferenceWindowRule.clamp(start: d.startSeconds, end: d.endSeconds, sourceSeconds: seconds, movedStart: false)
                     start = b.start; end = b.end
                     text = stored.text
@@ -185,20 +186,28 @@ public struct ReferenceWindowEditor: View {
         start = b.start; end = b.end
     }
 
-    private func proposeBounds() {
-        let cut = ReferenceWindowRule.cut(samples: samples, sampleRate: ClipImport.sampleRate,
-                                          maxSeconds: ReferenceWindowRule.proposedSeconds)
-        let s = Double(cut.start) / Double(ClipImport.sampleRate)
-        let b = ReferenceWindowRule.clamp(start: s, end: s + Double(cut.samples.count) / Double(ClipImport.sampleRate),
+    /// The proposed window, ending on a sentence; returns its draft words.
+    @discardableResult
+    private func proposeBounds() -> String {
+        let p = ReferenceWindowRule.propose(samples: samples, sampleRate: ClipImport.sampleRate,
+                                            transcript: host.referenceText(for: voice))
+        let b = ReferenceWindowRule.clamp(start: p.bounds.start, end: p.bounds.end,
                                           sourceSeconds: sourceSeconds, movedStart: false)
         start = b.start; end = b.end
+        return p.text
     }
 
     private func propose() {
         player.stop()
-        proposeBounds()
-        note = "Proposed: first speech to a pause. Now transcribe it."
-        text = ""; heard = nil
+        let draft = proposeBounds()
+        heard = nil
+        if host.capabilities.transcribe != nil {
+            note = "Proposed: first speech to the end of a sentence. Now transcribe it."
+            text = ""
+        } else {
+            note = "Proposed: first speech to the end of a sentence. Check the words match what's said."
+            text = draft
+        }
     }
 
     private func transcribe() {
@@ -229,7 +238,8 @@ public struct ReferenceWindowEditor: View {
                                 text: text,
                                 derivedFrom: ReferenceWindowRule.derivedFrom(
                                     bounds: bounds, sourceSeconds: sourceSeconds,
-                                    transcribedOnDevice: heard == text.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                    transcribedOnDevice: heard == text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    master: store.masterURL(of: voice.slug)))
             dismiss()
         } catch { errorText = userMessage(for: error) }
     }
