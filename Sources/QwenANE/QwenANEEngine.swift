@@ -71,6 +71,9 @@ public struct QwenRender: Sendable {
     public var contextFrames: Int = 0
     /// Takes drawn for this line (`QwenTalkSession` draws again when a take derails; 1 otherwise).
     public var takes: Int = 1
+    /// The most frames this line could generate: the runaway cap (`QwenReadRules.frameCap`, which follows the
+    /// voice's pace) or the caller's `maxFrames`, within the KV window left after the prompt.
+    public var frameCap: Int = 0
     /// Seconds of audio. `frames` and `codes` describe the uncapped render; `samples` is capped.
     public var audioSeconds: Double { Double(samples.count) / Double(sampleRate) }
 }
@@ -134,13 +137,27 @@ public final class QwenANEEngine: @unchecked Sendable {
     /// The directory the engine was loaded from; `loadVoice(named:)` reads `voices/<name>` under it.
     public let modelsDirectory: URL
     /// Frames (80 ms each) the talker can generate for `text` in `voice` before its KV window fills: the
-    /// smaller of the 6-frames-per-token cap and the window left after the prompt (reference + text).
-    /// A line that hits the window ends with `.contextFull`; hosts split text so this stays above the
-    /// frames the line needs. Throws for a voice that fails validation.
+    /// runaway cap that follows the voice's pace (`QwenReadRules.frameCap`), within the window left after
+    /// the prompt (reference + text). A line that hits the window ends with `.contextFull`; hosts split
+    /// text so this stays above the frames the line needs. Throws for a voice that fails validation.
     public func maxFrames(text: String, voice: QwenVoiceFiles, language: String? = nil) throws -> Int {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
         let p = buildICLPrompt(host: host, voice: voice, text: text, language: language)
-        return min(effectiveMaxTokens(p.nTextTokens), ANETalkerEngine.windowFrames(promptRows: p.T))
+        return frameCap(p, voice: voice, window: ANETalkerEngine.windowFrames(promptRows: p.T))
+    }
+
+    /// `voice`'s pace: reference codec frames per reference transcript token, clamped
+    /// (`QwenReadRules.voiceFramesPerToken`). Nil for a voice without a reference.
+    public func voiceFramesPerToken(_ voice: QwenVoiceFiles) -> Double? {
+        QwenReadRules.voiceFramesPerToken(referenceFrames: voice.refCodes.first?.count ?? 0,
+                                          referenceTokens: VoicePrompt.transcriptIds(host, voice.refText).count)
+    }
+
+    /// The runaway cap for `prompt`'s line in `voice`, within `window`.
+    func frameCap(_ prompt: Prompt, voice: QwenVoiceFiles, window: Int = .max) -> Int {
+        let pace = QwenReadRules.voiceFramesPerToken(referenceFrames: voice.refCodes.first?.count ?? 0,
+                                                     referenceTokens: prompt.refTextIds.count)
+        return QwenReadRules.frameCap(textTokens: prompt.nTextTokens, voiceFramesPerToken: pace, window: window)
     }
 
     /// Drops every cache that can be rebuilt: the vocoder's primed per-voice states (the next line of a
@@ -213,7 +230,8 @@ public final class QwenANEEngine: @unchecked Sendable {
     /// - Parameters:
     ///   - seed: sampler seed. The same seed draws numpy's `default_rng(seed)` stream, which makes
     ///     a render reproducible and comparable to the Python reference. `nil` picks a random one.
-    ///   - maxFrames: optional cap on generated frames (80 ms each), below the built-in cap.
+    ///   - maxFrames: optional cap on generated frames (80 ms each), below the built-in cap (which follows
+    ///     the voice's pace, `QwenReadRules.frameCap`).
     ///   - chunkFrames: this line's vocoder chunk schedule (see `Options.chunkFrames`); nil uses the option.
     ///   - language: BCP-47 tag ("es", "es-MX", "en-US") that sets Qwen's codec language token. Nil (the
     ///     default) or "auto" is language auto-detect, bit-identical to a render without the parameter.
@@ -267,12 +285,15 @@ public final class QwenANEEngine: @unchecked Sendable {
         }
         var prompt = build(continuation)
         var carried = continuation?.frames ?? 0
+        // The runaway cap follows the voice's pace (the continuation does not change it).
+        let cap = frameCap(prompt, voice: voice)
         if carried > 0 {
-            let want = min(maxFrames ?? Int.max, effectiveMaxTokens(prompt.nTextTokens))
+            let want = min(maxFrames ?? Int.max, cap)
             if ANETalkerEngine.windowFrames(promptRows: prompt.T) < want || prompt.T >= ANETalkerEngine.LMAX - 8 {
                 prompt = build(nil); carried = 0
             }
         }
+        let requested = maxFrames ?? cap
         let promptS = Date().timeIntervalSince(t0)
         pace()
         let voc = vocoder
@@ -289,7 +310,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         voc.begin(context: voice.referenceFrames, continuation: carried > 0 ? continuation?.codes : nil)
         let g: GenResult
         do {
-            g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: maxFrames,
+            g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: requested,
                                     cancelled: cancelled, onFrame: { _, codes in try voc.push(frame: codes); pace() })
         } catch { voc.drain(); throw error }
         var n = g.frames
@@ -315,6 +336,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         var out = result(wav, stop, codes)
         out.prefixRowsReused = g.prefixRowsReused
         out.contextFrames = carried
+        out.frameCap = min(requested, ANETalkerEngine.windowFrames(promptRows: prompt.T))
         out.silenceBefore = QwenSilence.analyze(samples: wav, sampleRate: sampleRate)
         out.silence = out.silenceBefore
         if options.capPauses {

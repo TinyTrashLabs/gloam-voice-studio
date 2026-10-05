@@ -41,6 +41,50 @@ public enum QwenReadRules {
         return trailingSilenceCut(samples24k, frames: total, floorDb: floorDb)
     }
 
+    // MARK: Runaway frame cap
+
+    /// The fixed cap rate: a take may run 6 frames (80 ms each) per token of its text. A 160-character part
+    /// (~44 tokens) stops at 264 frames (21.1 s), which cuts a slow or pause-heavy voice off mid-sentence.
+    public static let baseFramesPerToken = 6
+    /// The cap never drops under this many frames (6 s), whatever the text length.
+    public static let minFrameCap = 75
+    /// The cap never exceeds this many frames.
+    public static let maxFrameCap = 4096
+    /// The voice-following cap allows this many times the voice's own pace.
+    public static let voicePaceMargin = 2.0
+    /// A measured voice pace (frames per token) is clamped to this range, so a broken reference (a
+    /// transcript of one word, or of a different clip) cannot give an absurd cap.
+    public static let voiceFramesPerTokenRange: ClosedRange<Double> = 3...20
+    /// The highest frames-per-token rate `frameCap` can give (`voicePaceMargin` x the range's top, 40).
+    /// A backend whose own length clamp multiplies the text's tokens by a fixed factor (the MLX fork's
+    /// `framesPerTextToken`) sets that factor to this, so the cap passed in is the one that binds.
+    public static let maxFramesPerToken = Int((voicePaceMargin * voiceFramesPerTokenRange.upperBound).rounded(.up))
+
+    /// The voice's pace from its own reference: codec frames per transcript token (the same tokenizer that
+    /// counts a line's text tokens), clamped to `voiceFramesPerTokenRange`. Nil when either count is not
+    /// positive (no reference to measure).
+    public static func voiceFramesPerToken(referenceFrames: Int, referenceTokens: Int) -> Double? {
+        guard referenceFrames > 0, referenceTokens > 0 else { return nil }
+        let r = Double(referenceFrames) / Double(referenceTokens)
+        return min(voiceFramesPerTokenRange.upperBound, max(voiceFramesPerTokenRange.lowerBound, r))
+    }
+
+    /// Frames a take of a line with `textTokens` tokens may generate before the runaway cap stops it:
+    /// the larger of `baseFramesPerToken` x tokens and `voicePaceMargin` x the voice's pace x tokens
+    /// (rounded up), at least `minFrameCap`, at most `maxFrameCap`, and never past `window` (the frames
+    /// that fit the KV window after the prompt). A nil pace is the fixed 6-per-token cap. Every Qwen
+    /// backend (the Neural Engine, the iPhone's MLX path) stops a take here; EOS, the trailing-silence
+    /// stop and the derail rules are unchanged.
+    public static func frameCap(textTokens: Int, voiceFramesPerToken: Double?, window: Int = .max) -> Int {
+        let n = max(0, textTokens)
+        var cap = baseFramesPerToken * n
+        if let r = voiceFramesPerToken, r.isFinite {
+            let clamped = min(voiceFramesPerTokenRange.upperBound, max(voiceFramesPerTokenRange.lowerBound, r))
+            cap = max(cap, Int((voicePaceMargin * clamped * Double(n)).rounded(.up)))
+        }
+        return max(0, min(window, min(maxFrameCap, max(minFrameCap, cap))))
+    }
+
     /// A fresh seed for a read nobody asked to reproduce (Regenerate must give a new take).
     public static func randomSeed() -> UInt64 { UInt64.random(in: 0...UInt64.max) }
 
@@ -136,10 +180,12 @@ public struct QwenBreakPart: Sendable, Equatable {
     public var derailed: Bool
     public var audioSeconds: Double
     public var renderSeconds: Double
+    /// The most frames the part could generate (`QwenRender.frameCap`).
+    public var frameCap: Int = 0
 
     public var logLine: String {
-        String(format: "part %d: %d frames, %.2f s audio in %.2f s, stop %@, takes %d, context %d frames, longest pause %.2f s%@ -- %@",
-               index + 1, frames, audioSeconds, renderSeconds, stopReason.rawValue, takes, contextFrames, longestPause,
+        String(format: "part %d: %d frames (cap %d), %.2f s audio in %.2f s, stop %@, takes %d, context %d frames, longest pause %.2f s%@ -- %@",
+               index + 1, frames, frameCap, audioSeconds, renderSeconds, stopReason.rawValue, takes, contextFrames, longestPause,
                derailed ? " (derailed)" : "", String(text.prefix(48)))
     }
 }
@@ -186,7 +232,7 @@ extension QwenTalkSession {
             let report = QwenBreakPart(index: i, text: part, frames: r.frames, takes: r.takes, stopReason: r.stopReason,
                                        contextFrames: r.contextFrames, longestPause: r.silenceBefore.longestPause,
                                        derailed: Self.derailed(r), audioSeconds: r.audioSeconds,
-                                       renderSeconds: Date().timeIntervalSince(t0))
+                                       renderSeconds: Date().timeIntervalSince(t0), frameCap: r.frameCap)
             out.parts.append(report)
             onPart?(report)
             if r.stopReason == .cancelled { break }
