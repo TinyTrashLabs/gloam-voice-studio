@@ -33,22 +33,35 @@ public enum RecordingCheck {
     public static let minSNRDb: Float = 20       // Ryan 19 (hiss 1/6 even normalised), Shane 30
     public static let maxClippedFraction = 0.001
 
-    public struct Quality: Equatable {
+    public struct Quality: Equatable, Sendable {
         public let seconds: Double
         public let speechDb: Float       // mean of the louder half of 50 ms blocks
         public let noiseFloorDb: Float   // 5th percentile of the blocks
         public let clippedFraction: Double
-        public var snrDb: Float { speechDb - noiseFloorDb }
+        /// Mean of the louder half of the blocks that are actually voice
+        /// (10 dB or more above the floor). `speechDb` averages the louder
+        /// half of the WHOLE take, so a slow start or a wait before tapping
+        /// stop pulled silence into it and refused a take spoken at a normal
+        /// level as "too quiet" (iPhone TestFlight, 2026-10-04). Nil where a
+        /// Quality is built by hand, and then `speechDb` stands in.
+        public var voicedDb: Float?
+        /// The level the gate judges: the voice, not the pauses around it.
+        public var gateDb: Float { voicedDb ?? speechDb }
+        public var snrDb: Float { gateDb - noiseFloorDb }
 
-        public init(seconds: Double, speechDb: Float, noiseFloorDb: Float, clippedFraction: Double) {
+        public init(seconds: Double, speechDb: Float, noiseFloorDb: Float, clippedFraction: Double,
+                    voicedDb: Float? = nil) {
             self.seconds = seconds
             self.speechDb = speechDb
             self.noiseFloorDb = noiseFloorDb
             self.clippedFraction = clippedFraction
+            self.voicedDb = voicedDb
         }
 
         /// The first thing wrong, in words the person can act on; nil when
         /// the take is fine.
+        /// Never a length: a master may be any length (each engine's section
+        /// is prepared into the pack), so only what makes a take unusable.
         public var problem: String? {
             if seconds < RecordingCheck.minSeconds {
                 return "That was too short to learn from. Read the whole line, then tap to finish."
@@ -56,7 +69,7 @@ public enum RecordingCheck {
             if clippedFraction > RecordingCheck.maxClippedFraction {
                 return "That clipped — hold the phone a little further away and try again."
             }
-            if speechDb < RecordingCheck.minSpeechDb {
+            if gateDb < RecordingCheck.minSpeechDb {
                 return "That was too quiet — hold the phone closer and speak up a little."
             }
             if snrDb < RecordingCheck.minSNRDb {
@@ -75,7 +88,7 @@ public enum RecordingCheck {
             if clippedFraction > RecordingCheck.maxClippedFraction {
                 return "That clip is distorted (clipped) — pick a cleaner recording."
             }
-            if speechDb < RecordingCheck.minSpeechDb {
+            if gateDb < RecordingCheck.minSpeechDb {
                 return "That clip is too quiet to learn from — pick one where the voice is closer to the mic."
             }
             if snrDb < RecordingCheck.minSNRDb {
@@ -105,9 +118,13 @@ public enum RecordingCheck {
         let floor = levels[min(levels.count - 1, levels.count / 20)]
         let upper = levels[(levels.count / 2)...]
         let speech = upper.reduce(0, +) / Float(upper.count)
+        let voiced = levels.filter { $0 >= floor + 10 }
+        let voicedUpper = voiced.isEmpty ? [] : voiced[(voiced.count / 2)...]
+        let voicedDb = voicedUpper.isEmpty ? speech : voicedUpper.reduce(0, +) / Float(voicedUpper.count)
         let clipped = samples.reduce(0) { $0 + (abs($1) >= 0.999 ? 1 : 0) }
         return Quality(seconds: seconds, speechDb: speech, noiseFloorDb: floor,
-                       clippedFraction: Double(clipped) / Double(samples.count))
+                       clippedFraction: Double(clipped) / Double(samples.count),
+                       voicedDb: voicedDb)
     }
 
     /// Fraction of the script's words that were heard, in order (longest
@@ -115,7 +132,7 @@ public enum RecordingCheck {
     /// case are ignored; "you are" vs "you're" costs a word, which is why the
     /// threshold sits at 0.9 rather than 1.
     public static func scriptMatch(heard: String, script: String) -> Double {
-        let a = words(script), b = words(heard)
+        let a = words(script), b = words(heard, scriptYears: SpokenWords.years(in: script))
         guard !a.isEmpty, !b.isEmpty else { return 0 }
         var prev = [Int](repeating: 0, count: b.count + 1)
         for x in a {
@@ -140,7 +157,7 @@ public enum RecordingCheck {
     /// transcript against a bundled pack's 17.4, and the same line came back
     /// 13.6 s instead of 9.1 s, with words from the recording in it.
     public static func transcriptCoverage(heard: String, script: String) -> Double {
-        let a = words(script), b = words(heard)
+        let a = words(script), b = words(heard, scriptYears: SpokenWords.years(in: script))
         guard !a.isEmpty, !b.isEmpty else { return 0 }
         var prev = [Int](repeating: 0, count: b.count + 1)
         for x in a {
@@ -159,5 +176,8 @@ public enum RecordingCheck {
 
     /// Numbers, times and ordinals in words on both sides (`SpokenWords`):
     /// the recogniser writes "4:30" for "four thirty".
-    private static func words(_ text: String) -> [String] { SpokenWords.words(text) }
+    /// The heard side folds a spoken year only when the script has it.
+    private static func words(_ text: String, scriptYears: Set<Int>? = nil) -> [String] {
+        SpokenWords.words(text, scriptYears: scriptYears)
+    }
 }

@@ -85,10 +85,22 @@ public final class CloneRecorder: ObservableObject {
     }
 
     private func push(_ rms: Float) {
-        level = min(1, rms * 6)
+        level = Self.meterLevel(rms: rms, previous: level)
         levels.append(level)
         if levels.count > 64 { levels.removeFirst() }
         if let s = startAt { elapsed = Date().timeIntervalSince(s) }
+    }
+
+    /// The meter reads in decibels, not linear RMS. Linear (`rms * 6`) put
+    /// normal speech at arm's length (about −36 dBFS on an iPhone, whose
+    /// measurement mode has no AGC) at a fifth of the bar, so people raised
+    /// their voice to make it move. −60 dBFS is empty and −20 is full, so a
+    /// normal voice fills about two-thirds. Fast rise, slower fall, so it
+    /// reads as a voice rather than flicker.
+    nonisolated public static func meterLevel(rms: Float, previous: Float) -> Float {
+        let db = rms > 1e-7 ? 20 * log10f(rms) : -140
+        let target = min(1, max(0, (db + 60) / 40))
+        return target > previous ? target : max(target, previous * 0.82)
     }
 
     public func stop() {
