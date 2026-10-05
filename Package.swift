@@ -96,9 +96,13 @@ let package = Package(
         // cf35145 (2026-10-03) is the fork's main merging #13 (Breeze, all of
         // the above) onto 60c05fe, #14's fix for the first-word crack in
         // streamed Qwen (the decoder is primed with the ICL reference codes).
+        // 233c0d7 (2026-10-04, #16) adds part-to-part continuation for MLX
+        // Qwen (`continuing(_:previousText:previousCodes:)`, `lastGeneratedCodes`,
+        // `framesPerTextToken`), additive: the iPhone app renders a long read as
+        // one performance like QwenTalkSession.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "cf35145d3cd02ada01d34037f6e34b2a72c4edde"),
+            revision: "233c0d71da3dfd8d83a4b51549e1ae01c50b11b8"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own
