@@ -26,6 +26,11 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     private let queue = DispatchQueue(label: "fm.gloam.qwen-ane.render", qos: .userInitiated)
     private let voiceLock = NSLock()
     private var voices: [String: QwenVoiceFiles] = [:]
+    /// Open talk sessions by `ProviderRequest.talkSession` (+ voice + language), most recent last. Only touched
+    /// on `queue`, which is serial, so it needs no lock.
+    private var talkSessions: [(key: String, session: QwenTalkSession)] = []
+    /// How many talk sessions stay open; a chat reply needs one, the rest are stale replies.
+    static let maxTalkSessions = 4
 
     /// Maximum reference length, seconds (the speech encoder's fixed input).
     public static let maxReferenceSeconds = Double(QwenVoicePrep.maxSamples) / 24000
@@ -144,6 +149,28 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
 
     static func log(_ part: QwenBreakPart) { NSLog("qwen3-0.6b-ane: %@", part.logLine) }
 
+    /// The session a request continues, when it names one: the same key, voice and language reuse it (one
+    /// sampler stream, each call carrying on from the last), anything else opens a new one with the request's
+    /// seed or a random one. Call on `queue` only.
+    private func talkSession(for request: ProviderRequest, voice: QwenVoiceFiles) -> QwenTalkSession? {
+        guard let name = request.talkSession else { return nil }
+        let key = Self.talkSessionKey(name: name, request: request)
+        if let i = talkSessions.firstIndex(where: { $0.key == key }) {
+            let hit = talkSessions.remove(at: i)
+            talkSessions.append(hit)
+            return hit.session
+        }
+        let session = Self.session(engine: engine, voice: voice, language: request.language, seed: request.seed)
+        talkSessions.append((key, session))
+        if talkSessions.count > Self.maxTalkSessions { talkSessions.removeFirst(talkSessions.count - Self.maxTalkSessions) }
+        return session
+    }
+
+    /// A session belongs to one voice and language: the same name with another voice is another session.
+    static func talkSessionKey(name: String, request: ProviderRequest) -> String {
+        [name, request.refAudioPath ?? "", request.refText ?? "", request.language ?? ""].joined(separator: "\u{1F}")
+    }
+
     public func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         let voice = try voice(for: request)
         let text = request.text
@@ -154,6 +181,11 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
             queue.async { [self] in
                 do {
                     let parts = parts(of: text, voice: voice, language: language)
+                    if let session = talkSession(for: request, voice: voice) {
+                        let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: Self.log)
+                        cont.resume(returning: b.samples)
+                        return
+                    }
                     if parts.count == 1 {
                         let r = try engine.render(text: text, voice: voice, language: language)
                         cont.resume(returning: r.samples)
@@ -210,7 +242,13 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 do {
                     let voice = try voice(for: request)
                     let parts = parts(of: text, voice: voice, language: language)
-                    if parts.count == 1 {
+                    if let session = talkSession(for: request, voice: voice) {
+                        // A line of a longer performance (a chat reply): it carries on from the session's last
+                        // line. Streamed, so no redraw.
+                        _ = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, firstChunkFrames: schedule,
+                                                    cancelled: { stopped.value }, onAudio: { continuation.yield($0) },
+                                                    onPart: Self.log)
+                    } else if parts.count == 1 {
                         let r = try engine.render(text: text, voice: voice, chunkFrames: schedule, language: language,
                                                   cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
                         if r.stopReason == .contextFull {
