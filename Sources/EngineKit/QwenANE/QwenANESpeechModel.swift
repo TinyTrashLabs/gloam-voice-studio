@@ -136,8 +136,13 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     /// one before it. A random seed unless the request fixes one, so Regenerate still gives a new take.
     static func session(engine: QwenANEEngine, voice: QwenVoiceFiles, language: String?, seed: UInt64?) -> QwenTalkSession {
         QwenTalkSession(engine: engine, voice: voice, language: language,
-                        seed: seed ?? UInt64.random(in: 0...UInt64.max))
+                        seed: seed ?? QwenReadRules.randomSeed())
     }
+
+    /// The silence between parts: the pass gap every engine's split line uses.
+    static var gapSeconds: Double { Double(GloamEngine.passGap(sampleRate: 24000).count) / 24000 }
+
+    static func log(_ part: QwenBreakPart) { NSLog("qwen3-0.6b-ane: %@", part.logLine) }
 
     public func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         let voice = try voice(for: request)
@@ -155,12 +160,8 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                         return
                     }
                     let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
-                    var out: [Float] = []
-                    for (i, part) in parts.enumerated() {
-                        if i > 0 { out += GloamEngine.passGap(sampleRate: sampleRate) }
-                        out += try session.render(part).samples
-                    }
-                    cont.resume(returning: out)
+                    let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: Self.log)
+                    cont.resume(returning: b.samples)
                 } catch {
                     cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
                 }
@@ -219,12 +220,9 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                         // Streamed parts cannot be redrawn (their chunks are already out), but they still share
                         // one sampler stream and each continues the one before it.
                         let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
-                        for (i, part) in parts.enumerated() {
-                            if stopped.value { break }
-                            if i > 0 { continuation.yield(GloamEngine.passGap(sampleRate: sampleRate)) }
-                            _ = try session.render(part, chunkFrames: i == 0 ? schedule : nil,
-                                                   cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
-                        }
+                        _ = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, firstChunkFrames: schedule,
+                                                    cancelled: { stopped.value }, onAudio: { continuation.yield($0) },
+                                                    onPart: Self.log)
                     }
                     continuation.finish()
                 } catch let e as EngineError {

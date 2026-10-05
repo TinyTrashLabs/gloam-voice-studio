@@ -111,6 +111,21 @@ for part in parts { let r = try session.render(part) /* r.samples */ }
   silence inside the line), from the same stream, at most `maxRedraws` (2) times; a clean take is never redrawn.
   Not with `onAudio` (streamed chunks cannot be recalled). A derailed take is never carried into the next part.
 
+**One call for a whole break** (split → session → join, a report per part for logs):
+
+```swift
+let session = QwenTalkSession(engine: engine, voice: voice, language: "es", seed: QwenReadRules.randomSeed())
+let b = try session.renderBreak(wholeBreak, maxPartChars: 160, gapSeconds: 0.15,
+                                onPart: { NSLog("%@", $0.logLine) })      // b.samples, b.parts
+// streaming: renderBreak(wholeBreak, onAudio: { play($0) }) -- gaps included, b.samples empty
+// own split: renderBreak(parts: myParts, ...)
+```
+
+The rules behind it are `QwenReadRules` (split, `derailed`, `badness`, `carries`, `keptFrames`, `randomSeed`) and
+`QwenCarry` (what the next part continues). They are pure, so the iPhone's MLX Qwen path
+(gloam-voice-studio-ios `QwenMLXEngine`) applies the same ones: a part is carried only if it did not derail AND no
+check that ran before the next part flagged it.
+
 Studio's `qwen3-0.6b-ane` backend (`QwenANESpeechModel`) does this for you: a line that fits one render is one
 render, as before; a longer one is split at sentences (~160 characters a part) and rendered through one session
 with a random seed (or the request's), so Regenerate still gives a new take.
