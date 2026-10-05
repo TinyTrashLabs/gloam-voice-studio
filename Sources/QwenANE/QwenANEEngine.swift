@@ -67,8 +67,26 @@ public struct QwenRender: Sendable {
     public var silence: SilenceReport = .empty
     /// Internal pauses shortened by `Options.capPauses`.
     public var pausesCapped: Int = 0
+    /// Frames of the previous part of the same break the line was conditioned on (0: the reference alone).
+    public var contextFrames: Int = 0
+    /// Takes drawn for this line (`QwenTalkSession` draws again when a take derails; 1 otherwise).
+    public var takes: Int = 1
     /// Seconds of audio. `frames` and `codes` describe the uncapped render; `samples` is capped.
     public var audioSeconds: Double { Double(samples.count) / Double(sampleRate) }
+}
+
+/// How the talker draws each frame's first-codebook token.
+public struct QwenSampling: Sendable, Equatable {
+    public var temperature: Double
+    /// Tokens kept before the draw (0 = all).
+    public var topK: Int
+    /// Penalty on every first-codebook token already generated in the line.
+    public var repetition: Float
+    /// Also stop when the most likely token is end-of-speech even though another token was drawn.
+    public var eosOnArgmax: Bool
+    public init(temperature: Double = 0.9, topK: Int = 0, repetition: Float = 1.05, eosOnArgmax: Bool = true) {
+        self.temperature = temperature; self.topK = topK; self.repetition = repetition; self.eosOnArgmax = eosOnArgmax
+    }
 }
 
 @available(iOS 18.0, macOS 15.0, *)
@@ -89,6 +107,8 @@ extension QwenANEEngine {
         /// plays gaplessly while the render stays faster than real time (RTF < 1) and later chunks grow. The samples
         /// are the same either way; only where the chunk boundaries fall changes.
         public var chunkFrames: [Int] = [12]
+        /// First-codebook sampling.
+        public var sampling = QwenSampling()
         public init(overlapVocoder: Bool = true, capPauses: Bool = true, prefixCache: Bool = true,
                     chunkFrames: [Int] = [12]) {
             self.overlapVocoder = overlapVocoder; self.capPauses = capPauses; self.prefixCache = prefixCache
@@ -212,16 +232,47 @@ public final class QwenANEEngine: @unchecked Sendable {
                        cancelled: () -> Bool = { false }, pace: () -> Void = {},
                        onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
         lock.lock(); defer { lock.unlock() }
+        var sampler = makeSampler(seed: seed ?? UInt64.random(in: 0...UInt64.max))
+        return try renderLocked(text: text, voice: voice, sampler: &sampler, maxFrames: maxFrames, chunkFrames: chunkFrames,
+                                language: language, continuation: nil, cancelled: cancelled, pace: pace, onAudio: onAudio)
+    }
+
+    func makeSampler(seed: UInt64) -> Sampler {
+        let sm = options.sampling
+        return Sampler(temperature: sm.temperature, repetition: sm.repetition, topK: sm.topK,
+                       vocab: host.cfg.vocab, eos: host.cfg.codecEos, seed: seed)
+    }
+
+    /// Serialises a session's part with every other render.
+    func withLock<T>(_ body: () throws -> T) rethrows -> T { lock.lock(); defer { lock.unlock() }; return try body() }
+
+    /// `render`'s body; the caller holds `lock`. `sampler` carries on from wherever the caller's stream is
+    /// (a session draws every part of a break from one stream). `continuation` is the previous part of the
+    /// same break; it is dropped when it would leave the line fewer frames than it would get without it.
+    func renderLocked(text: String, voice: QwenVoiceFiles, sampler: inout Sampler, maxFrames: Int?,
+                      chunkFrames: [Int]?, language: String?, continuation: QwenContinuation?,
+                      cancelled: () -> Bool, pace: () -> Void,
+                      onAudio: (([Float]) -> Void)?) throws -> QwenRender {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
         guard voice.spkEmbedding.count == HostTables.H else {
             throw QwenANEError.invalid("spkEmbedding must have \(HostTables.H) values")
         }
-        var sampler = Sampler(vocab: host.cfg.vocab, eos: host.cfg.codecEos, seed: seed ?? UInt64.random(in: 0...UInt64.max))
         let t0 = Date()
         talker.usePrefixCache = options.prefixCache
-        let prompt = buildICLPrompt(host: host, voice: voice, text: text, language: language,
-                                    voicePrompt: options.prefixCache ? voicePrompt(for: voice, language: language) : nil,
-                                    keepVoicePrompt: options.prefixCache)
+        talker.eosOnArgmax = options.sampling.eosOnArgmax
+        let vp = options.prefixCache ? voicePrompt(for: voice, language: language) : nil
+        func build(_ c: QwenContinuation?) -> Prompt {
+            buildICLPrompt(host: host, voice: voice, text: text, language: language, voicePrompt: vp,
+                           keepVoicePrompt: options.prefixCache, continuation: c)
+        }
+        var prompt = build(continuation)
+        var carried = continuation?.frames ?? 0
+        if carried > 0 {
+            let want = min(maxFrames ?? Int.max, effectiveMaxTokens(prompt.nTextTokens))
+            if ANETalkerEngine.windowFrames(promptRows: prompt.T) < want || prompt.T >= ANETalkerEngine.LMAX - 8 {
+                prompt = build(nil); carried = 0
+            }
+        }
         let promptS = Date().timeIntervalSince(t0)
         pace()
         let voc = vocoder
@@ -235,7 +286,7 @@ public final class QwenANEEngine: @unchecked Sendable {
             { chunk in let out = trimmer!.push(chunk); if !out.isEmpty { deliver(out) } }
         }
         defer { voc.onChunk = nil }
-        voc.begin(context: voice.referenceFrames)
+        voc.begin(context: voice.referenceFrames, continuation: carried > 0 ? continuation?.codes : nil)
         let g: GenResult
         do {
             g = try talker.generate(prompt: prompt, sampler: &sampler, eos: host.cfg.codecEos, maxNew: maxFrames,
@@ -263,6 +314,7 @@ public final class QwenANEEngine: @unchecked Sendable {
         }
         var out = result(wav, stop, codes)
         out.prefixRowsReused = g.prefixRowsReused
+        out.contextFrames = carried
         out.silenceBefore = QwenSilence.analyze(samples: wav, sampleRate: sampleRate)
         out.silence = out.silenceBefore
         if options.capPauses {

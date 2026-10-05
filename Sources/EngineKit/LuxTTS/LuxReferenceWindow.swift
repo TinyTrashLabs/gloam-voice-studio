@@ -279,9 +279,11 @@ public enum LuxReferenceWindow {
     /// On-device transcription of a WAV, or nil when there is no authorized
     /// on-device recognizer or nothing was heard. The `transcribe` hook for
     /// the shared section preparation (QwenVoicePrep.prepareEngineFolder).
-    public static func transcribeWAV(_ wav: Data) async -> String? {
+    ///
+    /// `language` (BCP-47) picks the recogniser's locale; nil is en-US, as before.
+    public static func transcribeWAV(_ wav: Data, language: String? = nil) async -> String? {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized,
-            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: recognizerLocale(language))),
             recognizer.isAvailable, recognizer.supportsOnDeviceRecognition
         else { return nil }
         let tmp = FileManager.default.temporaryDirectory
@@ -290,6 +292,16 @@ public enum LuxReferenceWindow {
         guard (try? wav.write(to: tmp)) != nil else { return nil }
         let text = try? await recognize(url: tmp, recognizer: recognizer)
         return (text?.isEmpty == false) ? text : nil
+    }
+
+    /// A locale Apple's recogniser has for `language`: the tag itself when it names a region ("es-MX"), else
+    /// the language's most common on-device locale; nil or unknown is en-US.
+    static func recognizerLocale(_ language: String?) -> String {
+        guard let raw = language?.replacingOccurrences(of: "_", with: "-"), !raw.isEmpty, raw.lowercased() != "auto" else { return "en-US" }
+        if raw.contains("-") { return raw }
+        let defaults = ["en": "en-US", "es": "es-US", "pt": "pt-BR", "fr": "fr-FR", "de": "de-DE", "it": "it-IT",
+                        "ja": "ja-JP", "ko": "ko-KR", "zh": "zh-CN", "ru": "ru-RU"]
+        return defaults[raw.lowercased()] ?? "en-US"
     }
 
     /// The energy-based cut: start at the first speech (lead-in silence would

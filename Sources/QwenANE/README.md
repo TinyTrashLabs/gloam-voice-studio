@@ -91,6 +91,35 @@ Core ML graph.
 `[4, 8, 12]` delivers the first audio about 0.5 s sooner; the codes are unchanged and the samples agree to ANE
 fp16 rounding (above 47 dB SNR in the tests). It only plays gaplessly while the render is faster than real time.
 
+## A talk break: `QwenTalkSession`
+
+A break longer than one render is split into parts (the KV window holds reference + text + frames). Render them
+through one session, not `render` per part:
+
+```swift
+let session = QwenTalkSession(engine: engine, voice: voice, language: "es", seedText: wholeBreak)
+for part in parts { let r = try session.render(part) /* r.samples */ }
+```
+
+- **One sampler stream per break**, seeded by `seed` or a stable hash of voice + language + `seedText`: the same
+  break renders the same audio, and no part gets an unrelated fresh seed.
+- **Each part continues the previous one**: the previous part's transcript and codec frames follow the reference
+  in the ICL prompt (`[ref text ; prev text ; line ; tts_eos]` then `[codec_bos ; ref codes ; prev codes]`), and the
+  vocoder head runs over the previous part's frames before the line, so pace, level and pitch carry across the
+  join. Dropped (`QwenRender.contextFrames == 0`) for a part whose frame budget it would shrink.
+- **A derailed take is drawn again** (`QwenTalkSession.derailed`: it ran to the frame cap, or holds more than 2 s of
+  silence inside the line), from the same stream, at most `maxRedraws` (2) times; a clean take is never redrawn.
+  Not with `onAudio` (streamed chunks cannot be recalled). A derailed take is never carried into the next part.
+
+Studio's `qwen3-0.6b-ane` backend (`QwenANESpeechModel`) does this for you: a line that fits one render is one
+render, as before; a longer one is split at sentences (~160 characters a part) and rendered through one session
+with a random seed (or the request's), so Regenerate still gives a new take.
+
+The reference itself matters most: a reference whose audio says words its transcript does not (or the reverse)
+makes Qwen continue the wrong thing. `QwenVoicePrep.prepareEngineFolder` checks a stored section's last sentence
+against a transcription of the cut (`ReferenceSection.sentenceEndCandidates`, `wordDistance`) when a recogniser is
+available.
+
 ## Notes
 
 - The sampler reproduces numpy's `default_rng(seed)` stream (PCG64 + SeedSequence), so a render with

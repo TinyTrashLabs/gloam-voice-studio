@@ -92,7 +92,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 box.result = .success(try await QwenVoicePrep.prepareEngineFolder(
                     voiceDir: voiceDir, masterWAV: master, transcript: transcript, modelsDirectory: modelsDirectory,
                     cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
-                    transcribe: { await LuxReferenceWindow.transcribeWAV($0) }).files)
+                    transcribe: ReferenceSections.sectionTranscriber(language: nil)).files)
             } catch { box.result = .failure(error) }
             done.signal()
         }
@@ -112,16 +112,55 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
 
     // MARK: synthesis
 
+    /// Target length of one part of a line too long for one render, in `LongTextChunker`'s deliberately slow
+    /// estimate (~10 characters/s): about 160 characters, the part size the radio renders a break in.
+    static let partSeconds: Double = 14
+
+    /// The line split into the renders it needs: itself when it fits one render, else sentence groups of about
+    /// `partSeconds`. `fits` says whether a text's (slowly estimated) speech fits the frames one render has
+    /// left for it; the talker's 1024-row window holds the reference codes too, so that depends on the voice.
+    static func parts(_ text: String, fits: (String) -> Bool) -> [String] {
+        if fits(text) { return [text] }
+        let pieces = LongTextChunker.chunks(text, maxSeconds: partSeconds)
+        return pieces.isEmpty ? [text] : pieces
+    }
+
+    private func parts(of text: String, voice: QwenVoiceFiles, language: String?) -> [String] {
+        Self.parts(text) { t in
+            guard let cap = try? engine.maxFrames(text: t, voice: voice, language: language) else { return true }
+            return LongTextChunker.estimatedSeconds(t) * 12.5 <= Double(cap)    // 12.5 codec frames per second
+        }
+    }
+
+    /// One performance for a split line (`QwenTalkSession`): one sampler stream, each part conditioned on the
+    /// one before it. A random seed unless the request fixes one, so Regenerate still gives a new take.
+    static func session(engine: QwenANEEngine, voice: QwenVoiceFiles, language: String?, seed: UInt64?) -> QwenTalkSession {
+        QwenTalkSession(engine: engine, voice: voice, language: language,
+                        seed: seed ?? UInt64.random(in: 0...UInt64.max))
+    }
+
     public func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         let voice = try voice(for: request)
         let text = request.text
         let language = request.language
         let engine = engine
+        let seed = request.seed
         return try await withCheckedThrowingContinuation { cont in
-            queue.async {
+            queue.async { [self] in
                 do {
-                    let r = try engine.render(text: text, voice: voice, language: language)
-                    cont.resume(returning: r.samples)
+                    let parts = parts(of: text, voice: voice, language: language)
+                    if parts.count == 1 {
+                        let r = try engine.render(text: text, voice: voice, language: language)
+                        cont.resume(returning: r.samples)
+                        return
+                    }
+                    let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
+                    var out: [Float] = []
+                    for (i, part) in parts.enumerated() {
+                        if i > 0 { out += GloamEngine.passGap(sampleRate: sampleRate) }
+                        out += try session.render(part).samples
+                    }
+                    cont.resume(returning: out)
                 } catch {
                     cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
                 }
@@ -161,6 +200,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
             let engine = engine
             let text = request.text
             let language = request.language
+            let seed = request.seed
             // [n, 2n, 12]: a short first chunk that grows back to whole chunks
             let schedule: [Int]? = request.firstChunkFrames.map { n in n >= 12 ? [12] : [n, min(12, 2 * n), 12] }
             // Voice prep can be slow on a voice's first line (encoders on the CPU), so it runs on the queue
@@ -168,10 +208,23 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
             queue.async { [self] in
                 do {
                     let voice = try voice(for: request)
-                    let r = try engine.render(text: text, voice: voice, chunkFrames: schedule, language: language,
-                                              cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
-                    if r.stopReason == .contextFull {
-                        NSLog("qwen3-0.6b-ane: line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
+                    let parts = parts(of: text, voice: voice, language: language)
+                    if parts.count == 1 {
+                        let r = try engine.render(text: text, voice: voice, chunkFrames: schedule, language: language,
+                                                  cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
+                        if r.stopReason == .contextFull {
+                            NSLog("qwen3-0.6b-ane: line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
+                        }
+                    } else {
+                        // Streamed parts cannot be redrawn (their chunks are already out), but they still share
+                        // one sampler stream and each continues the one before it.
+                        let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
+                        for (i, part) in parts.enumerated() {
+                            if stopped.value { break }
+                            if i > 0 { continuation.yield(GloamEngine.passGap(sampleRate: sampleRate)) }
+                            _ = try session.render(part, chunkFrames: i == 0 ? schedule : nil,
+                                                   cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
+                        }
                     }
                     continuation.finish()
                 } catch let e as EngineError {

@@ -81,17 +81,20 @@ struct NumpyPCG64 {
 }
 
 /// First-codebook sampler (qonnx.Sampler): codec-control tokens suppressed (EOS kept),
-/// repetition penalty over all generated first-codebook tokens, temperature softmax.
-/// top-k / top-p / min-p are off in the shipping knobs. temperature <= 0 is greedy.
+/// repetition penalty over all generated first-codebook tokens, temperature softmax, then top-k.
+/// temperature <= 0 is greedy. `topK` 0 is off (every token keeps its probability).
 /// The draw is `Generator.choice(V, p=...)`: a cdf search with one `random()` per token.
 struct Sampler {
     var temperature: Double = 0.9
     var repetition: Float = 1.05
+    /// Keep only the `topK` most likely tokens (ties at the k-th logit included), like transformers'
+    /// `TopKLogitsWarper`, which upstream Qwen3-TTS runs with k = 50. 0 = off.
+    var topK: Int = 0
     let vocab: Int, eos: Int
     var rng: NumpyPCG64
 
-    init(temperature: Double = 0.9, repetition: Float = 1.05, vocab: Int = 3072, eos: Int = 2150, seed: UInt64 = 0) {
-        self.temperature = temperature; self.repetition = repetition; self.vocab = vocab; self.eos = eos
+    init(temperature: Double = 0.9, repetition: Float = 1.05, topK: Int = 0, vocab: Int = 3072, eos: Int = 2150, seed: UInt64 = 0) {
+        self.temperature = temperature; self.repetition = repetition; self.topK = topK; self.vocab = vocab; self.eos = eos
         rng = NumpyPCG64(seed: seed)
     }
 
@@ -105,6 +108,11 @@ struct Sampler {
             var bi = 0; var bv = l[0]
             for i in 1..<vocab where l[i] > bv { bv = l[i]; bi = i }
             return bi
+        }
+        if topK > 0 && topK < vocab {
+            // transformers TopKLogitsWarper: drop every logit below the k-th largest (ties survive)
+            let kth = l.sorted(by: >)[topK - 1]
+            for i in 0..<vocab where l[i] < kth { l[i] = -Float.infinity }
         }
         var mx = -Float.infinity
         for v in l where v > mx { mx = v }

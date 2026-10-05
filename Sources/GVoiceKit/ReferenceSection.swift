@@ -174,6 +174,81 @@ public enum ReferenceSection {
         return (out, start)
     }
 
+    /// Every way to end a cut at a sentence end, best guess first: for each sentence end in the back 60% of
+    /// `text` (last first), the cut in each pause (a quiet run of 100 ms or more) within 2.5 s of where that
+    /// sentence end falls by the character clock, nearest first, each keeping ~100 ms of its pause. The
+    /// character clock is only an estimate (speech rate varies), so the caller transcribes the candidates
+    /// and keeps the one whose words match (`wordDistance`). At most `limit` candidates; none under 5 s.
+    public static func sentenceEndCandidates(samples: [Float], text: String, sampleRate: Int,
+                                             limit: Int = 8) -> [(samples: [Float], text: String)] {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard words.count > 3 else { return [] }
+        let weights = words.map { Double($0.count + 1) }
+        let total = weights.reduce(0, +)
+        let frame = max(1, Int(Double(sampleRate) * 0.02))
+        let frameCount = samples.count / frame
+        guard frameCount > 0 else { return [] }
+        var energy = [Float](repeating: 0, count: frameCount)
+        var loudest: Float = 0
+        for f in 0 ..< frameCount {
+            var sumSq: Float = 0
+            for i in (f * frame) ..< ((f + 1) * frame) { sumSq += samples[i] * samples[i] }
+            energy[f] = (sumSq / Float(frame)).squareRoot()
+            loudest = max(loudest, energy[f])
+        }
+        let floor = max(loudest * 0.08, 0.008)
+        // pauses: (first quiet frame, length) of every quiet run of >= 5 frames
+        var pauses: [(start: Int, length: Int)] = []
+        var run = 0
+        for f in 0 ... frameCount {
+            if f < frameCount, energy[f] <= floor { run += 1; continue }
+            if run >= 5 { pauses.append((f - run, run)) }
+            run = 0
+        }
+        var out: [(samples: [Float], text: String)] = []
+        var seenEnds = Set<Int>()
+        var k = words.count
+        while k > 0, out.count < limit {
+            defer { k -= 1 }
+            let endsHere = k == words.count ? endsSentence(text) : (words[k - 1].last.map { ".!?…".contains($0) } ?? false)
+            guard endsHere, weights[..<k].reduce(0, +) >= total * 0.4 else { continue }
+            let estimate = weights[..<k].reduce(0, +) / total * Double(frameCount)
+            let near = pauses.filter { abs(Double($0.start) - estimate) <= 2.5 / 0.02 }
+                .sorted { abs(Double($0.start) - estimate) < abs(Double($1.start) - estimate) }
+            for p in near where out.count < limit {
+                let end = min(samples.count, (p.start + min(p.length, 5)) * frame)
+                guard end >= sampleRate * 5, seenEnds.insert(end * 31 + k).inserted else { continue }
+                var cut = Array(samples[..<end])
+                let fade = min(cut.count / 2, Int(Double(sampleRate) * 0.01))
+                for i in 0 ..< fade { cut[cut.count - 1 - i] *= Float(i) / Float(fade) }
+                out.append((cut, words[..<k].joined(separator: " ")))
+            }
+        }
+        return out
+    }
+
+    /// Words of a transcript for comparison: lower case, diacritics and punctuation dropped.
+    public static func comparableWords(_ text: String) -> [String] {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        return folded.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") }).map(String.init)
+    }
+
+    /// Word-level edit distance between what a recogniser heard in a cut and the transcript stored for it.
+    /// A cut whose audio runs past its transcript (or stops short of it) pays one per extra/missing word.
+    public static func wordDistance(heard: String, text: String) -> Int {
+        let a = comparableWords(text), b = comparableWords(heard)
+        var d = Array(0 ... b.count)
+        for i in 1 ... max(1, a.count) where !a.isEmpty {
+            var prev = d[0]; d[0] = i
+            for j in 1 ... max(1, b.count) where !b.isEmpty {
+                let cur = d[j]
+                d[j] = Swift.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] == b[j - 1] ? 0 : 1))
+                prev = cur
+            }
+        }
+        return a.isEmpty ? b.count : d[b.count]
+    }
+
     /// Whether `text` ends a sentence (`. ! ? …`, optionally followed by closing quotes/brackets).
     public static func endsSentence(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)

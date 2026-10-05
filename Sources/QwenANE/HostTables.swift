@@ -85,6 +85,14 @@ final class HostTables {
     }
 }
 
+/// The part spoken just before this one in the same break: its text ids (tokenised like a reference
+/// transcript) and its codec frames, frame-major (frames x 16).
+struct QwenContinuation {
+    var textIds: [Int]
+    var codes: [Int64]
+    var frames: Int { codes.count / 16 }
+}
+
 struct Prompt {
     var embeds: [Float]        // T x 1024
     var T: Int
@@ -129,6 +137,7 @@ final class VoicePrompt {
     let role: [Float]          // 3 x H
     let comb: [Float]          // 5 x H
     let ttsEos: [Float]        // H
+    let ttsPad: [Float]        // H
     let padRow: [Float]        // codec_pad row, added to every text row
     let refTextIds: [Int]
     let refRows: [Float]       // nRef x H
@@ -138,6 +147,40 @@ final class VoicePrompt {
     var prefixRows: Int { prefix.count / Self.H }
     /// Talker KV for the leading `kv.rows` rows (a multiple of the prefill chunk). Touched under the engine's lock.
     var kv: KVPrefix? = nil
+    private let host: HostTables
+
+    /// Codec ICL rows (+ tts_pad) for frame-major codes (frames x 16), summed in the same order as the
+    /// reference's rows: first-codebook row, then the 15 code-predictor rows, then tts_pad.
+    func codecRows(frameMajor codes: [Int64]) -> [Float] {
+        let H = Self.H, n = codes.count / 16
+        var out = [Float](repeating: 0, count: n * H)
+        for t in 0..<n {
+            let r0 = host.codecRow(Int(codes[t * 16]))
+            for j in 0..<H { out[t * H + j] = r0[j] }
+        }
+        for i in 0..<15 {
+            for t in 0..<n {
+                let row = host.cpRow(i, Int(codes[t * 16 + i + 1]))
+                for j in 0..<H { out[t * H + j] += row[j] }
+            }
+        }
+        for t in 0..<n { for j in 0..<H { out[t * H + j] += ttsPad[j] } }
+        return out
+    }
+
+    /// Text rows (+ codec_pad) for an already tokenised transcript.
+    func textRows(ids: [Int]) -> [Float] {
+        var rows = host.textProj(ids)
+        for r in 0..<(rows.count / Self.H) { for j in 0..<Self.H { rows[r * Self.H + j] += padRow[j] } }
+        return rows
+    }
+
+    /// A transcript's ids as the ICL prompt carries a reference transcript (upstream `ref_ids[:, 3:-2]`).
+    static func transcriptIds(_ host: HostTables, _ text: String) -> [Int] {
+        let ids = host.tok.encode("<|im_start|>assistant\n\(text)<|im_end|>\n")
+        let rs = min(3, ids.count), re = max(rs, ids.count - 2)
+        return Array(ids[rs..<re])
+    }
 
     /// `language` nil (or "auto", or one Qwen has no token for) is language auto: think rows
     /// [nothink, think_bos, think_eos], exactly as before the parameter existed. A known language uses
@@ -146,15 +189,14 @@ final class VoicePrompt {
     init(host: HostTables, voice: QwenVoiceFiles, language: String? = nil) {
         let c = host.cfg
         let H = Self.H
-        let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
-        let rs = min(3, refIds.count), re = max(rs, refIds.count - 2)
-        refTextIds = Array(refIds[rs..<re])
+        refTextIds = Self.transcriptIds(host, voice.refText)
         // The first three ids of "<|im_start|>assistant\n<line>": the role rows. (A line that begins with a
         // newline can merge with the third id, so `buildICLPrompt` checks them against `roleIds` per line.)
         roleIds = Array(host.tok.encode("<|im_start|>assistant\nx<|im_end|>\n<|im_start|>assistant\n").prefix(3))
         let tts = host.textProj([c.ttsBos, c.ttsEos, c.ttsPad])
         let ttsBos = Array(tts[0..<H]), ttsPad = Array(tts[2 * H..<3 * H])
         ttsEos = Array(tts[H..<2 * H])
+        self.ttsPad = ttsPad
         padRow = host.codecRow(c.codecPad)
         var refRows = host.textProj(refTextIds)
         for r in 0..<(refRows.count / H) { for j in 0..<H { refRows[r * H + j] += padRow[j] } }
@@ -175,6 +217,7 @@ final class VoicePrompt {
             }
         }
         for r in 0..<(Tref + 1) { for j in 0..<H { codecIcl[r * H + j] += ttsPad[j] } }
+        self.host = host
         self.codecIcl = codecIcl
         // prefix: think rows, speaker, pad, bos
         var prefix: [Float] = []
@@ -198,7 +241,8 @@ final class VoicePrompt {
 /// Port of qonnx.build_icl_prompt (language auto). `voicePrompt` supplies the voice's cached rows (built here,
 /// not kept, when nil). The embeddings equal the uncached construction bit for bit.
 func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, language: String? = nil,
-                    voicePrompt: VoicePrompt? = nil, keepVoicePrompt: Bool = false) -> Prompt {
+                    voicePrompt: VoicePrompt? = nil, keepVoicePrompt: Bool = false,
+                    continuation: QwenContinuation? = nil) -> Prompt {
     let H = 1024
     let vp = voicePrompt ?? VoicePrompt(host: host, voice: voice, language: language)
     let tgtIds = host.tok.encode("<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n")
@@ -209,7 +253,15 @@ func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, langu
     var lineRows = host.textProj(textIds) + vp.ttsEos          // (nText + 1) x H
     for r in 0..<(lineRows.count / H) { for j in 0..<H { lineRows[r * H + j] += vp.padRow[j] } }
     let prefixIsShared = role.count == vp.role.count && role == vp.role
-    let full = (prefixIsShared ? vp.prefix : role + vp.comb + vp.refRows) + lineRows + vp.codecIcl
+    var full = (prefixIsShared ? vp.prefix : role + vp.comb + vp.refRows)
+    if let c = continuation, !c.codes.isEmpty {
+        // The previous part of the same break joins the reference: its transcript after the reference's
+        // and its codec frames after the reference's, the same [text ; codec] ICL the reference itself uses,
+        // so the line continues the performance instead of restarting from the reference.
+        full += vp.textRows(ids: c.textIds) + lineRows + vp.codecIcl + vp.codecRows(frameMajor: c.codes)
+    } else {
+        full += lineRows + vp.codecIcl
+    }
     return Prompt(embeds: full, T: full.count / H, nTextTokens: host.tok.encode(text).count,
                   textIds: textIds, refTextIds: vp.refTextIds, targetIds: tgtIds,
                   prefixRows: prefixIsShared ? vp.prefixRows : 0,

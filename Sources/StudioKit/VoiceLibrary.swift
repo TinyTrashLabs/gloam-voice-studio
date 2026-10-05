@@ -105,9 +105,11 @@ public struct VoiceLibrary: Sendable {
     @discardableResult
     public func prepareQwenSections(_ slug: String) async -> [String] {
         var done: [String] = []
-        for (_, vslug) in variantSlugs(of: slug).sorted(by: { $0.key < $1.key }) {
+        for (key, vslug) in variantSlugs(of: slug).sorted(by: { $0.key < $1.key }) {
             guard let (meta, refURL, _) = try? entry(vslug), let refURL else { continue }
-            if await ReferenceSections.prepareQwen(referenceURL: refURL, refText: meta.refText) { done.append(vslug) }
+            // A language reference is keyed by its language ("es"): its section's words are checked in it.
+            let language = ReferenceSections.language(ofTakeKey: key)
+            if await ReferenceSections.prepareQwen(referenceURL: refURL, refText: meta.refText, language: language) { done.append(vslug) }
         }
         return done
     }

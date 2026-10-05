@@ -115,6 +115,51 @@ final class QwenANEBackendTests: XCTestCase {
         return WAVWriterData.wav(pcm: pcm)
     }
 
+    // MARK: long lines
+
+    @available(macOS 15.0, iOS 18.0, *)
+    func testALineThatFitsIsOneRenderAndALongOneSplitsAtSentences() {
+        let short = "Good evening, and welcome back to the late show."
+        XCTAssertEqual(QwenANESpeechModel.parts(short, fits: { _ in true }), [short])
+        let sentence = "That was a slow one, and there is another just like it coming up after the news. "
+        let long = String(repeating: sentence, count: 6)
+        let parts = QwenANESpeechModel.parts(long, fits: { $0.count < 200 })
+        XCTAssertGreaterThan(parts.count, 1)
+        for p in parts {
+            XCTAssertLessThanOrEqual(LongTextChunker.estimatedSeconds(p), QwenANESpeechModel.partSeconds)
+            XCTAssertTrue(p.trimmingCharacters(in: .whitespaces).hasSuffix("."), p)
+        }
+        XCTAssertEqual(parts.joined().filter { !$0.isWhitespace }, long.filter { !$0.isWhitespace },
+                       "every word is spoken once, in order")
+    }
+
+    /// With a model set installed (GLOAM_QWEN_ANE_MODELS), a line too long for one render comes back whole:
+    /// every part rendered through one session, not cut at the talker's window.
+    @available(macOS 15.0, iOS 18.0, *)
+    func testALongLineRendersEveryPart() async throws {
+        guard let p = ProcessInfo.processInfo.environment[QwenANEModelLocation.environmentKey], !p.isEmpty else {
+            throw XCTSkip("\(QwenANEModelLocation.environmentKey) is not set")
+        }
+        let models = URL(fileURLWithPath: p)
+        // Benson, the pack the repo ships: its master and transcript, its stored Qwen section beside them.
+        let pack = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../packs/benson.gvoice").standardizedFileURL
+        let dir = try tempDir()
+        let unzip = try Process.run(URL(fileURLWithPath: "/usr/bin/ditto"), arguments: ["-x", "-k", pack.path, dir.path])
+        unzip.waitUntilExit()
+        let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("manifest.json"))) as? [String: Any]
+        let base = (manifest?["source"] as? [String: Any])?["base"] as? [String: Any]
+        let refText = try XCTUnwrap(base?["text"] as? String)
+        let ref = dir.appendingPathComponent("ref.wav")
+        try FileManager.default.copyItem(at: dir.appendingPathComponent("source/ref.wav"), to: ref)
+        let model = try await Task.detached { try QwenANESpeechModel(modelsDirectory: models, cacheRoot: dir.appendingPathComponent("cache")) }.value
+        let sentence = "That was a slow one, and there is another just like it coming up after the news. "
+        let text = String(repeating: sentence, count: 12)
+        let samples = try await model.synthesize(ProviderRequest(text: text, refAudioPath: ref.path, refText: refText, seed: 3))
+        // ~12 x 5 s of speech; one render would stop at the window, well short of it.
+        XCTAssertGreaterThan(Double(samples.count) / 24000, 40)
+    }
+
     @available(macOS 15.0, iOS 18.0, *)
     func testReferenceOverTheEncoderInputGetsAWindowInsteadOfARefusal() async throws {
         let dir = try tempDir()

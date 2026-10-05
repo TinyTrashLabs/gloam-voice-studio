@@ -57,6 +57,59 @@ final class QwenVoicePrepFolderTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(stored.derivedFrom.endSeconds) - XCTUnwrap(stored.derivedFrom.startSeconds), seconds, accuracy: 0.01)
     }
 
+    /// The character clock puts a sentence end in the wrong pause when word lengths vary (here long words
+    /// first, short ones after), so the section kept words its transcript did not have: Bad Bunny's Spanish
+    /// section ended "en especifico." while its audio went on "Yo creo que". With a recogniser the cut whose
+    /// words match its transcript is the one stored. The fake recogniser hears one word per burst (the
+    /// master's own words, punctuation and all), as a real one hears the audio, not the transcript.
+    func testSectionAudioAndTranscriptEndTogether() async throws {
+        let long = ["extraordinariamente", "particularmente", "responsabilidades", "internacionalmente"]
+        let short = ["a", "y", "o", "si", "no", "te"]
+        var words: [String] = []
+        for i in 0 ..< 46 {
+            var w = i < 14 ? long[i % long.count] : short[i % short.count]
+            if i % 3 == 2 { w += "." }
+            words.append(w)
+        }
+        let transcript = words.joined(separator: " ")
+        let heardWords = words
+        let recognizer: @Sendable (Data) async -> String? = { wav in
+            guard let x = try? QwenVoicePrep.samples(of: wav) else { return nil }
+            return heardWords.prefix(Self.bursts(x)).joined(separator: " ")
+        }
+        let r = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: master(seconds: 41.4), transcript: transcript, cacheDirectory: cache,
+            transcribe: recognizer, limitSamples: limit, encode: fake(Encoder()))
+        let section = try QwenVoicePrep.samples(of: try Data(contentsOf: sectionURL))
+        let stored = r.files.refText
+        XCTAssertTrue(ReferenceSection.endsSentence(stored), stored)
+        XCTAssertEqual(stored.split(separator: " ").count, Self.bursts(section), "every word the audio says is in its transcript, and no other")
+
+        // The same master without a recogniser keeps the character clock's guess: the bug, for contrast.
+        try? FileManager.default.removeItem(at: voiceDir); try? FileManager.default.removeItem(at: cache)
+        try FileManager.default.createDirectory(at: voiceDir, withIntermediateDirectories: true)
+        let guess = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: master(seconds: 41.4), transcript: transcript, cacheDirectory: cache,
+            transcribe: nil, limitSamples: limit, encode: fake(Encoder()))
+        let guessSection = try QwenVoicePrep.samples(of: try Data(contentsOf: sectionURL))
+        XCTAssertNotEqual(guess.files.refText.split(separator: " ").count, Self.bursts(guessSection),
+                          "the fixture really does fool the character clock")
+    }
+
+    /// Speech bursts (runs of 20 ms windows above -30 dBFS) in a clip.
+    private static func bursts(_ x: [Float]) -> Int {
+        let w = 480
+        var n = 0, inBurst = false
+        for i in 0 ..< x.count / w {
+            var s: Float = 0
+            for j in (i * w) ..< ((i + 1) * w) { s += x[j] * x[j] }
+            let loud = 10 * log10(s / Float(w) + 1e-12) > -30
+            if loud && !inBurst { n += 1 }
+            inBurst = loud
+        }
+        return n
+    }
+
     func testALongMasterGetsItsSectionStoredInThePack() async throws {
         let m = master(seconds: 50), e = Encoder()
         let r = try await run(m, e)
