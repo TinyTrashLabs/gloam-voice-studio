@@ -23,9 +23,12 @@ public final class QwenTalkSession {
     public let seed: UInt64
     /// Condition each part on the previous one (on by default). Off renders every part from the reference
     /// alone, still from the one sampler stream.
-    public var carryContext = true
+    public var carryContext: Bool {
+        get { carry.enabled }
+        set { carry.enabled = newValue }
+    }
     private var sampler: Sampler
-    private var previous: QwenContinuation?
+    private var carry = QwenCarry<QwenContinuation>()
     /// Parts rendered so far.
     public private(set) var partsRendered = 0
 
@@ -45,16 +48,18 @@ public final class QwenTalkSession {
     }
 
     /// Extra takes drawn for a part whose take derailed (see `derailed`). 0 turns the guard off.
-    public var maxRedraws = 2
+    public var maxRedraws = QwenReadRules.maxRedraws
 
     /// A take that derailed: it ran to the frame cap without ending (`maxTokens` / `contextFull`), or it holds a
     /// silent run of more than `maxPauseSeconds` between two stretches of speech. Measured on Bad Bunny and Benson
     /// Spanish parts (360 renders, Whisper large-v3 turbo as the judge): it catches 34 of the 53 unintelligible
     /// takes and fires on 3 of the 307 intelligible ones (1 %), whose redraw only costs time.
+    /// The rule itself is `QwenReadRules.derailed`, shared with the iPhone's MLX path.
     public static func derailed(_ r: QwenRender) -> Bool {
-        r.stopReason == .maxTokens || r.stopReason == .contextFull || r.silenceBefore.longestPause > maxPauseSeconds
+        QwenReadRules.derailed(hitFrameCap: hitFrameCap(r), longestPause: r.silenceBefore.longestPause)
     }
-    public static let maxPauseSeconds = 2.0
+    public static let maxPauseSeconds = QwenReadRules.maxPauseSeconds
+    static func hitFrameCap(_ r: QwenRender) -> Bool { r.stopReason == .maxTokens || r.stopReason == .contextFull }
 
     /// Renders the next part of the break. Same contract as `QwenANEEngine.render` (blocks, honours
     /// `cancelled` and `pace`). A take that `derailed` is drawn again, from the same sampler stream, up to
@@ -63,7 +68,7 @@ public final class QwenTalkSession {
     /// With `onAudio` there is no redraw (its chunks are already out), only the one take.
     public func render(_ text: String, chunkFrames: [Int]? = nil, cancelled: () -> Bool = { false },
                        pace: () -> Void = {}, onAudio: (([Float]) -> Void)? = nil) throws -> QwenRender {
-        let context = carryContext ? previous : nil
+        let context = carry.context
         var best: QwenRender? = nil
         var takes = 0
         while true {
@@ -80,17 +85,16 @@ public final class QwenTalkSession {
         var r = best!
         r.takes = takes
         partsRendered += 1
-        if r.stopReason != .cancelled, r.frames > 0, !Self.derailed(r) {
-            previous = QwenContinuation(textIds: engine.transcriptIds(text), codes: r.codes)
-        } else if r.stopReason != .cancelled {
-            previous = nil      // never continue a derailed take: the next part starts from the reference
-        }
+        // Never continue a derailed take: the next part starts from the reference.
+        carry.partEnded(cancelled: r.stopReason == .cancelled,
+                        take: QwenReadRules.carries(frames: r.frames, derailed: Self.derailed(r))
+                            ? QwenContinuation(textIds: engine.transcriptIds(text), codes: r.codes) : nil)
         return r
     }
 
     /// Orders takes when none is clean: one that ended beats one that hit the cap, then the shorter dead air.
     static func badness(_ r: QwenRender) -> Double {
-        (r.stopReason == .maxTokens || r.stopReason == .contextFull ? 100 : 0) + r.silenceBefore.longestPause
+        QwenReadRules.badness(hitFrameCap: hitFrameCap(r), longestPause: r.silenceBefore.longestPause)
     }
 }
 
