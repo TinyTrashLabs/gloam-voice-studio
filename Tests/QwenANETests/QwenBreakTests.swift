@@ -104,6 +104,11 @@ final class QwenBreakTests: XCTestCase {
         XCTAssertEqual(logged, b.parts)
         XCTAssertEqual(b.parts[0].contextFrames, 0)
         XCTAssertGreaterThan(b.parts[1].contextFrames, 0)
+        for p in b.parts {
+            let t = try XCTUnwrap(p.timings, "part \(p.index + 1) carries its engine stage timings")
+            XCTAssertGreaterThan(t.loop, 0)
+            XCTAssertGreaterThan(t.total, 0)
+        }
         let partSamples = b.parts.map { Int(($0.audioSeconds * 24000).rounded()) }.reduce(0, +)
         XCTAssertEqual(b.samples.count, partSamples + 3600)
         var streamed: [Float] = []
