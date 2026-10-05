@@ -30,8 +30,6 @@ public struct HFSnapshotDownloadError: LocalizedError {
 /// hand-rolled copy.
 public func downloadHFSnapshot(repo: String, to dest: URL,
                                progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
-    struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
-
     guard let treeURL = URL(
         string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true") else {
         throw HFSnapshotDownloadError("Invalid repo id: \(repo)")
@@ -41,8 +39,8 @@ public func downloadHFSnapshot(repo: String, to dest: URL,
     if let http = treeResponse as? HTTPURLResponse, http.statusCode != 200 {
         throw HFSnapshotDownloadError("\(repo): tree listing HTTP \(http.statusCode)")
     }
-    let files = try JSONDecoder().decode([Entry].self, from: listData)
-        .filter { $0.type == "file" }
+    // Full nested paths: a `.mlmodelc` folder arrives as its files (see HFSnapshotLayout).
+    let files = try HFSnapshotLayout.files(inTree: listData)
     guard !files.isEmpty else {
         throw HFSnapshotDownloadError("No files found in \(repo)")
     }
@@ -61,7 +59,7 @@ public func downloadHFSnapshot(repo: String, to dest: URL,
     for file in files {
         try Task.checkCancellation()
         let unit: Int64 = haveSizes ? (file.size ?? 0) : 1
-        let target = dest.appendingPathComponent(file.path)
+        let target = HFSnapshotLayout.target(for: file.path, in: dest)
 
         // Skip files already present with the expected size (cheap re-runs).
         if let size = file.size,
@@ -72,8 +70,7 @@ public func downloadHFSnapshot(repo: String, to dest: URL,
             continue
         }
 
-        guard let src = URL(
-            string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
+        guard let src = HFSnapshotLayout.resolveURL(repo: repo, path: file.path) else { continue }
         try fm.createDirectory(
             at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 

@@ -52,6 +52,8 @@ final class ModelDownloadManager {
         // Breeze's per-precision sizes are exact — see
         // BackendID.measuredDownloadBytes; this is only the fallback.
         .breezeTTS2: 4_600_000_000,
+        // tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE: 164 files, 2,066,161,318 bytes.
+        .qwen06BANE: 2_100_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
@@ -111,6 +113,9 @@ final class ModelDownloadManager {
     }
 
     func directory(for backend: BackendID) -> URL {
+        // The Neural Engine set downloads where its loader looks by default
+        // (`QwenANEModelLocation`, which an env var / defaults key can still override).
+        if backend == .qwen06BANE { return QwenANEModelLocation.defaultDirectory() }
         // Only Qwen folders are quant-suffixed from `quant(for:)`. dia2 encodes
         // size with its precision and supplies its own default, and handing it
         // a bare "8bit" pointed this at `dia2@8bit` while AppModel's loader
@@ -194,6 +199,9 @@ final class ModelDownloadManager {
         if backend == .pocketTTS {
             return PocketTTS.missingModelFile(in: directory(for: backend)) == nil
         }
+        // No root config.json: the set is `.mlmodelc` folders plus host/ and vochead/. Ready when the
+        // loader would find a whole set — downloaded, or hand-installed behind the env var / defaults key.
+        if backend == .qwen06BANE { return (try? QwenANEModelLocation.resolve()) != nil }
         return isComplete(dir: directory(for: backend))
     }
 
@@ -208,7 +216,9 @@ final class ModelDownloadManager {
         let repo = backend.modelRepo(quant: quant(for: backend))
         downloadTasks[backend] = Task {
             do {
-                try await downloadRepoSnapshot(repo: repo, to: dest) { fraction in
+                try await downloadRepoSnapshot(
+                    repo: repo, to: dest, pruneOnlyRepoFolders: backend.sharesFolderWithUser
+                ) { fraction in
                     self.states[backend] = .downloading(fraction)
                 }
                 self.states[backend] = .ready
@@ -240,19 +250,18 @@ final class ModelDownloadManager {
     // rebuilds a second saturates the main thread and makes everything in the
     // app scroll badly while a model downloads.
     nonisolated private func downloadRepoSnapshot(
-        repo: String, to dir: URL,
+        repo: String, to dir: URL, pruneOnlyRepoFolders: Bool = false,
         // `@escaping` because the streaming download reports from URLSession's
         // delegate queue, after this function has already suspended.
         onProgress: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws {
-        struct Entry: Decodable { let type: String; let path: String; let size: Int64? }
         guard let treeURL = URL(
             string: "https://huggingface.co/api/models/\(repo)/tree/main?recursive=true") else {
             throw DownloadError(message: "Invalid repo id: \(repo)")
         }
         let (listData, _) = try await URLSession.shared.data(from: treeURL)
-        let entries = try JSONDecoder().decode([Entry].self, from: listData)
-            .filter { $0.type == "file" }
+        // Full nested paths (a `.mlmodelc` arrives as its files); see HFSnapshotLayout.files(inTree:).
+        let entries = try HFSnapshotLayout.files(inTree: listData)
         // Every path this repo actually contains — the prune at the end keeps
         // these, INCLUDING the .pt copies filtered out just below. A file we
         // deliberately skip downloading is still part of this repo, and
@@ -285,7 +294,7 @@ final class ModelDownloadManager {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for file in files {
             try Task.checkCancellation()
-            let target = dir.appendingPathComponent(file.path)
+            let target = HFSnapshotLayout.target(for: file.path, in: dir)
             // File-level resume: a prior run already wrote this file in full.
             if let size = file.size, size > 0,
                let onDisk = try? FileManager.default.attributesOfItem(
@@ -295,8 +304,7 @@ final class ModelDownloadManager {
                 await report(Double(done) / Double(total))
                 continue
             }
-            guard let src = URL(
-                string: "https://huggingface.co/\(repo)/resolve/main/\(file.path)") else { continue }
+            guard let src = HFSnapshotLayout.resolveURL(repo: repo, path: file.path) else { continue }
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             // Stream to a .part file so progress moves within a single large
@@ -339,7 +347,7 @@ final class ModelDownloadManager {
             // must land on 1.0 rather than stopping just short.
             await report(Double(done) / Double(total), force: true)
         }
-        Self.pruneFilesNotIn(repoPaths, under: dir)
+        Self.pruneFilesNotIn(repoPaths, under: dir, onlyRepoFolders: pruneOnlyRepoFolders)
     }
 
     /// Deletes everything in `dir` that the repo we just fetched does not
@@ -358,46 +366,16 @@ final class ModelDownloadManager {
     /// the working model a user already had, which is far worse than the leak
     /// this fixes. `downloadRepoSnapshot` throws on both, so this line is never
     /// reached in either case.
+    /// Never touches a user's `voices/` folder (`HFSnapshotLayout.userFolders`); with `onlyRepoFolders`
+    /// (the Neural Engine set's folder) nothing outside the repo's own top-level folders either.
     nonisolated private static func pruneFilesNotIn(
-        _ repoPaths: Set<String>, under dir: URL
+        _ repoPaths: Set<String>, under dir: URL, onlyRepoFolders: Bool
     ) {
-        let fm = FileManager.default
         // Hand-placed, never in any repo: sherpa's dylib is normally bundled in
         // the app, but a dev build without it reads this copy, and PocketTTS
         // reports the whole model missing the moment it goes.
-        let keepNames: Set<String> = [PocketTTS.libraryFile]
-        // `enumerator(atPath:)` yields paths RELATIVE to `dir`, which is what
-        // `repoPaths` holds. Deriving them from absolute URLs instead looks
-        // equivalent and is not: on macOS the enumerator hands back
-        // `/private/var/...` for a `/var/...` root, the prefix match fails, and
-        // every file in a subdirectory (qwen3's `speech_tokenizer/`) stops
-        // matching its repo path and gets deleted.
-        guard let walk = fm.enumerator(atPath: dir.path) else { return }
-
-        var dirs: [String] = []
-        for case let relative as String in walk {
-            var isDir: ObjCBool = false
-            let url = dir.appendingPathComponent(relative)
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            guard !isDir.boolValue else {
-                dirs.append(relative)
-                continue
-            }
-            guard !repoPaths.contains(relative),
-                  !keepNames.contains(url.lastPathComponent) else { continue }
-            try? fm.removeItem(at: url)
-        }
-        // Deepest first, so a directory emptied by removing its children is
-        // itself removed on the same pass. `contentsOfDirectory` is non-empty
-        // for a directory that still holds anything, so this only takes the
-        // ones the prune actually emptied.
-        for relative in dirs.sorted(by: { $0.components(separatedBy: "/").count
-                                          > $1.components(separatedBy: "/").count }) {
-            let url = dir.appendingPathComponent(relative)
-            if let left = try? fm.contentsOfDirectory(atPath: url.path), left.isEmpty {
-                try? fm.removeItem(at: url)
-            }
-        }
+        HFSnapshotLayout.prune(keeping: repoPaths, under: dir, keepNames: [PocketTTS.libraryFile],
+                               onlyRepoFolders: onlyRepoFolders)
     }
 
     func cancelDownload(_ backend: BackendID) {
@@ -406,8 +384,16 @@ final class ModelDownloadManager {
 
     func delete(_ backend: BackendID) {
         downloadTasks[backend]?.cancel()
-        try? FileManager.default.removeItem(at: directory(for: backend))
-        states[backend] = .notDownloaded
+        let dir = directory(for: backend)
+        let fm = FileManager.default
+        // Everything but a user's own folders (`voices/` beside the Neural Engine set), then the folder
+        // itself once nothing is left in it.
+        for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+        where !HFSnapshotLayout.userFolders.contains(name) {
+            try? fm.removeItem(at: dir.appendingPathComponent(name))
+        }
+        if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty ?? false { try? fm.removeItem(at: dir) }
+        states[backend] = isComplete(backend) ? .ready : .notDownloaded
     }
 
     struct InsufficientDiskSpace: LocalizedError {

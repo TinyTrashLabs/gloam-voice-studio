@@ -25,9 +25,9 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case qwen06BMobile = "qwen3-0.6b-mobile"
     /// Qwen3-TTS 0.6B Base on the Apple Neural Engine (Core ML, macOS 15+), no MLX and no GPU:
     /// the model for realtime use beside a GPU-bound LLM, and the only one that STREAMS the first
-    /// words of a line while the rest renders. Needs a model set that is not on Hugging Face yet
-    /// (see `QwenANEModelLocation`), so it is API-server only: not in the Studio picker and not
-    /// downloadable in-app. It is not `isQwen`: that flag means "MLX Qwen, repo + quant folders".
+    /// words of a line while the rest renders. Its model set (`tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE`)
+    /// downloads into `QwenANEModelLocation.defaultDirectory`. Clone-only: a voice needs a reference
+    /// transcript. It is not `isQwen`: that flag means "MLX Qwen, repo + quant folders".
     case qwen06BANE = "qwen3-0.6b-ane"
     case qwen17B = "qwen3-1.7b"
     case qwenDesign = "qwen3-design"
@@ -597,9 +597,9 @@ extension BackendID {
                         needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
         case .qwen06BANE:
-            // No HF repo yet: `modelRepo` is the name the set will publish under, never fetched
-            // (`surfaces` has no `.downloadable`). RAM floor is lower than the MLX bakes: ~1.3 GB of Core ML models.
-            BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-12Hz-0.6B-Base-ane",
+            // `.mlmodelc` folders + host/ + vochead/, 2.07 GB, fetched by the in-app downloader into
+            // `QwenANEModelLocation.defaultDirectory` (not the quant-folder layout of the MLX bakes).
+            BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 8_000_000_000)
@@ -753,9 +753,9 @@ extension BackendID {
             // Still offered to the API, where a caller always sends `instruct`.
             [.creation, .apiServer, .downloadable]
         case .qwen06BANE:
-            // Its model set is installed by hand for now (QwenANEModelLocation), so there is nothing
-            // to download or to offer in the picker; the HTTP API serves it (and streams).
-            [.apiServer]
+            // Renders on the Neural Engine lane wherever it is picked (Studio, chat, API), so it runs
+            // beside a GPU-bound chat LLM. Clone-only: voices without a transcript are disabled per voice.
+            [.studio, .chatVoice, .apiServer, .downloadable]
         case .luxTTS:
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .kokoro, .supertonic, .pocketTTS:
@@ -776,10 +776,10 @@ extension BackendID {
         }
     }
 
-    /// True for a backend whose model files are put on disk by hand (or by a build step), not
-    /// fetched by the in-app downloader, so it is exempt from "selectable implies downloadable".
-    /// Its loader reports a missing model set with `EngineError.modelNotInstalled`.
-    public var installsManually: Bool { self == .qwen06BANE }
+    /// True when this backend's model folder is one a user also keeps their own files in (the Neural
+    /// Engine set's folder holds hand-prepared `voices/`, and the loader can be pointed at it by hand), so
+    /// a re-download only cleans the repo's own top-level folders. See `HFSnapshotLayout.prune`.
+    public var sharesFolderWithUser: Bool { self == .qwen06BANE }
 
     /// Backends appearing on `surface`, in declaration order.
     public static func on(_ surface: BackendSurfaces) -> [BackendID] {

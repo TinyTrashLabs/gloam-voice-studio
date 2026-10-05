@@ -3,8 +3,8 @@ import Foundation
 /// Where the `qwen3-0.6b-ane` model set lives on disk.
 ///
 /// The set (talker0/1, cp_ane, upF, upMall, the two voice encoders as `.mlmodelc`, plus `host/` and
-/// `vochead/`; see Sources/QwenANE/README.md) is not published on Hugging Face yet, so the in-app downloader
-/// cannot fetch it. It is resolved, first match wins, from:
+/// `vochead/`; see Sources/QwenANE/README.md) is published as `tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE`, and the
+/// in-app downloader fetches it into `defaultDirectory`. It is resolved, first match wins, from:
 ///
 ///  1. the `GLOAM_QWEN_ANE_MODELS` environment variable (a models directory),
 ///  2. the `qwenANEModelsPath` UserDefaults key (`defaults write <bundle id> qwenANEModelsPath <dir>`),
