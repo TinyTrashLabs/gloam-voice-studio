@@ -1,0 +1,162 @@
+From 14f87443e566d7f925bf0073118b9dd3a5259d41 Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Tue, 21 Jul 2026 22:12:47 -0400
+Subject: [PATCH 02/12] feat(engine): add SuperTonic backend spec + preset
+ voices
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BackendID.supertonic (rawValue "supertonic"): modelRepo
+TinyTrashLabs/supertonic-3-mlx, 44100 Hz, no clone/instruct/knobs,
+emotionMechanism .none, 10 preset styles M1-M5/F1-F5. needsLicenseAck
+is true — the weights are BigScience Open RAIL-M with use-based
+restrictions (docs/supertonic-licensing.md). MLXSpeechModel passes the
+validated preset speaker through generate(voice:) exactly like Kokoro.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ Sources/EngineKit/Backend.swift          | 18 ++++++++++++
+ Sources/EngineKit/MLXModelProvider.swift |  2 +-
+ Tests/EngineKitTests/BackendTests.swift  | 36 ++++++++++++++++++++++--
+ 3 files changed, 52 insertions(+), 4 deletions(-)
+
+diff --git a/Sources/EngineKit/Backend.swift b/Sources/EngineKit/Backend.swift
+index 2c2f5eb6..3383fa47 100644
+--- a/Sources/EngineKit/Backend.swift
++++ b/Sources/EngineKit/Backend.swift
+@@ -9,6 +9,7 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
+     case chatterboxTurbo = "chatterbox-turbo"
+     case fishS2Pro = "fish-s2-pro"
+     case kokoro
++    case supertonic
+ 
+     /// Fish's S1-DAC codec sample rate — reference audio must be loaded at this
+     /// rate; the codec raises on mismatch.
+@@ -104,6 +105,12 @@ extension BackendID {
+         "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+         "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+     ]
++
++    /// SuperTonic 3's 10 preset voice styles, as shipped in the converted-weights
++    /// repo's voice_styles/ directory (Supertone/supertonic-3 presets).
++    public static let supertonicVoices: [String] = [
++        "M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5",
++    ]
+ }
+ 
+ /// Which sampling sliders a backend exposes in the Advanced disclosure.
+@@ -208,6 +215,9 @@ extension BackendID {
+         case .kokoro:
+             ControlSurface(voiceClone: .none, presetSpeakers: Self.kokoroVoices,
+                            instruct: .none, language: false, knobs: Knobs())
++        case .supertonic:
++            ControlSurface(voiceClone: .none, presetSpeakers: Self.supertonicVoices,
++                           instruct: .none, language: false, knobs: Knobs())
+         }
+     }
+ }
+@@ -222,6 +232,7 @@ extension BackendID {
+         case .chatterbox: .liveKnob(.exaggeration)
+         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
+         case .kokoro: .none
++        case .supertonic: .none                      // no emotion knob, no clone (Slice 1)
+         }
+     }
+ }
+@@ -282,6 +293,13 @@ extension BackendID {
+                         defaultSampleRate: 24000, honorsTags: false,
+                         needsLicenseAck: false, needsRefAudio: false,
+                         minRAMBytes: 8_000_000_000)
++        case .supertonic:
++            // Weights are BigScience Open RAIL-M (use-based restrictions) — require
++            // an explicit ack like Fish. See docs/supertonic-licensing.md.
++            BackendSpec(modelRepo: "TinyTrashLabs/supertonic-3-mlx",
++                        defaultSampleRate: 44100, honorsTags: false,
++                        needsLicenseAck: true, needsRefAudio: false,
++                        minRAMBytes: 8_000_000_000)
+         }
+     }
+ }
+diff --git a/Sources/EngineKit/MLXModelProvider.swift b/Sources/EngineKit/MLXModelProvider.swift
+index 791c08ac..ba3ce7fe 100644
+--- a/Sources/EngineKit/MLXModelProvider.swift
++++ b/Sources/EngineKit/MLXModelProvider.swift
+@@ -122,7 +122,7 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
+                 audio = try await model.generate(
+                     text: request.text,
+                     voice: backend.isQwen ? request.instruct
+-                        : backend == .kokoro ? request.speaker
++                        : backend == .kokoro || backend == .supertonic ? request.speaker
+                         : nil,
+                     refAudio: refAudio,
+                     refText: request.refText,
+diff --git a/Tests/EngineKitTests/BackendTests.swift b/Tests/EngineKitTests/BackendTests.swift
+index fd0e553a..5822696a 100644
+--- a/Tests/EngineKitTests/BackendTests.swift
++++ b/Tests/EngineKitTests/BackendTests.swift
+@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
+         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
+         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
+         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
+-        XCTAssertEqual(BackendID.allCases.count, 8)
++        XCTAssertEqual(BackendID.allCases.count, 9)
+     }
+ 
+     func testQwenBackendRawValues() {
+@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
+         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
+         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
+         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
+-        XCTAssertEqual(BackendID.allCases.count, 8)
++        XCTAssertEqual(BackendID.allCases.count, 9)
+     }
+ 
+     func testQwenFamilyFlag() {
+@@ -136,7 +136,7 @@ final class BackendTests: XCTestCase {
+ 
+     func testKokoroRawValue() {
+         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
+-        XCTAssertEqual(BackendID.allCases.count, 8)
++        XCTAssertEqual(BackendID.allCases.count, 9)
+     }
+ 
+     func testKokoroSpec() {
+@@ -166,4 +166,34 @@ final class BackendTests: XCTestCase {
+     func testKokoroIsNotQwen() {
+         XCTAssertFalse(BackendID.kokoro.isQwen)
+     }
++
++    func testSupertonicRawValue() {
++        XCTAssertEqual(BackendID.supertonic.rawValue, "supertonic")
++        XCTAssertFalse(BackendID.supertonic.isQwen)
++    }
++
++    func testSupertonicSpec() {
++        let spec = BackendID.supertonic.spec
++        XCTAssertEqual(spec.modelRepo, "TinyTrashLabs/supertonic-3-mlx")
++        XCTAssertEqual(spec.defaultSampleRate, 44100)
++        XCTAssertFalse(spec.honorsTags)
++        // Open RAIL-M use-based restrictions — explicit ack like Fish.
++        XCTAssertTrue(spec.needsLicenseAck)
++        XCTAssertFalse(spec.needsRefAudio)
++        XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
++        XCTAssertEqual(BackendID.supertonic.emotionMechanism, .none)
++    }
++
++    func testSupertonicControls() {
++        let controls = BackendID.supertonic.controls
++        XCTAssertEqual(controls.voiceClone, .none)
++        XCTAssertEqual(controls.instruct, .none)
++        XCTAssertFalse(controls.language)
++        XCTAssertNil(controls.knobs.temperature)
++        XCTAssertNil(controls.knobs.exaggeration)
++        XCTAssertNil(controls.knobs.cfgWeight)
++        XCTAssertEqual(controls.presetSpeakers,
++                       ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"])
++        XCTAssertEqual(Set(controls.presetSpeakers).count, 10, "no duplicate voice names")
++    }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

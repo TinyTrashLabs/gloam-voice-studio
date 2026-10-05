@@ -1,0 +1,129 @@
+From 3c130f7d7cce2bdd33542df61ba7732e49ccfeea Mon Sep 17 00:00:00 2001
+From: David Freeman <david@tinytrashlabs.com>
+Date: Tue, 21 Jul 2026 22:43:58 -0400
+Subject: [PATCH 06/12] =?UTF-8?q?feat(app):=20make=20SuperTonic=20selectab?=
+ =?UTF-8?q?le=20=E2=80=94=20pickers,=20studio=20preset=20UI,=20download=20?=
+ =?UTF-8?q?size?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add .supertonic to the Studio model picker and Settings backends list
+(after kokoro), give it a DIRECT-zone explainer + preset-voice caption
+(M1-M5/F1-F5, no clone/emotion/direction — mirrors Kokoro), an approx
+download size (HF repo ~382 MB; measured 400,154,382 bytes), and an
+'Open RAIL-M use restrictions' size-label caption in Settings.
+
+Deliberately NOT in the Creation/foundry baker lists — SuperTonic is a
+preset-voice backend, not a design/clone baker.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ App/ModelDownloadManager.swift |  3 +++
+ App/Views/ContentView.swift    |  3 ++-
+ App/Views/SettingsView.swift   | 13 +++++++++----
+ App/Views/StudioView.swift     |  7 +++++++
+ 4 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/App/ModelDownloadManager.swift b/App/ModelDownloadManager.swift
+index 2a4e696d..c73faa57 100644
+--- a/App/ModelDownloadManager.swift
++++ b/App/ModelDownloadManager.swift
+@@ -31,6 +31,9 @@ final class ModelDownloadManager {
+         // skips .pt, so ~361MB is the real download (confirmed via a live
+         // `spike` CLI run: 361,127,491 bytes).
+         .kokoro: 365_000_000,
++        // tinytrashlabs/supertonic-3-mlx is ~382MB on HF; measured download
++        // 400,154,382 bytes.
++        .supertonic: 400_000_000,
+     ]
+ 
+     func approxBytes(for backend: BackendID) -> Int64 {
+diff --git a/App/Views/ContentView.swift b/App/Views/ContentView.swift
+index 3501ecec..75f4fb63 100644
+--- a/App/Views/ContentView.swift
++++ b/App/Views/ContentView.swift
+@@ -154,7 +154,8 @@ struct ContentView: View {
+     private var pickerBackends: [BackendID] {
+         // qwen3-design is intentionally absent — it's Creation-only, in the Voice
+         // Foundry (Create Voice), not a Studio backend. Still downloadable in Settings.
+-        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro]
++        [.qwen06B, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro,
++         .supertonic]
+     }
+ 
+     private func modelDisplayName(_ b: BackendID) -> String {
+diff --git a/App/Views/SettingsView.swift b/App/Views/SettingsView.swift
+index 558d1db7..69ce949c 100644
+--- a/App/Views/SettingsView.swift
++++ b/App/Views/SettingsView.swift
+@@ -55,7 +55,7 @@ struct BackendsSettings: View {
+ 
+     private let backends: [BackendID] =
+         [.qwen06B, .qwen17B, .qwenDesign, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox,
+-         .kokoro]
++         .kokoro, .supertonic]
+ 
+     var body: some View {
+         @Bindable var model = model
+@@ -121,7 +121,7 @@ struct BackendsSettings: View {
+                 case .notDownloaded:
+                     if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                         Button("Review License…") { model.licensePromptBackend = backend }
+-                            .help("Review the research/personal-use license before downloading")
++                            .help("Review this model's license before downloading")
+                     } else {
+                         Button("Download") { model.downloads.download(backend) }
+                             .help("Download this model to your Mac")
+@@ -137,7 +137,7 @@ struct BackendsSettings: View {
+                     if backend.spec.needsLicenseAck && !model.didAckFishLicense {
+                         Text("Needs license").foregroundStyle(.orange)
+                         Button("Review License…") { model.licensePromptBackend = backend }
+-                            .help("Acknowledge the research/personal-use license to enable generation")
++                            .help("Acknowledge this model's license to enable generation")
+                     } else {
+                         Text("Ready").foregroundStyle(.green)
+                     }
+@@ -154,8 +154,13 @@ struct BackendsSettings: View {
+ 
+     private func sizeLabel(_ backend: BackendID) -> String {
+         let bytes = model.downloads.approxBytes(for: backend)
++        let license: String = if backend.spec.needsLicenseAck {
++            backend == .supertonic
++                ? " · Open RAIL-M use restrictions"
++                : " · research/personal license"
++        } else { "" }
+         return "≈ " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+-            + (backend.spec.needsLicenseAck ? " · research/personal license" : "")
++            + license
+     }
+ }
+ 
+diff --git a/App/Views/StudioView.swift b/App/Views/StudioView.swift
+index ef9ad32c..dc8a250a 100644
+--- a/App/Views/StudioView.swift
++++ b/App/Views/StudioView.swift
+@@ -397,6 +397,9 @@ struct StudioView: View {
+         case .kokoro:
+             "Pick a preset voice — Kokoro doesn't clone or take free-text direction. Quality "
+             + "varies a lot by voice; the grade shown is the model author's own rating."
++        case .supertonic:
++            "Pick a preset voice — SuperTonic doesn't clone or take free-text direction. "
++            + "Fast, multilingual, 44.1 kHz."
+         }
+     }
+ 
+@@ -504,6 +507,10 @@ struct StudioView: View {
+                         Text("A fixed pretrained voicepack — grade is the model author's own "
+                              + "quality rating (A best, F+ weakest). No cloning or Direction here.")
+                             .font(.caption2).foregroundStyle(Brand.fgFaint)
++                    } else if model.backend == .supertonic {
++                        Text("A fixed preset voice style (M1–M5 male, F1–F5 female) shipped "
++                             + "with the model. No cloning, emotion, or Direction here.")
++                            .font(.caption2).foregroundStyle(Brand.fgFaint)
+                     } else {
+                         // Description of the currently-selected speaker (names alone are opaque).
+                         if let info = Self.speakerInfo[model.speaker] {
+-- 
+2.54.0 (Apple Git-157)
+
