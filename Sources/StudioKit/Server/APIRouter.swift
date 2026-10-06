@@ -419,10 +419,11 @@ public enum APIRouter {
             // (e.g. Billie Frost's engines/supertonic/style.json) renders that
             // voice instead of a house preset. Variant rendition first, then
             // the voice's own (renditionStyleURL also walks variantOf → base).
+            // The line's language: the request's, or the input's own when it sends none.
+            let lineLanguage = LineLanguage.of(req.input, picker: req.language)
             let rendition: VoiceRendition? = effectiveVoice.flatMap { voice in
-                let takes = VoiceLibrary.emotionSuffixes(req.emotion).map { "\(voice)-\($0)" }
-                return takes.lazy.compactMap { deps.voices.rendition($0, engine: backend.rawValue) }.first
-                    ?? deps.voices.rendition(voice, engine: backend.rawValue)
+                let take = deps.voices.chooseTake(of: voice, language: lineLanguage, style: req.emotion)
+                return deps.voices.rendition(take?.slug ?? voice, engine: backend.rawValue)
             }
             let styleURL: URL? = { if case .style(let u)? = rendition { return u }; return nil }()
             // A pack that names the engine's own speaker gets it, ahead of the
@@ -441,25 +442,17 @@ public enum APIRouter {
             let clones = controls.voiceClone != .none
             if let voice = effectiveVoice {
                 var resolved: (slug: String, meta: VoiceMeta, refURL: URL)? = nil
-                // The take for this emotion (hype and excited stand in for each
-                // other), found inside the voice's folder.
-                for take in VoiceLibrary.emotionSuffixes(req.emotion).map({ "\(voice)-\($0)" }) {
-                    if let found = try? deps.voices.get(take) {
-                        resolved = (take, found.meta, found.refURL)
-                        usedVariant = true
-                        break
+                // The take for this line's language × emotion (docs/gvoice-format.md,
+                // "Choosing a take"; hype and excited stand in for each other). A take
+                // named directly in `voice` renders as given. Only a base miss is fatal.
+                if let chosen = deps.voices.chooseRecordedTake(of: voice, language: lineLanguage,
+                                                               style: req.emotion) {
+                    if let refURL = chosen.refURL {
+                        resolved = (chosen.choice.slug, chosen.meta, refURL)
+                        usedVariant = chosen.choice.carriesStyle
                     }
-                }
-                if resolved == nil, let found = try? deps.voices.get(voice) {
-                    // An emotion-variant miss still falls back to the base voice —
-                    // only a base miss is fatal.
+                } else if let found = try? deps.voices.get(voice) {
                     resolved = (voice, found.meta, found.refURL)
-                }
-                // A `language` the voice has a take for renders from THAT take's reference (a bilingual
-                // voice: Benson's `es`), unless an emotion take already stands in for the voice.
-                if clones, !usedVariant, let base = resolved,
-                   let take = deps.voices.take(of: base.slug, language: req.language) {
-                    resolved = (take.meta.slug, take.meta, take.refURL)
                 }
                 if let resolved {
                     // An empty transcript is the same failure wearing a disguise on
@@ -552,7 +545,8 @@ public enum APIRouter {
                     exaggerationCeiling: req.exaggeration_ceiling,
                     instruct: req.instruct ?? voiceDirection?.instruct,
                     speaker: packSpeaker ?? effectiveSpeaker,
-                    styleURL: styleURL, language: req.language,
+                    styleURL: styleURL,
+                    language: LineLanguage.engineLanguage(picker: req.language, detected: lineLanguage),
                     topP: req.top_p, topK: req.top_k,
                     repetitionPenalty: req.repetition_penalty,
                     cfgScaleOverride: req.cfg_scale

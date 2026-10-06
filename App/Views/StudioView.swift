@@ -521,9 +521,22 @@ struct StudioView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("emotion-chip-\(emotion.rawValue)")
-                .help("Pick \(emotion.rawValue) emotional read; uses an acted '-emotion' reference variant when one exists")
+                .help(takeSummary(for: emotion))
             }
         }
+    }
+
+    /// What picking `emotion` renders from for the selected voice — the take the line's language ×
+    /// this style chooses (`VoiceTakeGrid.choose`), so the text says exactly what the render does.
+    private func takeSummary(for emotion: Emotion) -> String {
+        let style = emotion.rawValue
+        guard let slug = model.selectedVoiceSlug, let grid = model.voices.takeGrid(of: slug),
+              let name = try? model.voices.meta(slug).name else {
+            return "Uses the voice's \(style) take for the line's language when it has one — add takes "
+                + "in the voice's editor."
+        }
+        return grid.styleSummary(voiceName: name, style: style)
+            + " The line's language is the Language setting, or the text's own on Auto."
     }
 
     /// The delivery control for the current backend's emotion mechanism: a
@@ -552,10 +565,10 @@ struct StudioView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack { Text("Emotion").font(.caption).foregroundStyle(Brand.fgDim); Spacer() }
                 emotionPicker
-                Text("Switches to an acted “-emotion” voice variant when one exists — add them via "
-                     + "New Emotion Variant, or generate them in Create Voice.")
+                Text(takeSummary(for: model.emotion))
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("emotion-take-summary")
             }
         case .inlineMarker:
             // Emotion lives in the inline `[tags]` above (TagChipsView) — the full,
@@ -583,10 +596,11 @@ struct StudioView: View {
                     .help("An acted delivery — whisper, angry, laughing… — added to the Direction")
                 }
                 Text("Both become words in the model's direction, after anything you write "
-                     + "in Direction — they work on a cloned voice too. An acted “-emotion” take "
-                     + "of the voice is used instead when one exists.")
+                     + "in Direction — they work on a cloned voice too. An acted take of the "
+                     + "voice is used instead when it has one: " + takeSummary(for: model.emotion))
                     .font(.caption2).foregroundStyle(Brand.fgFaint)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("emotion-take-summary")
             }
         case .dialogueTags:
             // Delivery comes from the model's own inline (laughs)-style vocabulary.

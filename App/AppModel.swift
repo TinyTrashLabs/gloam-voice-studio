@@ -1565,39 +1565,53 @@ final class AppModel {
         var refPath: String?
         var refText: String?
         var resolvedVoice: String?
+        // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
+        // the voice's natural take — so no acted take is chosen for it (that path
+        // is for the variant-clip backends).
+        let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
+        // The line's language: the Language control, or on Auto the text's own
+        // (a confident guess on 3+ words). It picks the take below and, on Auto,
+        // tells Qwen a non-English line's language.
+        let lineLanguage = LineLanguage.of(text, picker: language)
         // How this voice renders on this backend: baked style tensors in the
-        // pack, or the name of a preset the engine already ships. Emotion-variant
-        // slug first; `rendition` itself falls back variant → base.
+        // pack, or the name of a preset the engine already ships. The chosen
+        // take first; `rendition` itself falls back take → base.
         let rendition: VoiceRendition? = voiceSlug.flatMap { slug in
-            let variant = emotion != .neutral ? "\(slug)-\(emotion.rawValue)" : nil
-            return variant.flatMap { voices.rendition($0, engine: backend.rawValue) }
-                ?? voices.rendition(slug, engine: backend.rawValue)
+            let take = voices.chooseTake(of: slug, language: lineLanguage, style: resolveEmotion.rawValue)
+            return voices.rendition(take?.slug ?? slug, engine: backend.rawValue)
         }
         let styleURL: URL? = { if case .style(let u)? = rendition { return u }; return nil }()
         let presetSpeaker: String? = {
             if case .builtinSpeaker(let s)? = rendition { return s }; return nil
         }()
-        // Fish (.inlineMarker) renders emotion from the live [marker] while cloning
-        // the BASE voice — so resolve to the base clip, not an acted `-emotion`
-        // variant (that path is for the variant-clip backends).
-        let resolveEmotion: Emotion = backend.emotionMechanism == .inlineMarker ? .neutral : emotion
         // `.directed` (Breeze) phrases the emotion into its instruction — unless
-        // an acted `-emotion` take was found, which already performs it. Same
-        // rule as the API's `usedVariant`: never direct a performance twice.
+        // the chosen take already performs it. Same rule as the API's
+        // `usedVariant`: never direct a performance twice.
         var requestEmotion = emotion
         if let slug = voiceSlug {
-            // A neutral render in a language the voice has a take for clones that take (a bilingual
-            // voice's Spanish recording for Spanish text), same as the API.
-            let languageTake = resolveEmotion == .neutral && controls.language
-                ? voices.take(of: slug, language: language) : nil
-            if let found = languageTake ?? (try? voices.resolve(slug, emotion: resolveEmotion)) {
+            // The take for this line's language × style (docs/gvoice-format.md,
+            // "Choosing a take"): Benson's `es-excited` for a Spanish line with
+            // Excited picked, `excited` for an English one. A take picked
+            // directly (the popover lists takes) is not a voice and renders as given.
+            let chosen = voices.chooseRecordedTake(of: slug, language: lineLanguage,
+                                                   style: resolveEmotion.rawValue)
+            let found: (meta: VoiceMeta, refURL: URL)?
+            if let chosen { found = chosen.refURL.map { (chosen.meta, $0) } }
+            else { found = try? voices.get(slug) }
+            if let chosen {
+                let line = "\(slug) → \(chosen.choice.slug) (step \(chosen.choice.step.rawValue), "
+                    + "language \(lineLanguage ?? "unknown") [picker \(language)], "
+                    + "style \(resolveEmotion.rawValue), \(backend.rawValue))"
+                NSLog("[take] %@", line)
+            }
+            if let found {
                 refPath = found.refURL.path
                 refText = found.meta.refText.isEmpty ? nil : found.meta.refText
                 resolvedVoice = found.meta.slug
-                // An acted take — resolved from the emotion, or picked directly
-                // (the popover lists takes) — already performs its emotion.
+                // An acted take — chosen for the style, or picked directly —
+                // already performs its emotion.
                 if backend.emotionMechanism == .directed
-                    && (found.meta.slug != slug || found.meta.isTake) {
+                    && ((chosen?.choice.carriesStyle ?? false) || found.meta.isTake && chosen == nil) {
                     requestEmotion = .neutral
                 }
             } else if rendition == nil {
@@ -1658,7 +1672,8 @@ final class AppModel {
             // about (RequestPlanner's speakerRequired) rather than papering over.
             speaker: controls.presetSpeakers.isEmpty ? nil : presetSpeaker,
             styleURL: styleURL,
-            language: controls.language ? language : nil,
+            language: controls.language
+                ? LineLanguage.engineLanguage(picker: language, detected: lineLanguage) : nil,
             topP: controls.knobs.topP == nil ? nil : self[keyPath: sampler.topP],
             topK: controls.knobs.topK == nil ? nil : self[keyPath: sampler.topK],
             repetitionPenalty: controls.knobs.repetitionPenalty == nil ? nil
