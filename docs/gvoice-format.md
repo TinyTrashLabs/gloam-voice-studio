@@ -340,6 +340,10 @@ what they are given. No `gvoice` bump was needed when it was added on
 
 ### Choosing a take: language × emotion
 
+`base` is the voice's home take in its own language (top-level `language`): a Mandarin
+speaker's base is Mandarin, and English is their variant (`en`, `en-excited`). A take without
+a `language` field is in the home language.
+
 A take can be a language (`es`), an emotion (`excited`) or both: an acted take in another
 language is keyed `<language>-<emotion>` (`es-excited`) and carries BOTH fields,
 `{ "language": "es", "emotion": "excited" }`. Keys stay flat so packs remain readable by every
