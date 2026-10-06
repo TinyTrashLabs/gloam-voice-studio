@@ -17,9 +17,10 @@ public enum ReferenceStandard {
         RefLoudness.normalized(wav: ReferenceTail.trimmed(wav: wav))
     }
 
-    /// Whether a member of a voice folder or `.gvoice` holds a reference the
-    /// standard applies to: the voice's `ref.wav` (source or engine copy) and
-    /// every take's `ref-<key>.wav` (gvoice-format.md, "Variants").
+    /// Whether a `.gvoice` member holds a reference the standard applies to:
+    /// the voice's `ref.wav` (source or engine copy) and every take's
+    /// `source/ref-<key>.wav` (gvoice-format.md, "Variants"). In a library
+    /// folder a take is `variants/<key>/ref.wav`, which the first case covers.
     public static func isReference(path: String) -> Bool {
         let name = (path as NSString).lastPathComponent
         return name == "ref.wav" || (name.hasPrefix("ref-") && name.hasSuffix(".wav") && name.count > 8)
