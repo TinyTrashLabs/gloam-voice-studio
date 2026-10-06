@@ -279,8 +279,17 @@ enum MCPRoute {
             // must not direct it again.
             var resolvedIsTake = false
             var voiceSlug: String? = nil
+            let requested = (arguments["emotion"] as? String)
+                .flatMap(Emotion.init(rawValue:)) ?? .neutral
+            // The line's language: the argument's, or the text's own when it sends none.
+            let lineLanguage = LineLanguage.of(text, picker: language)
             if let voice = effectiveVoice {
-                guard let found = try? deps.voices.get(voice) else {
+                // The take for this line's language × emotion, as on /v1/audio/speech. A take named
+                // directly renders as given.
+                let chosen = clones ? deps.voices.chooseRecordedTake(of: voice, language: lineLanguage,
+                                                                     style: requested.rawValue) : nil
+                let picked: (meta: VoiceMeta, refURL: URL)? = chosen.flatMap { c in c.refURL.map { (c.meta, $0) } }
+                guard let found = picked ?? (try? deps.voices.get(voice)) else {
                     APIRouter.logError("mcp speak: voice '\(voice)' not found"
                         + " (model \(backend.rawValue)) — refusing to synthesize an"
                         + " unconditioned, randomly invented speaker")
@@ -293,13 +302,11 @@ enum MCPRoute {
                     return toolError(id: id, "voice '\(voice)' has an empty reference"
                         + " transcript — \(backend.rawValue) cannot clone from it")
                 }
-                // A take in the requested language supplies the reference (same as /v1/audio/speech).
-                let source = clones
-                    ? deps.voices.take(of: found.meta.slug, language: language) ?? found : found
-                resolved = (source.refURL.path,
-                            source.meta.refText.isEmpty ? nil : source.meta.refText)
-                resolvedIsTake = found.meta.isTake
-                voiceSlug = source.meta.slug.isEmpty ? voice : source.meta.slug
+                resolved = (found.refURL.path,
+                            found.meta.refText.isEmpty ? nil : found.meta.refText)
+                // An acted take — chosen for the emotion, or named directly — already performs it.
+                resolvedIsTake = chosen.map { $0.choice.carriesStyle } ?? found.meta.isTake
+                voiceSlug = found.meta.slug.isEmpty ? voice : found.meta.slug
             } else if clones {
                 APIRouter.logError("mcp speak: no voice given and no default voice is set"
                     + " (model \(backend.rawValue)) — refusing to synthesize an"
@@ -310,8 +317,6 @@ enum MCPRoute {
             }
             let refPath = resolved?.path
             let refText = resolved?.text
-            let requested = (arguments["emotion"] as? String)
-                .flatMap(Emotion.init(rawValue:)) ?? .neutral
             let emotion = backend.emotionMechanism == .directed && resolvedIsTake
                 ? Emotion.neutral : requested
             // An `instruct` the caller sent wins outright; otherwise the voice's own
@@ -329,7 +334,7 @@ enum MCPRoute {
                             text: text, refAudioPath: refPath, refText: refText,
                             emotion: emotion, speed: 1.0,
                             instruct: instruct ?? voiceDirection?.instruct,
-                            language: language,
+                            language: LineLanguage.engineLanguage(picker: language, detected: lineLanguage),
                             cfgScaleOverride: voiceDirection?.cfgScale.map(Float.init)))
                 }
                 let wav = WAVEncoder.encode(

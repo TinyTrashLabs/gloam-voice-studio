@@ -417,8 +417,10 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             .appendingPathComponent("defvoice-variant-\(UUID())")
         let voices = VoiceLibrary(directory: dir)
         _ = try voices.save(name: "Ava", refWav: Data([0, 1, 2]), refText: "ava base")
+        // A take inside the voice's folder (the layout the app folds every library into);
+        // keyed "excited" with no `style` field, so the key names its style.
         _ = try voices.saveAt(slug: "ava-excited", name: "Ava (Excited)",
-                              refWav: Data([9, 9, 9]), refText: "ava excited")
+                              refWav: Data([9, 9, 9]), refText: "ava excited", variantOf: "ava")
         let deps = APIDependencies(engine: GloamEngine(provider: provider),
                                    voices: voices, defaultBackend: .qwen17B,
                                    defaultVoice: { "ava" })
@@ -431,6 +433,36 @@ final class APIControlsTests: XCTestCase, @unchecked Sendable {
             }
         }
         XCTAssertEqual(provider.model.last?.refText, "ava excited")
+    }
+
+    func testSpanishInputWithEmotionRoutesToSpanishStyledTake() async throws {
+        let provider = CapturingProvider()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lang-style-\(UUID())")
+        let voices = VoiceLibrary(directory: dir)
+        _ = try voices.save(name: "Ava", refWav: Data([0, 1, 2]), refText: "ava base")
+        try voices.setHomeLanguage("ava", "en")
+        try voices.addStyleTake("ava", style: VoiceStyle.gloam["excited"]!,
+                                refWav: Data([9, 9, 9]), refText: "ava excited")
+        try voices.addLanguageTake("ava", language: "es", style: VoiceStyle.gloam["excited"],
+                                   refWav: Data([7, 7, 7]), refText: "ava es excited")
+        let deps = APIDependencies(engine: GloamEngine(provider: provider),
+                                   voices: voices, defaultBackend: .qwen17B,
+                                   defaultVoice: { "ava" })
+        let app = Application(router: APIRouter.build(deps))
+        try await app.test(.router) { client in
+            // No `language`: the input's own (confidently Spanish) picks the take.
+            let es = #"{"input":"¡Hola a todos! Bienvenidos otra vez a nuestro programa de esta noche.","model":"qwen3-1.7b","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: es)) { XCTAssertEqual($0.status, .ok) }
+            XCTAssertEqual(provider.model.last?.refText, "ava es excited")
+            XCTAssertEqual(provider.model.last?.language, "spanish")
+            let en = #"{"input":"Good evening everyone and welcome back to the show.","model":"qwen3-1.7b","emotion":"excited"}"#
+            try await client.execute(uri: "/v1/audio/speech", method: .post,
+                                     body: ByteBuffer(string: en)) { XCTAssertEqual($0.status, .ok) }
+            XCTAssertEqual(provider.model.last?.refText, "ava excited")
+            XCTAssertNil(provider.model.last?.language, "English on auto stays auto")
+        }
     }
 
     // MARK: - Default model (Settings → API server → "Default model")
