@@ -2,7 +2,7 @@
 
 **2026-10-05: emotion and language packs.** `benson` now carries the five Gloam styles in English
 and in Spanish (`es-flat` … `es-hype`, plus his original `es` take), and four new voices ship
-with all five styles: `ms-hart`, `marcus`, `dot` and `rocksteady`. Styles and languages follow
+with all five styles: `ms-hart`, `marcus`, `dot` and `dj-rocksteady`. Styles and languages follow
 docs/gvoice-format.md ("Styles", "Choosing a take"); each take carries explicit `language` /
 `style` fields. Built with the `gloam-voice-pack` skill: base = the voice's Clone Studio read
 (Rocksteady keeps the Shane base read of the same ElevenLabs voice), style and Spanish takes read
