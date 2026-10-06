@@ -172,8 +172,9 @@ func handlePack(_ pack: URL) {
         var bytes = Data()
         guard (try? archive.extract(entry, consumer: { bytes.append($0) })) != nil else { continue }
         entries.append((entry.path, bytes))
-        // Every ref.wav in the pack, wherever it sits: source/ and engines/*/.
-        if entry.path.hasSuffix("ref.wav"), let out = process(bytes, label: entry.path) {
+        // Every reference in the pack, wherever it sits: source/ and engines/*/,
+        // takes (`ref-<key>.wav`) included.
+        if ReferenceStandard.isReference(path: entry.path), let out = process(bytes, label: entry.path) {
             replacements[entry.path] = out
         }
     }
