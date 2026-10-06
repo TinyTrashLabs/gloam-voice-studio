@@ -338,6 +338,54 @@ Engine members already travel per variant and survive stores that only keep
 what they are given. No `gvoice` bump was needed when it was added on
 2026-10-03.
 
+### The default take and its language
+
+`base` is the voice's **default take**: its home recording, in its own language. The manifest's
+top-level `language` names that language; writers MUST set it (a Mandarin speaker's pack says
+`"zh"`, and English is then a variant). Readers MUST NOT assume English when it is absent: they
+treat the default take's language as unknown. A take without a `language` field speaks the home
+language.
+
+### Styles
+
+A take's `style` says how it is delivered, in the shape W3C EmotionML uses for emotions: a
+**name** from a declared **vocabulary**, and optionally its position on two dimensions,
+**arousal** (0 calm … 1 energetic) and **valence** (0 unpleasant … 1 pleasant). A reader that
+doesn't know a vocabulary can still choose by the numbers ("the most energetic take").
+`vocabulary` absent means `gloam`, Gloam Voice Studio's five:
+
+| name | arousal | valence | delivery note |
+|---|---|---|---|
+| `flat` | 0.15 | 0.45 | minimal inflection, almost bored |
+| `neutral` | 0.4 | 0.55 | natural, explaining to a friend |
+| `warm` | 0.35 | 0.85 | gentle, comforting |
+| `excited` | 0.8 | 0.8 | real energy, sharing good news |
+| `hype` | 0.95 | 0.75 | maximum energy, hyping a crowd |
+
+Writers SHOULD attach the dimensions; other vocabularies are welcome (name them, e.g.
+`"vocabulary": "com.example.studio"`).
+
+### Choosing a take: language × style
+
+A take can be another language (`es`), a style (`excited`) or both: an acted take in another
+language is keyed `<language>-<style>` (`es-excited`) and carries BOTH fields. Keys stay flat so
+packs remain readable by every version-2 reader, and the audio keeps the exporters' flat names
+(`source/ref-es-excited.wav`, as for any variant) so a pack round-trips through an app unchanged.
+The structure lives in the fields.
+
+Readers MUST decide from the fields, not by parsing keys; a key's spelling is only a hint for
+packs written before these fields existed (`excited` and `<lang>-excited` then mean the gloam
+style of that name). For a line in language L with style S chosen, a reader SHOULD use the first
+that exists:
+
+1. the take with `language == L` and `style.name == S`
+2. the take with `language == L` and no `style`
+3. a take in the home language with `style.name == S`
+4. `base`
+
+A reader that ignores `style` still lists every take as a variant, which is a valid reading, so
+adding it did NOT bump `gvoice` (added 2026-10-05).
+
 ### Variant member names
 
 Inside a pack, a variant's engine files carry the variant key before the
@@ -421,7 +469,7 @@ key. The canonical member is `avatar.png` at the pack root.
 | `id` | no | Stable identity of the voice across shares: a UUID minted when the voice is created and kept by every export (a copy of a voice gets a NEW id). Two packs with the same `id` are versions of one voice. |
 | `revision` | no | Integer version of the voice, bumped whenever its audio, character or photo changes. On import, an `id` the library already has SHOULD prompt: a higher `revision` is an update (offer **Update**, replacing the local voice, or **Keep both**, saving it as a copy with a new `id`); an equal or lower one is the same or an older version (offer **Keep both**). Absent `id` means every import is a new voice. Added 2026-10-04 without a `gvoice` bump. Gloam Voice Studio mints `id` (revision 1) at creation, bumps `revision` on every edit of the audio, transcript, name, notes, persona, avatar or language takes, writes both on export and restores them on import; a pack whose `id` the library already has is imported as a copy with a new `id`, unless the caller asks to update and the pack's `revision` is higher. |
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
-| `source` | no | Variant key → `{ audio, text, language? }`. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
+| `source` | no | Variant key → `{ audio, text, language?, style? }`. `style` is how the take is delivered: `{ name, vocabulary?, arousal?, valence? }` (see "Styles" below); absent means the voice's natural delivery. See "Choosing a take" below. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
 | `avatar` | no | Pack-relative path of the voice's picture — see "The avatar" below. Cosmetic, not identity: a reader that ignores it renders the voice exactly as before, so adding it did NOT bump `gvoice`. One per pack, shared by every variant. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
@@ -569,3 +617,22 @@ An implementation conforms when it can:
 - ignore (and re-prepare) an `engines/qwen3-0.6b/` whose `derivedFrom.sha256`,
   `prepVersion`, `mel` or `text` does not match what it would prepare from, or
   whose arrays are malformed, without failing the pack.
+
+## Roadmap (documented, not yet in the format)
+
+Toward a format other apps and vendors can adopt. Each is additive unless noted.
+
+- **Consent and licence.** A cloned voice is someone's likeness. Planned: `consent` (whose voice,
+  that they agreed, when, for what use) and `license` (an SPDX identifier, or a short statement
+  such as "personal use only"), plus an optional C2PA content-credentials member for labelling
+  synthetic media.
+- **Identification.** A `mimetype` file as the first, uncompressed zip entry and a registered media
+  type (e.g. `application/vnd.gloam.voice+zip`), the way EPUB is recognised without the extension.
+- **Portable core vs. extensions.** The core: identity, takes (language, style), transcripts,
+  consent, licence, avatar. Engine renditions move under reverse-DNS ids
+  (`fm.gloam.qwen3-0.6b`) so other vendors add theirs without colliding.
+- **Text and audio rules.** Transcripts in UTF-8, Unicode NFC. Loudness measured per ITU-R
+  BS.1770; allowed sample rates stated.
+- **Machine-checkable spec.** A JSON Schema for `manifest.json`, a set of valid and invalid test
+  packs, and the Swift reader named as the reference implementation.
+- **Standards venue.** If another party wants to adopt it, a W3C Community Group.

@@ -145,6 +145,32 @@ final class VoiceIdentityTests: XCTestCase {
         XCTAssertEqual(try other.meta("benson-es").refText, "hola")
     }
 
+    func testStyledLanguageTakeRoundTripsThroughExportImport() throws {
+        let lib = library()
+        _ = try lib.save(name: "Benson", refWav: wav, refText: "hello there")
+        try lib.setLanguage("benson", "en")
+        let take = try lib.addLanguageTake("benson", language: "es", refWav: Data([3, 4, 5]), refText: "hola")
+        try lib.setStyle(take.slug, VoiceStyle.gloam["excited"]!)
+
+        let pack = try GVoice.export("benson", from: lib)
+        let manifest = try GVoice.manifest(of: pack)
+        XCTAssertEqual(manifest.source?["es"]?.language, "es")
+        XCTAssertEqual(manifest.source?["es"]?.style?.name, "excited")
+        XCTAssertEqual(manifest.source?["es"]?.style?.arousal, 0.8)
+        XCTAssertNil(manifest.source?["base"]?.style)
+
+        let other = library()
+        _ = try GVoice.import(pack, into: other)
+        XCTAssertEqual(try other.meta("benson-es").style, VoiceStyle.gloam["excited"])
+        XCTAssertEqual(try other.meta("benson-es").language, "es")
+    }
+
+    func testLegacyKeyNamesItsGloamStyle() {
+        XCTAssertEqual(VoiceStyle.fromLegacyKey("es-excited")?.name, "excited")
+        XCTAssertEqual(VoiceStyle.fromLegacyKey("hype")?.arousal, 0.95)
+        XCTAssertNil(VoiceStyle.fromLegacyKey("es"))
+    }
+
     func testTakeLookupMatchesPrimarySubtagAndSkipsTheVoiceItself() throws {
         let lib = library()
         _ = try lib.save(name: "Benson", refWav: wav, refText: "hello")

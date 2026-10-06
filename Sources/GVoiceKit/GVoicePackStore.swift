@@ -60,6 +60,9 @@ public protocol GVoicePackStore {
     /// Record the language a voice or take speaks (default: a store without languages ignores it).
     func setLanguage(_ slug: String, _ language: String) throws
 
+    /// Record how a take is delivered (default: a store without styles ignores it).
+    func setStyle(_ slug: String, _ style: VoiceStyle) throws
+
     /// Restore the pack's `id` and `revision` on an imported voice, so a re-import keeps the identity it
     /// was exported with (default: a store without identity ignores it). Called last in an import.
     func setIdentity(_ slug: String, id: String, revision: Int?) throws
@@ -70,5 +73,6 @@ public extension GVoicePackStore {
     /// Store the pack's persona on an imported voice. A store with no persona does nothing.
     func setPersona(_ slug: String, _ persona: Persona) throws {}
     func setLanguage(_ slug: String, _ language: String) throws {}
+    func setStyle(_ slug: String, _ style: VoiceStyle) throws {}
     func setIdentity(_ slug: String, id: String, revision: Int?) throws {}
 }
