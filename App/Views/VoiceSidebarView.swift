@@ -184,12 +184,18 @@ struct VoiceSidebarView: View {
         // on, so a supertonic-only pack isn't mistaken for broken.
         let caps = model.voiceCapabilities(voice.slug)
         let renderable = caps.supports(model.backend)
-        // Hover/selection drives EMPHASIS only, never presence: the controls
-        // are always laid out (an on-hover insert made the row's width jump and
-        // hid the actions from discovery), they just brighten when the row is
-        // hovered or selected.
-        let emphasized = hoveredSlug == voice.slug || model.selectedVoiceSlug == voice.slug
-        let controlTint = emphasized ? Brand.fg : Brand.fgDim
+        // Row actions appear on hover and on the selected row, and never take
+        // width from the name while hidden: a hovered row shows them as a
+        // floating pill over the row's trailing end (an overlay, so the row's
+        // layout doesn't jump on hover); the selected row reserves room for
+        // them so its name truncates once, cleanly, instead of collapsing to
+        // a single letter beside three always-on buttons. A playing sample
+        // keeps its control visible so it can be stopped.
+        let selected = model.selectedVoiceSlug == voice.slug
+        let hovered = hoveredSlug == voice.slug
+        let showActions = hovered || selected || isPlaying
+        let actionsWidth: CGFloat = isVariant ? 48 : 72
+        let label = VoiceRowLabel(voice)
         HStack(spacing: 8) {
             if isVariant {
                 Color.clear.frame(width: 16)
@@ -209,22 +215,22 @@ struct VoiceSidebarView: View {
                             size: isVariant ? 20 : 26)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(voice.name).font(isVariant ? .callout : .body)
-                        .foregroundStyle(renderable ? Brand.fg : Brand.fgFaint)
-                        // Truncate the name rather than shoving the row's
-                        // controls off the edge -- a long name must not be able
-                        // to delete the "..." menu.
+                    Text(isVariant ? variantEmotionLabel(voice.slug) : label.title)
+                        .font(isVariant ? .callout : .body)
+                        .foregroundStyle(renderable ? Brand.fg : Brand.fgDim)
                         .lineLimit(1).truncationMode(.tail)
+                        // The name outranks every badge beside it.
+                        .layoutPriority(1)
                     if !renderable && !isVariant {
                         // Minimal indicator — the full engine list lives in the
                         // tooltip, keeping the row quiet (dim name + one glyph).
-                        let supported = BackendID.allCases.filter { caps.supports($0) }.map(\.rawValue)
+                        let supported = BackendID.on(.studio).filter { caps.supports($0) }.map(\.displayName)
                         Image(systemName: "speaker.slash")
                             .font(.system(size: 9))
                             .foregroundStyle(Brand.fgFaint)
                             .help(supported.isEmpty
-                                  ? "\(voice.name)'s pack has no renderable assets."
-                                  : "\(voice.name) has no assets \(model.backend.rawValue) can render — it works on: \(supported.joined(separator: ", ")).")
+                                  ? "\(label.title)'s pack has no renderable assets."
+                                  : "\(model.backend.displayName) can't speak \(label.title) — it works on: \(supported.joined(separator: ", ")).")
                     }
                     if variantCount > 0 {
                         Text("\(variantCount)")
@@ -232,25 +238,54 @@ struct VoiceSidebarView: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
                             .foregroundStyle(Brand.fgDim)
+                            .fixedSize()
+                            .help("\(variantCount) takes")
                     }
                 }
-                if isVariant {
-                    Text(variantEmotionLabel(voice.slug)).font(.caption2).foregroundStyle(.secondary)
-                } else if voice.slug.contains("-") {
-                    Text(voice.slug).font(.caption2).foregroundStyle(.secondary)
+                if !isVariant, let subtitle = label.subtitle {
+                    Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
                 }
             }
-            Spacer(minLength: 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, selected ? actionsWidth : 0)
+        }
+        .overlay(alignment: .trailing) {
+            if showActions {
+                rowActions(voice, isVariant: isVariant, isPlaying: isPlaying, tint: Brand.fg)
+                    .padding(.horizontal, selected ? 0 : 4).padding(.vertical, 2)
+                    .background {
+                        if !selected {
+                            Capsule().fill(Brand.ink2)
+                                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        }
+                    }
+            }
+        }
+        .contentShape(Rectangle())
+        .tag(voice.slug)
+        .onHover { inside in
+            if inside { hoveredSlug = voice.slug }
+            else if hoveredSlug == voice.slug { hoveredSlug = nil }
+        }
+        .contextMenu { voiceActions(voice) }
+    }
+
+    /// Play / Edit / ⋯ for one row. Only shown on hover, selection, or while
+    /// the row's sample plays — see `voiceRow`.
+    @ViewBuilder
+    private func rowActions(_ voice: VoiceMeta, isVariant: Bool, isPlaying: Bool,
+                            tint: Color) -> some View {
+        HStack(spacing: 4) {
             Button { previewRef(voice) } label: {
                 ZStack {
                     if isPlaying { EqualizerBars(color: Brand.accent) }
                     else {
                         Image(systemName: "play.fill").font(.system(size: 10))
-                            .foregroundStyle(controlTint)
+                            .foregroundStyle(tint)
                     }
                 }
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(isPlaying ? 0.08 : 0.0)))
                 .contentShape(Circle())
             }
             .buttonStyle(.borderless)
@@ -260,9 +295,11 @@ struct VoiceSidebarView: View {
 
             if !isVariant {
                 Button { openEdit(voice.slug) } label: {
-                    Image(systemName: "pencil")
+                    Image(systemName: "pencil").foregroundStyle(tint)
+                        .frame(width: 20, height: 22)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless).foregroundStyle(controlTint)
+                .buttonStyle(.borderless)
                 .help("Edit this voice (name, reference, emotion variants)")
                 .accessibilityIdentifier("edit-voice")
                 .accessibilityLabel("Edit Voice")
@@ -275,23 +312,16 @@ struct VoiceSidebarView: View {
             // the label in SwiftUI's renderer, where the colour applies.
             Menu { voiceActions(voice) } label: {
                 Image(systemName: "ellipsis")
-                    .foregroundStyle(controlTint)
-                    .frame(width: 18, alignment: .center)
+                    .foregroundStyle(tint)
+                    .frame(width: 20, height: 22, alignment: .center)
                     .contentShape(Rectangle())
             }
             .menuStyle(.button).buttonStyle(.plain)
             .menuIndicator(.hidden).fixedSize()
-            .layoutPriority(1)
             .help("More actions").accessibilityIdentifier("voice-menu")
             .accessibilityLabel("More Actions")
         }
-        .contentShape(Rectangle())
-        .tag(voice.slug)
-        .onHover { inside in
-            if inside { hoveredSlug = voice.slug }
-            else if hoveredSlug == voice.slug { hoveredSlug = nil }
-        }
-        .contextMenu { voiceActions(voice) }
+        .fixedSize()
     }
 
     private func variantEmotionLabel(_ slug: String) -> String {

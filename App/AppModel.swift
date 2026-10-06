@@ -100,6 +100,13 @@ final class AppModel {
     var backend: BackendID {
         didSet {
             UserDefaults.standard.set(backend.rawValue, forKey: "defaultBackend")
+            // Most-recent-first engine history, so an automatic switch lands on
+            // the engine the user last chose, not an arbitrary one.
+            recentBackends = BackendID.recordingRecent(backend, in: recentBackends)
+            UserDefaults.standard.set(recentBackends.map(\.rawValue), forKey: "recentBackends")
+            // A note about an earlier automatic switch is stale once the engine
+            // moves again for any other reason.
+            if engineSwitchNote?.to != backend { engineSwitchNote = nil }
             // The API server's deps capture defaultBackend at build time — without
             // this rebuild, a running server keeps serving the OLD engine for
             // model-less requests in "Follow Studio engine" mode (bit gloam.fm on
@@ -393,8 +400,51 @@ final class AppModel {
     var selectedVoiceSlug: String? {
         didSet {
             UserDefaults.standard.set(selectedVoiceSlug, forKey: "selectedVoiceSlug")
+            if selectedVoiceSlug != oldValue { engineSwitchNote = nil }
             applyVoiceDirection()
+            if selectedVoiceSlug != oldValue { switchEngineIfVoiceNeedsIt() }
         }
+    }
+    /// Engines the user has had selected, most recent first (persisted).
+    private(set) var recentBackends: [BackendID] = []
+    /// The quiet "Switched to Qwen 0.6B for Benson" note after an automatic
+    /// engine switch; nil once the voice or engine changes again.
+    var engineSwitchNote: (from: BackendID, to: BackendID, voice: String)?
+
+    /// Engines that could speak `slug` and can be switched to right now: a
+    /// Studio engine, downloaded, affordable, and not waiting on a license ack.
+    func switchableEngines(for slug: String) -> [BackendID] {
+        let caps = voiceCapabilities(slug)
+        return BackendID.on(.studio).filter {
+            caps.supports($0) && downloads.state(for: $0) == .ready && hasSufficientRAM(for: $0)
+                && (!$0.spec.needsLicenseAck || didAck($0))
+        }
+    }
+
+    /// Picking a voice the current engine can't speak used to leave Studio on a
+    /// dead Generate button with the same warning twice. Picking the voice IS
+    /// the user's intent, so move the engine to one that speaks it: the one
+    /// they last used that can, else the pack's own baked engine, else the
+    /// bench default (`BackendID.autoSwitchTarget`). Never mid-render — a
+    /// generation or model load in flight keeps its engine, and the pack bar's
+    /// warning stays up instead. An explicit engine pick is never undone here:
+    /// this runs on voice selection only.
+    func switchEngineIfVoiceNeedsIt() {
+        guard let slug = selectedVoiceSlug, !isGenerating, !modelOpInFlight,
+              !script.isBatchRunning else { return }
+        let caps = voiceCapabilities(slug)
+        guard !caps.supports(backend) else { return }
+        let baked = Set(caps.engines.compactMap(BackendID.init(rawValue:)))
+        guard let target = BackendID.autoSwitchTarget(
+            current: backend, candidates: switchableEngines(for: slug),
+            recent: recentBackends, preRendered: baked) else { return }
+        let from = backend
+        let name = (try? voices.meta(slug).name) ?? slug
+        backend = target
+        engineSwitchNote = (from, target, name)
+        // Selection follows residency (refreshEngineStatus): load the new
+        // engine, or the still-resident old one would pull the bench back.
+        Task { await loadModel(target) }
     }
     var text = ""
     var emotion: Emotion = .neutral
@@ -747,6 +797,8 @@ final class AppModel {
         // creation-only; dia2 is Dialogue-only, issue #56) would leave the bench
         // pointing at an engine its own picker no longer offers — fall back.
         backend = loadedBackend.surfaces.contains(.studio) ? loadedBackend : .qwen17B
+        recentBackends = (defaults.stringArray(forKey: "recentBackends") ?? [])
+            .compactMap(BackendID.migrating(rawValue:))
         serverPort = defaults.object(forKey: "serverPort") as? Int ?? 8790
         let lanEnabled = defaults.bool(forKey: "serverLANEnabled")
         var authToken = defaults.string(forKey: "serverAuthToken") ?? ""
@@ -1479,7 +1531,7 @@ final class AppModel {
             guard voices.capabilities(slug).supports(backend) else {
                 let name = (try? voices.meta(slug).name) ?? slug
                 throw AppGenerationError(
-                    message: "\(backend.rawValue) can't speak “\(name)”. "
+                    message: "\(backend.displayName) can't speak “\(name)”. "
                         + "Switch engine, or pick a voice it can render.")
             }
         } else if !controls.presetSpeakers.isEmpty {
