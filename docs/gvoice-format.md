@@ -338,6 +338,26 @@ Engine members already travel per variant and survive stores that only keep
 what they are given. No `gvoice` bump was needed when it was added on
 2026-10-03.
 
+### Choosing a take: language × emotion
+
+A take can be a language (`es`), an emotion (`excited`) or both: an acted take in another
+language is keyed `<language>-<emotion>` (`es-excited`) and carries BOTH fields,
+`{ "language": "es", "emotion": "excited" }`. Keys stay flat so packs remain readable by every
+version-2 reader; inside the zip the audio MAY sit in folders (`source/es/excited.wav`,
+`source/excited.wav`): paths are free-form.
+
+Readers MUST decide from the fields, not by parsing keys; a key's spelling is only a hint for
+packs written before these fields existed. For a line in language L with emotion E chosen, a
+reader SHOULD use the first that exists:
+
+1. the take with `language == L` and `emotion == E`
+2. the take with `language == L` and no `emotion`
+3. the take with no `language` (or the base's) and `emotion == E`
+4. `base`
+
+A reader that ignores `emotion` still lists every take as a variant, which is a valid reading,
+so adding it did NOT bump `gvoice` (added 2026-10-05).
+
 ### Variant member names
 
 Inside a pack, a variant's engine files carry the variant key before the
@@ -421,7 +441,7 @@ key. The canonical member is `avatar.png` at the pack root.
 | `id` | no | Stable identity of the voice across shares: a UUID minted when the voice is created and kept by every export (a copy of a voice gets a NEW id). Two packs with the same `id` are versions of one voice. |
 | `revision` | no | Integer version of the voice, bumped whenever its audio, character or photo changes. On import, an `id` the library already has SHOULD prompt: a higher `revision` is an update (offer **Update**, replacing the local voice, or **Keep both**, saving it as a copy with a new `id`); an equal or lower one is the same or an older version (offer **Keep both**). Absent `id` means every import is a new voice. Added 2026-10-04 without a `gvoice` bump. Gloam Voice Studio mints `id` (revision 1) at creation, bumps `revision` on every edit of the audio, transcript, name, notes, persona, avatar or language takes, writes both on export and restores them on import; a pack whose `id` the library already has is imported as a copy with a new `id`, unless the caller asks to update and the pack's `revision` is higher. |
 | `enginePace` | no | Engine id → pace, overriding `pace` for that engine alone. Resolution is `enginePace[engine] ?? pace ?? 1.0`; a non-positive value MUST be treated as absent. Exists because engines do not implement speed alike — on `lux-tts` it is native and graph-level and on `supertonic` it feeds the duration predictor, while other backends apply a generic time-domain stretch that is audibly wrong on a voice. A reader that ignores this key falls back to `pace`, which is why adding it does NOT bump `gvoice`. |
-| `source` | no | Variant key → `{ audio, text, language? }`. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
+| `source` | no | Variant key → `{ audio, text, language?, emotion? }`. `emotion` is the take's delivery, one of the Studio emotion keys (`flat`, `neutral`, `warm`, `excited`, `hype`); absent means the voice's natural delivery. See "Choosing a take" below. Paths are pack-relative. `language` is the take's BCP-47 language (`"es"`, `"en-US"`); absent means unstated. A bilingual voice carries one take per language (e.g. variant `es` beside `base`); a reader rendering a line in a given language SHOULD use the take whose `language` matches, else `base`. Readers that ignore it render every line from `base`, which is a valid reading, so adding it did NOT bump `gvoice`. |
 | `engines` | no | Engine id → variant key → **list** of pack-relative paths. One rendition can be several files (`lux-tts` is audio + transcript); a single-file engine carries a one-element list. Readers MUST read every member listed, not just the first. |
 | `avatar` | no | Pack-relative path of the voice's picture — see "The avatar" below. Cosmetic, not identity: a reader that ignores it renders the voice exactly as before, so adding it did NOT bump `gvoice`. One per pack, shared by every variant. |
 | `provenance` | no | Free-form record of how the renditions were produced. Opaque to readers — whatever the producing tool needs to reproduce its own output. Readers MUST preserve it unchanged through import → re-export even though they don't interpret it; see Rule 1. |
