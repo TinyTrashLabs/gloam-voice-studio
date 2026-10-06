@@ -16,9 +16,18 @@ final class RecordingCheckLevelTests: XCTestCase {
         // the louder half of the whole take is mostly silence.
         let take = tone(2, db: -66, hz: 3000) + tone(3, db: -36, hz: 220) + tone(5, db: -66, hz: 3000)
         let q = RecordingCheck.measure(take, sampleRate: sr)
-        XCTAssertLessThan(q.speechDb, RecordingCheck.minSpeechDb, "the old measure would have refused this")
+        XCTAssertLessThan(q.speechDb, -45, "the old whole-take measure would have refused this at the old -45 floor")
         XCTAssertEqual(q.gateDb, -36, accuracy: 1)
         XCTAssertNil(q.problem)
+    }
+
+    /// David's close-to-the-phone take (2026-10-06): voiced −45.5 over a −71
+    /// floor. Clean; levelling lifts it. It was refused by half a decibel.
+    func testAQuietButCleanPhoneTakePasses() {
+        let take = tone(1, db: -71, hz: 3000) + tone(10, db: -45.5, hz: 220) + tone(1.5, db: -71, hz: 3000)
+        let q = RecordingCheck.measure(take, sampleRate: sr)
+        XCTAssertEqual(q.gateDb, -45.5, accuracy: 1)
+        XCTAssertNil(q.problem, "\(q)")
     }
 
     func testGenuinelyQuietTakeIsStillRefused() {

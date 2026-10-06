@@ -203,7 +203,7 @@ final class VoiceQualifierCandidateTests: XCTestCase {
         let noisy = RecordingCheck.Quality(seconds: 10, speechDb: -20, noiseFloorDb: -30, clippedFraction: 0)
         XCTAssertNotNil(noisy.problem)
         XCTAssertTrue(VoiceQualifier.failsOnlyOnNoise(noisy))
-        let noisyAndQuiet = RecordingCheck.Quality(seconds: 10, speechDb: -50, noiseFloorDb: -60, clippedFraction: 0)
+        let noisyAndQuiet = RecordingCheck.Quality(seconds: 10, speechDb: -55, noiseFloorDb: -65, clippedFraction: 0)
         XCTAssertFalse(VoiceQualifier.failsOnlyOnNoise(noisyAndQuiet))
         let noisyAndShort = RecordingCheck.Quality(seconds: 1, speechDb: -20, noiseFloorDb: -30, clippedFraction: 0)
         XCTAssertFalse(VoiceQualifier.failsOnlyOnNoise(noisyAndShort))
