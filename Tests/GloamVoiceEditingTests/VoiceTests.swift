@@ -18,14 +18,14 @@ final class VoiceTests: XCTestCase {
     func testBlurbPrefersNotes() {
         XCTAssertEqual(voice(name: "A", notes: "gravelly").blurb, "gravelly")
         XCTAssertEqual(voice(name: "A", starter: true).blurb, "Included voice")
-        XCTAssertEqual(voice(name: "A").blurb, "Cloned on this phone")
+        XCTAssertEqual(voice(name: "A").blurb, "Added")
     }
 
     func testClonedBlurbCarriesTheDay() {
         let v = Voice(slug: "x", meta: VoiceMeta(name: "Me", slug: "x", refText: "", createdAt: "2026-09-08T13:17:00Z"),
                       hasMaster: true, hasWindow: false, variantKeys: [], isStarter: false,
                       avatarURL: nil, avatarModified: nil)
-        XCTAssertTrue(v.blurb.hasPrefix("Cloned on this phone · "), v.blurb)
+        XCTAssertTrue(v.blurb.hasPrefix("Added "), v.blurb)
         XCTAssertNotNil(Voice.day(from: "2026-09-08T13:17:00Z"))
         XCTAssertNotNil(Voice.day(from: "2026-09-08T13:17:00.123Z"))
         XCTAssertNil(Voice.day(from: "yesterday"))
