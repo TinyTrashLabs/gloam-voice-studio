@@ -343,8 +343,8 @@ what they are given. No `gvoice` bump was needed when it was added on
 A take can be a language (`es`), an emotion (`excited`) or both: an acted take in another
 language is keyed `<language>-<emotion>` (`es-excited`) and carries BOTH fields,
 `{ "language": "es", "emotion": "excited" }`. Keys stay flat so packs remain readable by every
-version-2 reader; inside the zip the audio MAY sit in folders (`source/es/excited.wav`,
-`source/excited.wav`): paths are free-form.
+version-2 reader, and the audio keeps the exporters' flat names (`source/ref-es-excited.wav`, as
+for any variant) so a pack round-trips through an app unchanged. The structure lives in the fields.
 
 Readers MUST decide from the fields, not by parsing keys; a key's spelling is only a hint for
 packs written before these fields existed. For a line in language L with emotion E chosen, a
