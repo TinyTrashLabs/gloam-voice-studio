@@ -29,7 +29,12 @@ public enum RecordingCheck {
     /// Ryan's imported clip (−21/−22) and refused every phone take. Level is
     /// fixed by RecordingCleanup on save; what this floor guards is a take so
     /// faint that levelling it drags the noise up with it.
-    public static let minSpeechDb: Float = -45
+    /// −50, not −45: David's 2026-10-06 take spoken close to an iPhone 15 Pro
+    /// measured −45.5 voiced over a −71 floor (25 dB SNR, −27 dBFS peak) and
+    /// was refused as "too quiet" by half a decibel -- a clean take levelling
+    /// lifts without trouble. The noise check (minSNRDb) still refuses a
+    /// faint take whose room comes up with it; a whisper (−51, −52) still fails.
+    public static let minSpeechDb: Float = -50
     public static let minSNRDb: Float = 20       // Ryan 19 (hiss 1/6 even normalised), Shane 30
     public static let maxClippedFraction = 0.001
 
