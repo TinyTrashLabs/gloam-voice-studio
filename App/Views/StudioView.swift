@@ -24,6 +24,7 @@ struct StudioView: View {
     @AppStorage("labModeEnabled") private var labModeEnabled = false
     @State private var transcribingSlug: String?
     @State private var transcribeError: String?
+    @State private var worksWithOpen = false
 
     private var mode: StudioMode {
         StudioMode(rawValue: modeRaw) ?? .single
@@ -110,13 +111,13 @@ struct StudioView: View {
         }
     }
 
-    private func packChip(_ label: String, icon: String? = nil, active: Bool) -> some View {
+    /// The current engine, named in words, in the pack bar's one-line summary.
+    private func packChip(_ label: String, active: Bool) -> some View {
         HStack(spacing: 4) {
-            if let icon { Image(systemName: icon).font(.system(size: 8)) }
             if active {
                 Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(.green)
             }
-            Text(label).font(.system(.caption2, design: .monospaced))
+            Text(label).font(.caption2.weight(.medium)).lineLimit(1).fixedSize()
         }
         .padding(.horizontal, 7).padding(.vertical, 2)
         .background(Capsule().fill(Color.white.opacity(active ? 0.09 : 0.04)))
@@ -125,16 +126,25 @@ struct StudioView: View {
         .foregroundStyle(active ? Brand.fg : Brand.fgDim)
     }
 
-    /// Manifest-driven pack summary for the selected voice: what assets the
-    /// pack holds (clone ref + baked engine renditions), which one the active
-    /// engine uses, and — on a mismatch — a plain-words warning with a
-    /// one-click switch to the pack's best engine. This is the greyed-out
-    /// sidebar row explained, where a new user is actually looking.
+    /// Switch the bench to `target` the way the toolbar picker does: select it,
+    /// and load it when it's on disk (selection follows residency).
+    private func switchEngine(to target: BackendID) {
+        model.backend = target
+        if model.downloads.state(for: target) == .ready {
+            Task { await model.loadModel(target) }
+        }
+    }
+
+    /// Manifest-driven pack summary for the selected voice: what can speak it,
+    /// which engine is speaking it now, and — on a mismatch — one plain-words
+    /// warning with a switch. Kept to one quiet line: the engine list used to
+    /// be ten raw-id capsules that wrapped mid-word and dominated the bench;
+    /// now it's a count that opens the list.
     @ViewBuilder
     private var voicePackBar: some View {
         if let slug = model.selectedVoiceSlug, let meta = try? model.voices.meta(slug) {
             // Read voicesVersion so a saved transcript re-derives capabilities
-            // (and re-lights the engine chips) without reselecting the voice.
+            // (and the engine list) without reselecting the voice.
             let _ = model.voicesVersion
             let caps = model.voiceCapabilities(slug)
             let renderable = caps.supports(model.backend)
@@ -142,112 +152,132 @@ struct StudioView: View {
             // `engines/` ids answer a different question: they include ids this
             // app cannot render at all (elevenlabs), and ids that mint a voice
             // from an instruct rather than speaking a stored one (qwen3-design).
-            // Listing them as the voice's engines told users a Benson pack
-            // "included" kokoro, when kokoro only ever speaks its own presets.
             // `supports` is the predicate the sidebar and the mismatch warning
             // below already use — one answer everywhere.
             //
-            // Derived from `BackendID.allCases`, never a curated list: add a
-            // cloning engine tomorrow and every voice that carries a recording
-            // gains it here with no edit to this view. A curated array would
-            // silently omit it.
+            // Derived from `BackendID.allCases`, never a curated list, and gated
+            // on the `.studio` surface: dia2 can speak this voice (Dialogue uses
+            // it) but is not a single-line Studio engine (issue #56).
             //
             // Partitioned rather than sorted by a `contains`-pair predicate:
             // that comparator is not a strict weak ordering, which can trap
             // inside Swift's sort.
-            // Gated on the `.studio` surface, not `supports` alone: dia2 can
-            // speak this voice (Dialogue uses it) but is not a single-line Studio
-            // engine — a lone S1 prefix clones too weakly (issue #56). Same shape
-            // that keeps qwen3-design out of the bench. Dialogue-only backends
-            // stay off the "Works with" row and out of the speak picker.
             let compatible = BackendID.allCases.filter {
                 $0.surfaces.contains(.studio) && caps.supports($0)
             }
             let orderedCompatible = compatible.filter { caps.engines.contains($0.rawValue) }
                 + compatible.filter { !caps.engines.contains($0.rawValue) }
+            // Every engine that can speak this voice, baked renditions first —
+            // the targets for the switch menu.
+            let affordable = compatible.filter { model.hasSufficientRAM(for: $0) }
+            let targets = affordable.filter { caps.engines.contains($0.rawValue) }
+                + affordable.filter { !caps.engines.contains($0.rawValue) }
+            // Engines the pack would support if only the transcript existed —
+            // shown disabled with the reason, so "why not qwen?" answers itself.
+            let transcriptLocked = BackendID.allCases.filter {
+                $0.surfaces.contains(.studio)
+                    && !caps.supports($0) && caps.hasSource && $0.needsRefText
+                    && $0.controls.voiceClone != .none
+                    && model.hasSufficientRAM(for: $0)
+            }
+            let note = model.engineSwitchNote.flatMap { $0.to == model.backend ? $0 : nil }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     VoiceAvatarView(slug: slug, name: meta.name,
                                     avatarURL: model.voiceAvatarURL(slug), size: 20)
                     Text(meta.name).font(.callout.weight(.semibold))
-                    Text("Works with:").font(.caption).foregroundStyle(Brand.fgFaint)
-                    ForEach(orderedCompatible, id: \.self) { backend in
-                        packChip(backend.rawValue, active: backend == model.backend)
-                            .help(caps.engines.contains(backend.rawValue)
-                                  ? "Pre-rendered for \(backend.rawValue) — speaks this voice with no recording needed"
-                                  : "Cloned from this voice's recording")
+                        .lineLimit(1).truncationMode(.tail)
+                        .layoutPriority(1)
+                    if renderable {
+                        packChip(model.backend.displayName, active: true)
+                            .help("Speaking with \(model.backend.displayName)")
                     }
                     if orderedCompatible.isEmpty {
                         Text("no engine can speak this voice yet")
                             .font(.caption2).foregroundStyle(Brand.fgFaint)
+                            .lineLimit(1)
+                    } else {
+                        Button { worksWithOpen.toggle() } label: {
+                            HStack(spacing: 3) {
+                                Text(orderedCompatible.count == 1
+                                     ? "Works with 1 engine"
+                                     : "Works with \(orderedCompatible.count) engines")
+                                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                            }
+                            .font(.caption).foregroundStyle(Brand.fgDim)
+                            .lineLimit(1).fixedSize()
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Every engine that can speak \(meta.name)")
+                        .accessibilityIdentifier("pack-bar-works-with")
+                        .popover(isPresented: $worksWithOpen, arrowEdge: .bottom) {
+                            worksWithList(orderedCompatible, caps: caps,
+                                          transcriptLocked: transcriptLocked)
+                        }
                     }
-                    if caps.hasSource {
+                    if caps.hasSource && !caps.hasRefText {
                         // A missing transcript silently halves the cloning
                         // roster (qwen/lux condition on it) — say so, and fix
                         // it in one click via the same STT the RECORD flow uses.
-                        if !caps.hasRefText {
-                            if transcribingSlug == slug {
-                                ProgressView().controlSize(.mini)
-                                Text("transcribing…").font(.caption2).foregroundStyle(Brand.fgFaint)
-                            } else {
-                                Text("transcript missing").font(.caption2).foregroundStyle(Brand.fgFaint)
-                                Button("Transcribe") { transcribeRef(slug) }
-                                    .font(.caption2).buttonStyle(.borderless)
-                                    .foregroundStyle(Brand.accent)
-                                    .help("Auto-transcribe the reference audio — unlocks the "
-                                          + "transcript-conditioned engines (qwen3, lux-tts)")
-                                    .accessibilityIdentifier("pack-bar-transcribe")
-                            }
+                        if transcribingSlug == slug {
+                            ProgressView().controlSize(.mini)
+                            Text("transcribing…").font(.caption2).foregroundStyle(Brand.fgFaint)
+                                .lineLimit(1).fixedSize()
+                        } else {
+                            Text("transcript missing").font(.caption2).foregroundStyle(Brand.fgFaint)
+                                .lineLimit(1).fixedSize()
+                            Button("Transcribe") { transcribeRef(slug) }
+                                .font(.caption2).buttonStyle(.borderless)
+                                .foregroundStyle(Brand.accent)
+                                .fixedSize()
+                                .help("Auto-transcribe the reference audio — unlocks the "
+                                      + "transcript-conditioned engines (Qwen, LuxTTS)")
+                                .accessibilityIdentifier("pack-bar-transcribe")
                         }
                     }
                     Spacer(minLength: 0)
                 }
                 if !renderable {
-                    // Every engine that can speak this voice, not one arbitrary
-                    // pick: a clone ref unlocks the whole cloning roster, so a
-                    // single suggestion would undersell the pack. Baked
-                    // renditions sort first and say so.
-                    let affordable = compatible.filter { model.hasSufficientRAM(for: $0) }
-                    let targets = affordable.filter { caps.engines.contains($0.rawValue) }
-                        + affordable.filter { !caps.engines.contains($0.rawValue) }
+                    // The only place this is said: the Generate row stays quiet
+                    // about it (one warning, not two).
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10)).foregroundStyle(.orange)
-                        Text("\(model.backend.rawValue) can't speak this voice — nothing will generate")
+                        Text("\(model.backend.displayName) can't speak \(meta.name) — pick an engine that can")
                             .font(.caption).foregroundStyle(Brand.fgDim)
-                        // Engines the pack would support if only the transcript
-                        // existed — shown disabled with the reason, so "why not
-                        // qwen?" answers itself.
-                        let transcriptLocked = BackendID.allCases.filter {
-                            !caps.supports($0) && caps.hasSource && $0.needsRefText
-                                && $0.controls.voiceClone != .none
-                                && model.hasSufficientRAM(for: $0)
-                        }
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         if !targets.isEmpty || !transcriptLocked.isEmpty {
-                            Menu("Switch engine") {
-                                ForEach(targets, id: \.self) { target in
-                                    Button(caps.engines.contains(target.rawValue)
-                                           ? "\(target.rawValue) — pre-rendered"
-                                           : target.rawValue) {
-                                        model.backend = target
-                                        if model.downloads.state(for: target) == .ready {
-                                            Task { await model.loadModel(target) }
-                                        }
-                                    }
-                                }
-                                if !transcriptLocked.isEmpty {
-                                    Divider()
-                                    ForEach(transcriptLocked, id: \.self) { locked in
-                                        Button("\(locked.rawValue) needs a transcript of the recording") {}
-                                            .disabled(true)
-                                    }
-                                }
-                            }
-                            .menuStyle(.borderlessButton).fixedSize()
-                            .font(.caption)
-                            .accessibilityIdentifier("pack-bar-switch")
+                            engineSwitchMenu("Switch engine", targets: targets, caps: caps,
+                                             transcriptLocked: transcriptLocked)
                         }
+                        Spacer(minLength: 0)
                     }
+                    .accessibilityIdentifier("pack-bar-mismatch")
+                } else if let note {
+                    // The automatic switch, said once and quietly, with a way
+                    // to choose differently.
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 9)).foregroundStyle(Brand.fgFaint)
+                        Text("Switched to \(note.to.displayName) for \(note.voice)")
+                            .font(.caption).foregroundStyle(Brand.fgFaint)
+                            .lineLimit(1).truncationMode(.tail)
+                            .help("\(note.from.displayName) can't speak \(note.voice), so Studio "
+                                  + "moved to the engine you last used that can.")
+                        if targets.count > 1 {
+                            engineSwitchMenu("Change", targets: targets, caps: caps,
+                                             transcriptLocked: [])
+                        }
+                        Spacer(minLength: 0)
+                        Button { model.engineSwitchNote = nil } label: {
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Brand.fgFaint)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Dismiss")
+                    }
+                    .accessibilityIdentifier("pack-bar-switched")
                 }
                 if let error = transcribeError {
                     Text(error).font(.caption2).foregroundStyle(.orange)
@@ -263,6 +293,91 @@ struct StudioView: View {
                         lineWidth: 1))
             .accessibilityIdentifier("voice-pack-bar")
         }
+    }
+
+    /// The engine menu shared by the mismatch warning and the switched note.
+    private func engineSwitchMenu(_ title: String, targets: [BackendID], caps: VoiceCapabilities,
+                                  transcriptLocked: [BackendID]) -> some View {
+        Menu(title) {
+            ForEach(targets, id: \.self) { target in
+                Button {
+                    switchEngine(to: target)
+                } label: {
+                    if target == model.backend {
+                        Label(target.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(caps.engines.contains(target.rawValue)
+                             ? "\(target.displayName) — pre-rendered" : target.displayName)
+                    }
+                }
+                .disabled(target == model.backend)
+            }
+            if !transcriptLocked.isEmpty {
+                Divider()
+                ForEach(transcriptLocked, id: \.self) { locked in
+                    Button("\(locked.displayName) needs a transcript of the recording") {}
+                        .disabled(true)
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .controlSize(.small)
+        .font(.caption)
+        .accessibilityIdentifier("pack-bar-switch")
+    }
+
+    /// The popover behind "Works with N engines": one row per engine in words,
+    /// the current one marked, each one a click away.
+    private func worksWithList(_ engines: [BackendID], caps: VoiceCapabilities,
+                               transcriptLocked: [BackendID]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(engines, id: \.self) { engine in
+                let current = engine == model.backend
+                let ready = model.downloads.state(for: engine) == .ready
+                let ramOK = model.hasSufficientRAM(for: engine)
+                Button {
+                    if !current { switchEngine(to: engine) }
+                    worksWithOpen = false
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Brand.accent)
+                            .opacity(current ? 1 : 0)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(engine.displayName)
+                                .foregroundStyle(current ? Brand.fg : (ready ? Brand.fgDim : Brand.fgFaint))
+                            Text(caps.engines.contains(engine.rawValue)
+                                 ? "pre-rendered" + (ready ? "" : " · not downloaded")
+                                 : "cloned from the recording" + (ready ? "" : " · not downloaded"))
+                                .font(.caption2).foregroundStyle(Brand.fgFaint)
+                        }
+                        Spacer(minLength: 12)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(current ? Color.white.opacity(0.06) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // The current engine stays enabled so it doesn't render dimmed;
+                // clicking it just closes the list.
+                .disabled(!current && (!ready || !ramOK || model.modelOpInFlight || model.isGenerating))
+                .help(ready ? "" : "Download \(engine.displayName) from the engine menu in the toolbar first")
+            }
+            if !transcriptLocked.isEmpty {
+                Divider().padding(.vertical, 4)
+                Text("With a transcript: "
+                     + transcriptLocked.map(\.displayName).joined(separator: ", "))
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .padding(8)
+        .frame(width: 260)
+        .accessibilityIdentifier("works-with-list")
     }
 
     /// Center column: mode switch + write/act/takes.
@@ -817,9 +932,12 @@ struct StudioView: View {
             let _ = model.voicesVersion
             guard !model.voiceCapabilities(slug).supports(model.backend) else { return nil }
             let name = (try? model.voices.meta(slug).name) ?? slug
-            return "\(model.backend.rawValue) can't speak “\(name)” — switch engine, "
+            return "\(model.backend.displayName) can't speak “\(name)” — switch engine, "
                 + "or pick a voice it can render."
         }()
+        let voiceEngineMismatch = model.selectedVoiceSlug.map {
+            !model.voiceCapabilities($0).supports(model.backend)
+        } ?? false
         HStack(spacing: 10) {
             Button("Generate") { Task { await model.generate(takes: 1) } }
                 .keyboardShortcut(.return, modifiers: .command)
@@ -830,7 +948,9 @@ struct StudioView: View {
                 .disabled(model.isGenerating || blockedReason != nil)
                 .help(blockedReason ?? "Two takes to compare")
             if model.isGenerating { ProgressView().controlSize(.small) }
-            if let blockedReason {
+            // The engine/voice mismatch is already said once, in the pack bar
+            // above, with its fix — the button's tooltip carries it here.
+            if let blockedReason, !voiceEngineMismatch {
                 Text(blockedReason)
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

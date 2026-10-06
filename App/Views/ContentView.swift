@@ -31,7 +31,7 @@ struct ContentView: View {
         // user-draggable divider replace the old fixed-width hand-rolled HStack.
         NavigationSplitView {
             VoiceSidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 340)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 440)
                 // Tint only — the split view supplies the sidebar's own glass.
                 .background(Brand.ink2.opacity(0.45))
         } detail: {
@@ -365,7 +365,9 @@ struct ContentView: View {
             Image(systemName: "waveform").font(.system(size: 10))
                 .foregroundStyle(Brand.fgFaint)
             dot(statusDot(for: model.backend))
-            Text(model.backend.rawValue)
+            // In words, matching the Studio pack bar ("Qwen 0.6B", not
+            // "qwen3-0.6b").
+            Text(model.backend.displayName)
             // What THIS model costs, measured across its own load -- on the
             // control you click to change it, so it's always in view.
             if let gb = model.measuredGB[model.backend.rawValue] {
@@ -389,7 +391,7 @@ struct ContentView: View {
         // the opaque name text, so clicking the chevron/spacing did nothing.
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(model.backend.rawValue) model, \(modelStateText(model.backend))"
+        .accessibilityLabel("\(model.backend.displayName) model, \(modelStateText(model.backend))"
             + (model.measuredGB[model.backend.rawValue]
                 .map { String(format: ", using %.1f gigabytes", $0) } ?? ""))
     }
