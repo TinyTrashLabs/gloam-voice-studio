@@ -1,5 +1,15 @@
 # `.gvoice` packs
 
+**2026-10-05: emotion and language packs.** `benson` now carries the five Gloam styles in English
+and in Spanish (`es-flat` … `es-hype`, plus his original `es` take), and four new voices ship
+with all five styles: `ms-hart`, `marcus`, `dot` and `rocksteady`. Styles and languages follow
+docs/gvoice-format.md ("Styles", "Choosing a take"); each take carries explicit `language` /
+`style` fields. Built with the `gloam-voice-pack` skill: base = the voice's Clone Studio read
+(Rocksteady keeps the Shane base read of the same ElevenLabs voice), style and Spanish takes read
+with ElevenLabs `eleven_v4`, normalised to 24 kHz mono at -17 LUFS; headshots are generated
+portraits in the starter style (no real likeness). Qwen prepared voices refreshed with
+`spike gvoice-qwen-prep … --models <qwen3-0.6b-ane>`.
+
 The two starter voices, built with `spike gvoice-build` (see
 `Sources/spike/main.swift`) per `docs/gvoice-format.md`. Both are ElevenLabs
 voices whose rights Tiny Trash Labs holds, shipped with the repo so a fresh
