@@ -110,6 +110,10 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
     /// language. Nil means unstated. Travels as the manifest's `language` / `source.<key>.language`.
     public var language: String?
 
+    /// How a take is delivered (`VoiceStyle`); nil on a base voice and on a take in its natural
+    /// delivery. Travels as `source.<key>.style`.
+    public var style: VoiceStyle?
+
     /// Stable identity of the voice across shares: a UUID minted when it is created and kept by every
     /// export. Base voices only; nil on a take and on a voice made before ids existed (it is minted on the
     /// first edit or export-time stamp). See docs/gvoice-format.md.
@@ -158,6 +162,7 @@ public struct VoiceMeta: Codable, Equatable, Sendable {
         gain = (try? c.decodeIfPresent(Double.self, forKey: .gain)) ?? nil
         notes = (try? c.decodeIfPresent(String.self, forKey: .notes)) ?? nil
         language = (try? c.decodeIfPresent(String.self, forKey: .language)) ?? nil
+        style = (try? c.decodeIfPresent(VoiceStyle.self, forKey: .style)) ?? nil
         id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil
         revision = (try? c.decodeIfPresent(Int.self, forKey: .revision)) ?? nil
     }

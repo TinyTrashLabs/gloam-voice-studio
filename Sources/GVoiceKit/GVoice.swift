@@ -62,8 +62,10 @@ public enum GVoice {
             /// BCP-47 language of this take's audio and text ("es", "en"). Absent means unstated:
             /// a reader picking a take for a line's language falls back to `base`.
             public var language: String?
-            public init(audio: String?, text: String?, language: String? = nil) {
-                self.audio = audio; self.text = text; self.language = language
+            /// How this take is delivered (named style + optional arousal/valence). Absent = natural.
+            public var style: VoiceStyle?
+            public init(audio: String?, text: String?, language: String? = nil, style: VoiceStyle? = nil) {
+                self.audio = audio; self.text = text; self.language = language; self.style = style
             }
         }
         public var gvoice: Int
@@ -233,7 +235,7 @@ public enum GVoice {
                 let member = "source/ref\(suffix).wav"
                 entries.append((member, try Data(contentsOf: refURL)))
                 manifest.source?[key] = Manifest.Source(audio: member, text: entry.meta.refText,
-                                                         language: entry.meta.language)
+                                                         language: entry.meta.language, style: entry.meta.style)
             }
             let packHasSource = includeSource && entry.refURL != nil
             // Sorted: dictionary order varies between runs, and it decides both
@@ -467,6 +469,9 @@ public enum GVoice {
                                engines: assets, notes: nil)
             if let language = sources[key]?.language {
                 try library.setLanguage("\(baseMeta.slug)-\(safeKey)", language)
+            }
+            if let style = sources[key]?.style {
+                try library.setStyle("\(baseMeta.slug)-\(safeKey)", style)
             }
         }
         // Last, because the setters above (persona, avatar, languages) each bump a store's revision:

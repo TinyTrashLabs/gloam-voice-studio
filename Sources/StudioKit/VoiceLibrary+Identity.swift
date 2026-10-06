@@ -38,6 +38,13 @@ extension VoiceLibrary {
         try write(meta, to: try folder(slug))
     }
 
+    /// Import hook (GVoicePackStore): how a take is delivered. Not an edit of the voice.
+    public func setStyle(_ slug: String, _ style: VoiceStyle) throws {
+        var meta = try self.meta(slug)
+        meta.style = style
+        try write(meta, to: try folder(slug))
+    }
+
     /// Import hook (GVoicePackStore): the imported voice keeps the id and revision it was exported with.
     /// When another voice here already has that id, this one is a COPY and gets a fresh id ("keep both");
     /// `importPack(update:)` is how a newer version replaces the old one instead.
