@@ -42,8 +42,10 @@ public struct Voice: Identifiable, Hashable {
     public var blurb: String {
         if let notes = meta.notes, !notes.trimmingCharacters(in: .whitespaces).isEmpty { return notes }
         if isStarter { return "Included voice" }
-        if let day = Self.day(from: meta.createdAt) { return "Cloned on this phone · \(day)" }
-        return "Cloned on this phone"
+        // "Added", not "Cloned on this phone": a voice imported as a pack or
+        // synced from another device was never cloned here (2026-10-05).
+        if let day = Self.day(from: meta.createdAt) { return "Added \(day)" }
+        return "Added"
     }
 
     /// "Sep 8" from the pack's RFC 3339 `createdAt`; nil when it is not a date.
