@@ -731,6 +731,12 @@ final class AppModel {
         } catch {
             NSLog("[voices] fold failed: %@", String(describing: error))
         }
+        if uiTest {
+            for path in UITestMode.importPaths {
+                do { try voices.importPack(Data(contentsOf: URL(fileURLWithPath: path))) }
+                catch { NSLog("[uitest] import %@ failed: %@", path, String(describing: error)) }
+            }
+        }
         history = HistoryStore(directory: historyDir)
         downloads = ModelDownloadManager(root: StoragePaths.models, uiTest: uiTest)
         speech = SpeechManager(uiTest: uiTest)
@@ -2136,6 +2142,8 @@ final class AppModel {
                 let wav = WAVEncoder.encode(pcm16: PCM16.data(from: samples), sampleRate: raw.sampleRate)
                 try voices.saveAt(slug: "\(baseSlug)-\(expr.rawValue)",
                                   name: "\(meta.name) (\(expr.label))", refWav: wav, refText: text,
+                                  provenance: VoiceLibrary.takeProvenance(origin: "generated",
+                                                                          engine: baker.rawValue),
                                   variantOf: baseSlug)
                 await refreshEngineStatus()   // model resident now — update the RAM chip
             } catch {

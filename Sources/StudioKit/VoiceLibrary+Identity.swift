@@ -69,21 +69,66 @@ extension VoiceLibrary {
     }
 
     /// Adds (or replaces) the voice's take for `language`: a take keyed by the normalized tag, addressed
-    /// `"<slug>-<key>"`, tagged with its language so a render in that language can pick it. Returns the
-    /// take's meta.
+    /// `"<slug>-<key>"`, tagged with its language so a render in that language can pick it. With a
+    /// `style` it is that language's acted take instead, keyed `<lang>-<style>` (`es-excited`) and
+    /// carrying both fields. Returns the take's meta.
     @discardableResult
-    public func addLanguageTake(_ slug: String, language: String, refWav: Data,
-                                refText: String) throws -> VoiceMeta {
-        guard let key = Self.languageKey(language) else {
+    public func addLanguageTake(_ slug: String, language: String, style: VoiceStyle? = nil,
+                                refWav: Data, refText: String,
+                                provenance: JSONValue? = nil) throws -> VoiceMeta {
+        guard let tag = Self.languageKey(language) else {
             throw StudioError.invalidName(language)
         }
         guard layout.locate(slug) == .voice(slug) else { throw StudioError.voiceNotFound(slug: slug) }
+        var key = tag
+        if let style {
+            guard let name = Self.languageKey(style.name) else { throw StudioError.invalidName(style.name) }
+            key += "-\(name)"
+        }
         let base = try meta(slug)
         let take = try saveAt(slug: "\(slug)-\(key)", name: "\(base.name) \(key)", refWav: refWav,
-                              refText: refText, variantOf: slug)
+                              refText: refText, provenance: provenance, variantOf: slug)
         try setLanguage(take.slug, language.trimmingCharacters(in: .whitespacesAndNewlines))
+        if let style { try setStyle(take.slug, style) }
         try touchRevision(slug)
         return try meta(take.slug)
+    }
+
+    /// Adds (or replaces) an acted take in the voice's home language: keyed by the style's name
+    /// (`warm`), carrying `style`, no `language` (a take without one speaks the home language).
+    @discardableResult
+    public func addStyleTake(_ slug: String, style: VoiceStyle, refWav: Data, refText: String,
+                             provenance: JSONValue? = nil) throws -> VoiceMeta {
+        guard let key = Self.languageKey(style.name) else { throw StudioError.invalidName(style.name) }
+        guard layout.locate(slug) == .voice(slug) else { throw StudioError.voiceNotFound(slug: slug) }
+        let base = try meta(slug)
+        let take = try saveAt(slug: "\(slug)-\(key)", name: "\(base.name) (\(style.name))", refWav: refWav,
+                              refText: refText, provenance: provenance, variantOf: slug)
+        try setStyle(take.slug, style)
+        try touchRevision(slug)
+        return try meta(take.slug)
+    }
+
+    /// The editor's home-language picker: the language the voice's default take speaks (the manifest's
+    /// top-level `language`). Nil clears it (unstated). An edit of the voice, so its revision moves.
+    public func setHomeLanguage(_ slug: String, _ language: String?) throws {
+        guard layout.locate(slug) == .voice(slug) else { throw StudioError.voiceNotFound(slug: slug) }
+        let tag = language?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var meta = try self.meta(slug)
+        let new = (tag?.isEmpty ?? true) ? nil : tag
+        guard meta.language != new else { return }
+        meta.language = new
+        try write(meta, to: try folder(slug))
+        try touchRevision(slug)
+    }
+
+    /// Removes one take of a voice (never the voice itself) and counts it as an edit of the voice.
+    public func deleteTake(_ address: String) throws {
+        guard case .variant(let base, _)? = layout.locate(address) else {
+            throw StudioError.voiceNotFound(slug: address)
+        }
+        try delete(address)
+        try touchRevision(base)
     }
 
     /// The take of `slug` that speaks `language` (primary subtag match: "es-MX" finds an "es" take),
