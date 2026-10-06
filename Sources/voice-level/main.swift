@@ -121,20 +121,28 @@ func process(_ wav: Data, label: String) -> Data? {
 
 let fm = FileManager.default
 
-/// Every reference inside a voice directory: the source `ref.wav` and each
-/// engine's derived one. The engine copy matters as much as the source — it is
+/// Every reference inside a voice directory: the source `ref.wav`, each
+/// engine's derived one, and the same for every take in `variants/<key>/`
+/// (PackFolderLayout). The engine copy matters as much as the source — it is
 /// the file LuxTTS actually renders a cloned voice from, and levelling only the
 /// source leaves the audible asset untouched.
 @MainActor
-func references(inVoiceDir dir: URL) -> [URL] {
+func references(inVoiceDir dir: URL, takes: Bool = true) -> [URL] {
     var out: [URL] = []
     let root = dir.appendingPathComponent("ref.wav")
     if fm.fileExists(atPath: root.path) { out.append(root) }
     let engines = dir.appendingPathComponent("engines")
     if let kids = try? fm.contentsOfDirectory(at: engines, includingPropertiesForKeys: nil) {
-        for engine in kids {
+        for engine in kids.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let ref = engine.appendingPathComponent("ref.wav")
             if fm.fileExists(atPath: ref.path) { out.append(ref) }
+        }
+    }
+    guard takes else { return out }
+    let variants = dir.appendingPathComponent(PackFolderLayout.variantsFolder)
+    if let kids = try? fm.contentsOfDirectory(at: variants, includingPropertiesForKeys: nil) {
+        for take in kids.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            out += references(inVoiceDir: take, takes: false)
         }
     }
     return out
@@ -147,9 +155,7 @@ func handleVoiceDir(_ dir: URL) {
     print(dir.lastPathComponent)
     for ref in refs {
         guard let wav = try? Data(contentsOf: ref) else { continue }
-        let label = ref.path.hasSuffix("/ref.wav") && ref.deletingLastPathComponent() == dir
-            ? "ref.wav"
-            : "engines/\(ref.deletingLastPathComponent().lastPathComponent)/ref.wav"
+        let label = String(ref.path.dropFirst(dir.path.count + 1))
         guard let out = process(wav, label: label) else { continue }
         if !dryRun { try? out.write(to: ref) }
     }
@@ -172,8 +178,9 @@ func handlePack(_ pack: URL) {
         var bytes = Data()
         guard (try? archive.extract(entry, consumer: { bytes.append($0) })) != nil else { continue }
         entries.append((entry.path, bytes))
-        // Every ref.wav in the pack, wherever it sits: source/ and engines/*/.
-        if entry.path.hasSuffix("ref.wav"), let out = process(bytes, label: entry.path) {
+        // Every reference in the pack, wherever it sits: source/ and engines/*/,
+        // takes (`ref-<key>.wav`) included.
+        if ReferenceStandard.isReference(path: entry.path), let out = process(bytes, label: entry.path) {
             replacements[entry.path] = out
         }
     }
