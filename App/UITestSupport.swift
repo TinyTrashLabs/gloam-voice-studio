@@ -38,6 +38,14 @@ enum UITestMode {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("gloam-uitest-\(ProcessInfo.processInfo.processIdentifier)")
     }
+    /// `.gvoice` packs to import into the throwaway library at launch (`--uitest-import=<path>`,
+    /// repeatable), so a UI run can open a real pack without touching the user's library. One argument,
+    /// not a flag and a path: AppKit takes a bare path argument as a document to open and then skips
+    /// the main window.
+    static var importPaths: [String] {
+        let flag = "--uitest-import="
+        return ProcessInfo.processInfo.arguments.filter { $0.hasPrefix(flag) }.map { String($0.dropFirst(flag.count)) }
+    }
     /// A valid 2 s WAV reference clip for the "Use Sample Reference" button.
     static func sampleReference() -> Data {
         let samples = (0..<88200).map { 0.3 * sin(Float($0) * 2 * .pi * 220 / 44100) }

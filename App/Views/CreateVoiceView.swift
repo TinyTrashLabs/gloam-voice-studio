@@ -35,6 +35,8 @@ struct CreateVoiceView: View {
     // Edit-mode
     @State private var editName = ""
     @State private var editRefText = ""
+    /// The home language tag as stored; "" = not stated.
+    @State private var editLanguage = ""
     @State private var editReplaceData: Data?
     @State private var editReplaceDesc = "Keeping existing reference"
     @State private var editError: String?
@@ -60,18 +62,19 @@ struct CreateVoiceView: View {
                 emotion: target.emotion, onSaved: {})
         }
         .confirmationDialog(
-            "Delete this variant?",
+            "Delete this take?",
             isPresented: Binding(get: { deletingVariantSlug != nil },
                                  set: { if !$0 { deletingVariantSlug = nil } }),
             presenting: deletingVariantSlug
         ) { slug in
-            Button("Delete Variant", role: .destructive) {
-                try? model.voices.delete(slug); model.voicesVersion += 1
+            Button("Delete Take", role: .destructive) {
+                do { try model.voices.deleteTake(slug) } catch { editError = model.describeAny(error) }
+                model.voicesVersion += 1
                 deletingVariantSlug = nil
             }
             Button("Cancel", role: .cancel) { deletingVariantSlug = nil }
         } message: { _ in
-            Text("This permanently removes the acted variant clip. The base voice is unaffected.")
+            Text("This permanently removes this take's clip. The voice's own reference is unaffected.")
         }
         .task(id: editSlug) { loadEdit(editSlug) }
     }
@@ -275,8 +278,8 @@ struct CreateVoiceView: View {
 
     @ViewBuilder private func editContent(_ slug: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            header(title: "Edit Voice", subtitle: "Rename, refine the reference, and generate acted "
-                   + "emotion versions of this voice — the whole app uses them.")
+            header(title: "Edit Voice", subtitle: "Rename, refine the reference, and manage every take "
+                   + "of this voice — its languages and acted styles. The whole app uses them.")
             Spacer()
             docsHelpButton
             Button("Done") { model.editingVoiceSlug = nil }
@@ -314,6 +317,19 @@ struct CreateVoiceView: View {
             }
             TextField("Name", text: $editName).textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("edit-name")
+            HStack(spacing: 8) {
+                Text("Home language").font(.caption).foregroundStyle(Brand.fgDim)
+                Picker("", selection: $editLanguage) {
+                    Text("Not stated").tag("")
+                    ForEach(homeLanguageChoices, id: \.self) {
+                        Text("\(VoiceTakesPanel.languageName($0)) (\($0))").tag($0)
+                    }
+                }
+                .labelsHidden().frame(width: 200)
+                .accessibilityIdentifier("edit-home-language")
+                Text("What the reference clip speaks — packs must state it.")
+                    .font(.caption2).foregroundStyle(Brand.fgFaint)
+            }
         }
         .fileImporter(isPresented: $avatarImporter,
                       allowedContentTypes: [.png, .jpeg, .heic, .image],
@@ -365,10 +381,17 @@ struct CreateVoiceView: View {
         }
     }
 
+    /// Common tags, plus the voice's own when it's something else (kept as written).
+    private var homeLanguageChoices: [String] {
+        VoiceLanguages.common.contains(editLanguage) || editLanguage.isEmpty
+            ? VoiceLanguages.common : [editLanguage] + VoiceLanguages.common
+    }
+
     private func loadEdit(_ slug: String?) {
         guard let slug, let found = try? model.voices.get(slug) else { return }
         editName = found.meta.name
         editRefText = found.meta.refText
+        editLanguage = found.meta.language ?? ""
         editReplaceData = nil
         editReplaceDesc = "Keeping existing reference"
         editError = nil
@@ -381,6 +404,8 @@ struct CreateVoiceView: View {
             let meta = try model.updateVoice(
                 slug, name: editName, refText: editRefText,
                 refWav: (editReplaceData?.isEmpty == false) ? editReplaceData : nil)
+            try model.voices.setHomeLanguage(meta.slug, editLanguage.isEmpty ? nil : editLanguage)
+            model.voicesVersion += 1   // the takes grid re-labels its home row
             model.editingVoiceSlug = meta.slug
             model.selectedVoiceSlug = meta.slug
             editReplaceData = nil
@@ -390,162 +415,18 @@ struct CreateVoiceView: View {
         } catch { editError = model.describeAny(error) }
     }
 
-    // MARK: - Shared emotion-variant manager
+    // MARK: - Shared takes grid
 
-    /// Manage a voice's acted expression variants. Baked ones show as rows (play /
-    /// regenerate / delete each); the rest of Fish's expressive vocabulary appears as
-    /// "add" chips. Rendered through Fish's inline emotion markers. Used in Create
-    /// (just-saved voice) and Edit.
+    /// Every take of the voice (languages × styles), with the record / generate / add flows per cell.
+    /// Used in Create (just-saved voice) and Edit.
     private func manageVariantsPanel(targetSlug: String, note: Bool) -> some View {
-        let _ = model.voicesVersion   // re-render after a variant is baked / deleted
-        let name = (try? model.voices.meta(targetSlug).name) ?? targetSlug
-        // Every existing variant — the new Fish-marker set AND legacy emotion names,
-        // deduped — so nothing a voice already has disappears from this list.
-        var seen = Set<String>()
-        let known = (VoiceExpression.allCases.map { $0.rawValue } + Emotion.allCases.map { $0.rawValue })
-            .filter { seen.insert($0).inserted }
-        let existing = known.filter { (try? model.voices.get("\(targetSlug)-\($0)")) != nil }
-        let unbaked = VoiceExpression.allCases.filter { !existing.contains($0.rawValue) }
-        // No neutral chip: VoiceLibrary.resolve always maps .neutral to the base
-        // voice, so a recorded "-neutral" take would never be played.
-        let unrecorded = Emotion.allCases.filter { $0 != .neutral && !existing.contains($0.rawValue) }
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                zoneLabel("EMOTION VARIANTS")
-                Spacer()
-                Picker("", selection: $bakeBaker) {
-                    Text("fish-s2-pro").tag(BackendID.fishS2Pro)
-                    Text("breeze-tts-2").tag(BackendID.breezeTTS2)
-                    Text("chatterbox").tag(BackendID.chatterbox)
-                }.labelsHidden().frame(width: 150)
-                    .help("fish uses emotion markers (distinct emotions); breeze directs the clone "
-                        + "with the expression in words (distinct emotions, needs the voice's "
-                        + "transcript); chatterbox uses its exaggeration knob (intensity only — "
-                        + "for users who can't run fish or breeze)")
-            }
-            (Text("Acted takes of  ").font(.callout).foregroundStyle(.secondary)
-                + Text(name).font(.callout.weight(.bold)).foregroundStyle(Brand.accent)
-                + Text(bakeBaker == .fishS2Pro
-                       ? "  · fish emotion markers (distinct)"
-                       : bakeBaker == .breezeTTS2
-                       ? "  · breeze directed clone (distinct)"
-                       : "  · chatterbox intensity (fallback)")
-                    .font(.caption2).foregroundStyle(Brand.fgFaint))
-            Text("Each becomes a voice-expression clip the whole app and API can use."
-                 + (note ? " (These belong to the voice you last saved.)" : ""))
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if existing.isEmpty {
-                Text("No emotion versions yet — add one below.")
-                    .font(.caption).foregroundStyle(Brand.fgFaint)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(existing.enumerated()), id: \.element) { i, suffix in
-                        if i > 0 { Divider().overlay(Color.white.opacity(0.05)) }
-                        variantManageRow(suffix, targetSlug: targetSlug)
-                    }
-                }
-            }
-            if !unbaked.isEmpty {
-                Text("Generate an emotion version").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
-                FlowLayout(spacing: 6) {
-                    ForEach(unbaked, id: \.self) { expr in addVariantChip(expr, targetSlug: targetSlug) }
-                }
-            }
-            if !unrecorded.isEmpty {
-                Text("Record an emotion version").font(.caption2).foregroundStyle(Brand.fgDim).padding(.top, 4)
-                Text("Fish gives distinct emotions (best quality); Chatterbox adjusts intensity "
-                     + "only (lighter fallback).")
-                    .font(.caption2).foregroundStyle(Brand.fgFaint)
-                    .fixedSize(horizontal: false, vertical: true)
-                FlowLayout(spacing: 6) {
-                    ForEach(unrecorded, id: \.self) { emo in
-                        recordVariantChip(emo, targetSlug: targetSlug, baseName: name)
-                    }
-                }
-            }
-            if model.foundryBaking {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Rendering variant…").font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.05), lineWidth: 1))
-    }
-
-    private func variantManageRow(_ suffix: String, targetSlug: String) -> some View {
-        let variantSlug = "\(targetSlug)-\(suffix)"
-        let existing = try? model.voices.get(variantSlug)
-        let marker = VoiceExpression(rawValue: suffix)   // nil for recorded names (warm/hype)
-        return HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
-            Text(suffix.capitalized).font(.system(.callout, design: .monospaced))
-            Spacer()
-            if let existing {
-                Button(player.playingID == variantSlug ? "Stop" : "Play") {
-                    player.toggle(id: variantSlug, url: existing.refURL)
-                }.font(.caption).buttonStyle(.bordered)
-            }
-            if let marker {
-                Button("Regenerate") {
-                    Task { await model.bakeExpressionVariants(
-                        baseSlug: targetSlug, expressions: [marker], baker: bakeBaker) }
-                }.font(.caption).buttonStyle(.bordered).disabled(model.foundryBaking)
-            } else if let emo = Emotion(rawValue: suffix) {
-                Button("Re-record") {
-                    let baseName = (try? model.voices.meta(targetSlug).name) ?? targetSlug
-                    recordingVariant = RecordVariantTarget(
-                        baseSlug: targetSlug, baseName: baseName, emotion: emo)
-                }.font(.caption).buttonStyle(.bordered)
-            }
-            Button(role: .destructive) {
-                deletingVariantSlug = variantSlug
-            } label: { Image(systemName: "trash") }
-                .font(.caption).buttonStyle(.bordered)
-                .accessibilityIdentifier("variant-delete-\(suffix)")
-                .accessibilityLabel("Delete Variant")
-        }
-        .padding(.vertical, 6)
-        .accessibilityIdentifier("variant-row-\(suffix)")
-    }
-
-    private func addVariantChip(_ expr: VoiceExpression, targetSlug: String) -> some View {
-        Button {
-            Task { await model.bakeExpressionVariants(
-                baseSlug: targetSlug, expressions: [expr], baker: bakeBaker) }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "plus").font(.system(size: 8, weight: .bold))
-                Text(expr.label).font(.system(.caption, design: .monospaced))
-            }
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.04)))
-            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
-            .foregroundStyle(Brand.fgDim)
-        }
-        .buttonStyle(.plain).disabled(model.foundryBaking)
-        .accessibilityIdentifier("variant-add-\(expr.rawValue)")
-    }
-
-    private func recordVariantChip(_ emotion: Emotion, targetSlug: String,
-                                   baseName: String) -> some View {
-        Button {
-            recordingVariant = RecordVariantTarget(
-                baseSlug: targetSlug, baseName: baseName, emotion: emotion)
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "mic.fill").font(.system(size: 8, weight: .bold))
-                Text(emotion.rawValue).font(.system(.caption, design: .monospaced))
-            }
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.04)))
-            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
-            .foregroundStyle(Brand.fgDim)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("record-variant-\(emotion.rawValue)")
+        VoiceTakesPanel(
+            slug: targetSlug, note: note, player: player, baker: $bakeBaker,
+            onRecord: { emotion in
+                let baseName = (try? model.voices.meta(targetSlug).name) ?? targetSlug
+                recordingVariant = RecordVariantTarget(baseSlug: targetSlug, baseName: baseName, emotion: emotion)
+            },
+            onDelete: { deletingVariantSlug = $0 })
     }
 
     // MARK: - Shared chrome

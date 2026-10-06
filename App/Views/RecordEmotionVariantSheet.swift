@@ -150,6 +150,7 @@ struct RecordEmotionVariantSheet: View {
             _ = try model.voices.saveAt(slug: "\(baseSlug)-\(emotion.rawValue)",
                                         name: "\(baseName) (\(emotion.rawValue))",
                                         refWav: data, refText: RecordingScript.passage,
+                                        provenance: VoiceLibrary.takeProvenance(origin: "recorded"),
                                         variantOf: baseSlug)
             model.voicesVersion += 1
             onSaved()
