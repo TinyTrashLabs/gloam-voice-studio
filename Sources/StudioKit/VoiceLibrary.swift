@@ -234,9 +234,11 @@ public struct VoiceLibrary: Sendable {
         var folders = Set(engines.keys)
         // A qwen3-0.6b folder counts only when it is complete (codes, embedding, voice.json); a half-written
         // one — or a cache without its section audio when the master is past the encoder — is not a rendition.
-        if let qwen = engines[QwenEngineFiles.engineID],
-           !(qwen[QwenEngineFiles.voiceFile] != nil && qwen["ref_codes.npy"] != nil && qwen["spk_embed.npy"] != nil) {
-            folders.remove(QwenEngineFiles.engineID)
+        for kind in QwenEngineFiles.Kind.all {
+            if let qwen = engines[kind.engineID],
+               !(qwen[QwenEngineFiles.voiceFile] != nil && qwen["ref_codes.npy"] != nil && qwen["spk_embed.npy"] != nil) {
+                folders.remove(kind.engineID)
+            }
         }
         return VoiceCapabilities(hasSource: refURL != nil,
                                  hasRefText: !meta.refText.isEmpty,

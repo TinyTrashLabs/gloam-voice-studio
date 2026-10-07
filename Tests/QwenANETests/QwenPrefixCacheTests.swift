@@ -30,7 +30,7 @@ final class QwenPrefixCacheTests: XCTestCase {
     /// The pre-cache construction, verbatim (one joint text projection for reference + line, everything per line).
     private func legacyPrompt(host: HostTables, voice: QwenVoiceFiles, text: String) -> [Float] {
         let c = host.cfg
-        let H = 1024
+        let H = host.hidden
         let refIds = host.tok.encode("<|im_start|>assistant\n\(voice.refText)<|im_end|>\n")
         let rs = min(3, refIds.count), re = max(rs, refIds.count - 2)
         let refTextIds = Array(refIds[rs..<re])
@@ -93,7 +93,7 @@ final class QwenPrefixCacheTests: XCTestCase {
                     // and the uncached call (no VoicePrompt passed) agrees too
                     XCTAssertTrue(buildICLPrompt(host: host, voice: voice, text: text).embeds == want)
                     if got.prefixRows > 0 {
-                        prefixes.append(Array(got.embeds[0..<(got.prefixRows * 1024)]))
+                        prefixes.append(Array(got.embeds[0..<(got.prefixRows * host.hidden)]))
                         XCTAssertNotNil(got.voice)
                     }
                 }

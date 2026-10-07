@@ -15,24 +15,28 @@ struct GenResult {
 
 /// Talker + code predictor on the Neural Engine, a Swift port of tools/qcoreml.py.
 ///
-/// * talker{0,1}.mlmodelc: 14 layers each, multifunction ("decode" T=1 / "prefill" T=64) sharing one
-///   MLState per chunk (k/v buffers (8, LMAX, 128) fp16). A row is written by a one-hot blend
+/// * talker{0..<n}.mlmodelc: `layers / n` layers each (2 x 14 for 0.6B, 4 x 7 for 1.7B; the host config says
+///   which), multifunction ("decode" T=1 / "prefill" T=64) sharing one MLState per chunk (k/v buffers
+///   (8, LMAX, 128) fp16). A row is written by a one-hot blend
 ///   (`keep`, `place` inputs) because the ANE has no scatter and slice_update on a state ignores a
-///   dynamic begin. Chunk 0 hands its residual to chunk 1 as (x_out, lo_out): a compensated fp16
+///   dynamic begin. Each chunk hands its residual to the next as (x_out, lo_out): a compensated fp16
 ///   stream (TwoSum), which keeps the g0 logits within ~0.3% of the fp32 reference.
-/// * cp_ane.mlmodelc: one call per frame, 15 greedy sub-codes unrolled (argmax on the ANE).
+/// * cp_ane.mlmodelc: one call per frame, 15 greedy sub-codes unrolled (argmax on the ANE). Its `hidden` and `e0`
+///   inputs are 1024 wide; a 1.7B talker (2048) goes through the host's small_to_mtp_projection first.
 /// Host side per frame (fp32): next talker input = codec[g0] + sum cp[k][code] + tts_pad, the RoPE
 /// row and the mask/one-hot rows. CPU cost is ~1 ms per 80 ms frame on the Mac.
 #if arch(arm64)
 @available(iOS 18.0, macOS 15.0, *)
 final class ANETalkerEngine {
-    static let H = 1024, LMAX = 1024, P = 64, HD = 128
+    static let LMAX = 1024, P = 64, HD = 128
+    /// Talker width, chunks and layers per chunk (from the host config).
+    private let H: Int, chunks: Int, layersPerChunk: Int
     private let dec: [MLModel], pre: [MLModel], cp: MLModel
     private let host: HostTables
     private let ttsPad: [Float]
     private var states: [MLState]
     // persistent decode inputs (mutated in place each step)
-    private let x, cosA, sinA, mask, place, keep, e0: MLMultiArray
+    private let x, cosA, sinA, mask, place, keep, e0, cpHiddenIn: MLMultiArray
     // prefill inputs
     private let px, pcos, psin, pmask, pplace, pkeep: MLMultiArray
     private var logits = [Float](repeating: 0, count: 3072)
@@ -49,14 +53,16 @@ final class ANETalkerEngine {
 
     init(coreMLDirectory dir: URL, host: HostTables) throws {
         self.host = host
+        H = host.hidden; chunks = host.cfg.talkerChunks; layersPerChunk = host.cfg.layers / host.cfg.talkerChunks
         func load(_ name: String, _ fn: String?) throws -> MLModel {
             let c = MLModelConfiguration()
             c.computeUnits = .cpuAndNeuralEngine
             if let fn { c.functionName = fn }
             return try MLModel(contentsOf: dir.appendingPathComponent(name + ".mlmodelc"), configuration: c)
         }
-        dec = try (0..<2).map { try load("talker\($0)", "decode") }
-        pre = try (0..<2).map { try load("talker\($0)", "prefill") }
+        let n = host.cfg.talkerChunks
+        dec = try (0..<n).map { try load("talker\($0)", "decode") }
+        pre = try (0..<n).map { try load("talker\($0)", "prefill") }
         cp = try load("cp_ane", nil)
         ttsPad = host.textProj([host.cfg.ttsPad])
         states = dec.map { $0.makeState() }
@@ -65,13 +71,14 @@ final class ANETalkerEngine {
             memset(a.dataPointer, 0, shape.reduce(1, *) * 2)
             return a
         }
-        let H = Self.H, L = Self.LMAX, P = Self.P, HD = Self.HD
+        let H = host.hidden, L = Self.LMAX, P = Self.P, HD = Self.HD
+        let CH = host.cfg.cpHidden
         x = try f16([1, H]); cosA = try f16([1, HD]); sinA = try f16([1, HD]); mask = try f16([1, L])
-        place = try f16([L, 1]); keep = try f16([L, 1]); e0 = try f16([1, H])
+        place = try f16([L, 1]); keep = try f16([L, 1]); e0 = try f16([1, CH]); cpHiddenIn = try f16([1, CH])
         px = try f16([P, H]); pcos = try f16([P, HD]); psin = try f16([P, HD]); pmask = try f16([P, L])
         pplace = try f16([L, P]); pkeep = try f16([L, 1])
         // zero the KV states once (masked rows are multiplied by 0; they must not hold NaN bit patterns)
-        for (c, s) in states.enumerated() { Self.zero(s, layers: (14 * c)..<(14 * c + 14)) }
+        for (c, s) in states.enumerated() { Self.zero(s, layers: (layersPerChunk * c)..<(layersPerChunk * c + layersPerChunk)) }
     }
 
     private static func zero(_ s: MLState, layers: Range<Int>) {
@@ -96,7 +103,7 @@ final class ANETalkerEngine {
         }
     }
 
-    /// Runs both chunks on the inputs already placed in `inputs` (chunk 1 also gets x_out/lo_out of chunk 0).
+    /// Runs every chunk on the inputs already placed in `inputs` (each later chunk also gets the x_out/lo_out of the one before).
     private func runChunks(_ models: [MLModel], _ inputs: [String: MLMultiArray]) throws -> MLFeatureProvider {
         var feed = inputs.mapValues { MLFeatureValue(multiArray: $0) }
         var out: MLFeatureProvider! = nil
@@ -117,7 +124,7 @@ final class ANETalkerEngine {
     /// instead of computed; returns how many rows that was, and, when `p.voice` has none yet, a fresh
     /// snapshot of them for the caller to keep once the line proves finite.
     private func prefill(_ p: Prompt) throws -> (reused: Int, fresh: KVPrefix?) {
-        let H = Self.H, L = Self.LMAX, P = Self.P, HD = Self.HD
+        let H = self.H, L = Self.LMAX, P = Self.P, HD = Self.HD
         let n = p.T - 1                                   // the last row goes through decode
         let aligned = usePrefixCache && p.voice != nil ? Self.cacheableRows(p) : 0
         var s = 0
@@ -153,15 +160,16 @@ final class ANETalkerEngine {
 
     // MARK: KV prefix snapshots (MLState read/write)
 
-    private static func stateNames() -> [(chunk: Int, name: String)] {
-        (0..<28).flatMap { i in ["k", "v"].map { (chunk: i / 14, name: "\($0)\(i)") } }
+    private func stateNames() -> [(chunk: Int, name: String)] {
+        let per = layersPerChunk
+        return (0..<(per * chunks)).flatMap { i in ["k", "v"].map { (chunk: i / per, name: "\($0)\(i)") } }
     }
 
     /// Copies rows 0..<rows of every k/v state buffer into compact blocks; nil when a buffer's layout is not the
     /// expected fp16 (heads, slots, head dim) with a contiguous head dimension (the cache is then simply off).
     private func snapshotKV(rows: Int, embeds: [Float]) -> KVPrefix? {
         var blocks: [Data] = []
-        for (c, name) in Self.stateNames() {
+        for (c, name) in stateNames() {
             let block: Data? = states[c].withMultiArray(for: name) { a in
                 let nd = a.shape.count
                 guard nd >= 3, a.dataType == .float16 else { return nil }
@@ -183,7 +191,7 @@ final class ANETalkerEngine {
 
     /// Writes a snapshot back into rows 0..<rows of the state buffers. False (and nothing trusted) on a layout surprise.
     private func restoreKV(_ kv: KVPrefix) -> Bool {
-        let names = Self.stateNames()
+        let names = stateNames()
         guard kv.buffers.count == names.count else { return false }
         for (i, (c, name)) in names.enumerated() {
             let ok: Bool = states[c].withMultiArray(for: name) { a in
@@ -229,7 +237,7 @@ final class ANETalkerEngine {
 
     private func setX(_ v: [Float]) {
         let xp = Self.p16(x)
-        for i in 0..<Self.H { xp[i] = Float16(v[i]) }
+        for i in 0..<H { xp[i] = Float16(v[i]) }
     }
 
     /// True when every value is a finite number (no NaN / Inf).
@@ -238,10 +246,10 @@ final class ANETalkerEngine {
         return true
     }
 
-    /// Zeroes both chunks' KV states. A NaN/Inf written into a cache row would survive into every
+    /// Zeroes every chunk's KV states. A NaN/Inf written into a cache row would survive into every
     /// later line (masked rows are multiplied by 0, and 0 * NaN is NaN), so a bad line resets them.
     func resetStates() {
-        for (c, s) in states.enumerated() { Self.zero(s, layers: (14 * c)..<(14 * c + 14)) }
+        for (c, s) in states.enumerated() { Self.zero(s, layers: (layersPerChunk * c)..<(layersPerChunk * c + layersPerChunk)) }
     }
 
     /// Test seam: poison the talker logits with NaN right after the step that follows this frame index.
@@ -268,7 +276,7 @@ final class ANETalkerEngine {
 
     private func generateUnguarded(prompt: Prompt, sampler: inout Sampler, eos: Int, maxNew: Int?,
                   cancelled: () -> Bool, onFrame: (Int, ArraySlice<Int64>) throws -> Void) throws -> GenResult {
-        let H = Self.H, L = Self.LMAX
+        let H = self.H, L = Self.LMAX
         let T = prompt.T
         guard T < L - 8 else { throw QwenANEError.invalid("prompt \(T) rows exceeds the ANE talker's \(L) KV slots") }
         let requested = maxNew ?? effectiveMaxTokens(prompt.nTextTokens)
@@ -307,9 +315,21 @@ final class ANETalkerEngine {
                 guard g0 >= 0, g0 < QwenVoiceFiles.codebookSize else { throw QwenANEError.nonFinite("first-codebook code \(g0) outside the vocoder's range") }
                 // code predictor: hidden + codec[g0] -> 15 sub-codes
                 let ep = Self.p16(e0), cr = host.codecRow(g0)
-                for i in 0..<H { ep[i] = Float16(cr[i]) }
+                let cpHidden: MLMultiArray
+                if host.projectsForCodePredictor {
+                    // 1.7B: small_to_mtp_projection (2048 -> 1024) of the talker's hidden state and of codec[g0], in fp32
+                    var hv = [Float](repeating: 0, count: H)
+                    Self.read(hidden, into: &hv)
+                    let hp = host.cpInput(hv), er = host.cpInput(cr)
+                    let hq = Self.p16(cpHiddenIn)
+                    for i in 0..<hp.count { hq[i] = Float16(hp[i]); ep[i] = Float16(er[i]) }
+                    cpHidden = cpHiddenIn
+                } else {
+                    for i in 0..<H { ep[i] = Float16(cr[i]) }
+                    cpHidden = hidden
+                }
                 let co = try cp.prediction(from: try MLDictionaryFeatureProvider(dictionary: [
-                    "hidden": MLFeatureValue(multiArray: hidden), "e0": MLFeatureValue(multiArray: e0)]))
+                    "hidden": MLFeatureValue(multiArray: cpHidden), "e0": MLFeatureValue(multiArray: e0)]))
                 guard let ca = co.featureValue(for: "codes")?.multiArrayValue else { throw QwenANEError.invalid("cp codes missing") }
                 var cf = [Float](repeating: 0, count: 15)
                 Self.read(ca, into: &cf)

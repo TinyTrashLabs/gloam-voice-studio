@@ -120,7 +120,7 @@ extension QwenANEEngine {
     }
 }
 
-/// Text to speech with Qwen3-TTS 0.6B on the Neural Engine: talker + code predictor and the
+/// Text to speech with Qwen3-TTS (0.6B or 1.7B, the model set says which) on the Neural Engine: talker + code predictor and the
 /// vocoder upsampler run as Core ML models, the rest (text projection, vocoder head) on the CPU.
 /// No MLX, no ONNX Runtime. See the README next to this file for the model directory layout.
 ///
@@ -136,6 +136,9 @@ public final class QwenANEEngine: @unchecked Sendable {
     private let lock = NSLock()
     /// The directory the engine was loaded from; `loadVoice(named:)` reads `voices/<name>` under it.
     public let modelsDirectory: URL
+    /// The talker's width, which is also the size of the x-vector a voice must carry: 1024 (0.6B) or 2048 (1.7B).
+    public var speakerDimension: Int { host.hidden }
+
     /// Frames (80 ms each) the talker can generate for `text` in `voice` before its KV window fills: the
     /// runaway cap that follows the voice's pace (`QwenReadRules.frameCap`), within the window left after
     /// the prompt (reference + text). A line that hits the window ends with `.contextFull`; hosts split
@@ -272,8 +275,8 @@ public final class QwenANEEngine: @unchecked Sendable {
                       cancelled: () -> Bool, pace: () -> Void,
                       onAudio: (([Float]) -> Void)?) throws -> QwenRender {
         try QwenVoiceFiles.validate(refCodes: voice.refCodes)
-        guard voice.spkEmbedding.count == HostTables.H else {
-            throw QwenANEError.invalid("spkEmbedding must have \(HostTables.H) values")
+        guard voice.spkEmbedding.count == host.hidden else {
+            throw QwenANEError.invalid("spkEmbedding must have \(host.hidden) values (this model set's x-vector size)")
         }
         let t0 = Date()
         talker.usePrefixCache = options.prefixCache

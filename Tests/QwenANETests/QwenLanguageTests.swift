@@ -29,11 +29,11 @@ final class QwenLanguageTests: XCTestCase {
 
     // MARK: with the host tables
 
-    private func voice() -> QwenVoiceFiles {
+    private func voice(_ hidden: Int = 1024) -> QwenVoiceFiles {
         let T = 12
         return QwenVoiceFiles(refText: "Come in, come in.",
                               refCodes: (0..<16).map { g in (0..<T).map { ($0 * 7 + g * 13) % 2048 } },
-                              spkEmbedding: (0..<1024).map { Float($0 % 17) / 17 })
+                              spkEmbedding: (0..<hidden).map { Float($0 % 17) / 17 })
     }
 
     func testHostConfigReadsLanguageIDs() throws {
@@ -45,9 +45,9 @@ final class QwenLanguageTests: XCTestCase {
     func testNilAndAutoPromptsAreBitIdentical() throws {
         let host = try HostTables(dir: try modelsDirectory().appendingPathComponent("host").path)
         let text = "Buenas noches, amigo."
-        let none = buildICLPrompt(host: host, voice: voice(), text: text)
+        let none = buildICLPrompt(host: host, voice: voice(host.hidden), text: text)
         for auto in [nil, "auto", "", "xx"] as [String?] {
-            let p = buildICLPrompt(host: host, voice: voice(), text: text, language: auto)
+            let p = buildICLPrompt(host: host, voice: voice(host.hidden), text: text, language: auto)
             XCTAssertEqual(p.T, none.T)
             XCTAssertTrue(p.embeds == none.embeds, "language \(auto ?? "nil") changed the prompt")
         }
@@ -55,10 +55,10 @@ final class QwenLanguageTests: XCTestCase {
 
     func testSpanishPromptSwapsTheThinkRows() throws {
         let host = try HostTables(dir: try modelsDirectory().appendingPathComponent("host").path)
-        let c = host.cfg, H = 1024
+        let c = host.cfg, H = host.hidden
         let text = "Buenas noches, amigo."
-        let auto = buildICLPrompt(host: host, voice: voice(), text: text)
-        let es = buildICLPrompt(host: host, voice: voice(), text: text, language: "es-MX")
+        let auto = buildICLPrompt(host: host, voice: voice(host.hidden), text: text)
+        let es = buildICLPrompt(host: host, voice: voice(host.hidden), text: text, language: "es-MX")
         XCTAssertEqual(es.T, auto.T + 1, "the language token is one extra prefix row")
         XCTAssertEqual(es.textIds, auto.textIds)
         // Rows 0-2 are the role tokens: untouched.
@@ -76,7 +76,7 @@ final class QwenLanguageTests: XCTestCase {
             let row = Array(es.embeds[(3 + r) * H..<(3 + r + 1) * H])
             XCTAssertEqual(row, (0..<H).map { pad[$0] + codec[$0] }, "prefix row \(r)")
         }
-        XCTAssertNotEqual(es.embeds, buildICLPrompt(host: host, voice: voice(), text: text, language: "en").embeds)
+        XCTAssertNotEqual(es.embeds, buildICLPrompt(host: host, voice: voice(host.hidden), text: text, language: "en").embeds)
     }
 
     @available(iOS 18.0, macOS 15.0, *)
