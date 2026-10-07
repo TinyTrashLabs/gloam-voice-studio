@@ -27,7 +27,7 @@ greedy steps, int8. Vocoder, vocoder head, speech encoder: the 0.6B set's files 
   g0 logits: relative rms 0.0018 against the fp32 reference.
 * fp16 is too slow (talker 107 ms/frame), so int8 per-channel symmetric (`constexpr_blockwise_shift_scale` with one scale per
   row): talker 36 ms/frame. Everything int8 is wrong (g0 agreement 1%): layer 2, the layer that creates the massive-activation
-  row, must stay fp16 (+48 MB). With it: g0 1% error budget of the fp32 reference (below).
+  row, must stay fp16 (+48 MB). With it the gate passes (below).
 * Other representations measured on a 7-layer decode chunk: fp16 28.5 ms, int8 per channel 9.3 ms (100% ANE), 256-entry
   per-row palettisation 16.8 ms (100% ANE), int8 per 64-block 14.5 ms with half the ops on the CPU. Per-channel int8 it is.
 * The code predictor does not load on the ANE with the projection inside the graph (Core ML error -6), so the host applies it:
