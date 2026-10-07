@@ -88,16 +88,57 @@ public enum ReferenceSection {
     public static let maxWordsPerSecond = 6.0
 
     /// The text for a cut: `heard` (a transcription of the cut) when it reads at a
-    /// plausible rate, else the master's own transcript sliced to the same span.
-    /// Returns whether it is the slice.
+    /// plausible rate AND is in `language` (when known), else the master's own transcript sliced to the
+    /// same span. A recogniser told the wrong language (or none) can hand back a TRANSLATION of the speech
+    /// at a perfectly plausible rate; never store that. Returns whether it is the slice.
     public static func text(heard: String?, transcript: String, cutSeconds: Double,
-                            start: Int, count: Int, total: Int) -> (text: String, approximate: Bool) {
-        if let heard {
+                            start: Int, count: Int, total: Int,
+                            language: String? = nil) -> (text: String, approximate: Bool) {
+        if let heard, textIsPlausibleIn(language: language, heard) {
             let words = heard.split(whereSeparator: { $0.isWhitespace }).count
             let rate = Double(words) / max(0.1, cutSeconds)
             if rate >= minWordsPerSecond, rate <= maxWordsPerSecond { return (heard, false) }
         }
         return (approximateText(transcript, windowStart: start, windowCount: count, totalCount: total), true)
+    }
+
+    // MARK: language of a transcript
+
+    private static let spanishWords: Set<String> = [
+        "el", "los", "las", "una", "unos", "unas", "que", "de", "del", "y", "es", "por", "para", "con", "pero",
+        "muy", "más", "mas", "hay", "nada", "yo", "tú", "usted", "ni", "lo", "esto", "eso", "está", "estoy",
+        "gusta", "hablar", "cuando", "como", "cómo", "porque", "también", "ahí", "aquí", "qué", "sí", "su", "mi", "te",
+    ]
+    private static let englishWords: Set<String> = [
+        "the", "and", "of", "to", "is", "are", "was", "were", "that", "this", "with", "for", "you", "your", "not",
+        "there", "nothing", "anywhere", "can", "like", "speak", "private", "in", "or", "it", "on", "my", "have",
+        "has", "be", "been", "what", "when", "very", "just", "about", "from", "they", "we", "i",
+    ]
+
+    /// Whether `text` could be in `language` (BCP-47, "es", "es-MX"). Only es and en are judged (stopword
+    /// vote: a few unambiguous words of each); any other language, or none, passes. Short text with no clear
+    /// vote passes. The failure this exists for: Spanish audio decoded as English by Whisper.
+    public static func textIsPlausibleIn(language: String?, _ text: String) -> Bool {
+        guard let lang = language?.split(whereSeparator: { $0 == "-" || $0 == "_" }).first?.lowercased(),
+              lang == "es" || lang == "en" else { return true }
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" }).map(String.init)
+        let es = words.filter { spanishWords.contains($0) }.count
+        let en = words.filter { englishWords.contains($0) }.count
+        let spanishMarks = text.contains(where: { "ñ¿¡áéíóúü".contains($0) })
+        if lang == "es" {
+            if spanishMarks { return true }
+            return !(en >= 3 && en > es)
+        }
+        if text.contains(where: { "ñ¿¡".contains($0) }) { return false }
+        return !(es >= 3 && es > en)
+    }
+
+    /// Whether `text` has a plausible length for `seconds` of speech (words per second, wide bounds: a
+    /// section stored with the wrong number of words makes Qwen hiss or run on).
+    public static func lengthIsPlausible(_ text: String, seconds: Double) -> Bool {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let rate = Double(words) / max(0.1, seconds)
+        return rate >= 0.25 && rate <= 8
     }
 
     /// The energy-based cut: start at the first speech (lead-in silence would
