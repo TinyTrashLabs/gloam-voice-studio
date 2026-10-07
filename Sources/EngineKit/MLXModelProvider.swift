@@ -72,13 +72,13 @@ public final class MLXModelProvider: ModelProviding, @unchecked Sendable {
                 backend: .luxTTS, message: "lux-tts ONNX runs through EngineKit on macOS only")
             #endif
         }
-        if backend == .qwen06BANE {
+        if backend.isQwenANE {
             // Core ML on the Neural Engine: nothing here touches MLX or the GPU, so it can run
-            // beside a GPU-bound LLM. The model set is resolved from QwenANEModelLocation.
+            // beside a GPU-bound LLM. The model set is resolved from QwenANEModelSet.
             guard #available(macOS 15.0, iOS 18.0, *) else {
-                throw EngineError.generationFailed(backend: backend, message: "qwen3-0.6b-ane needs macOS 15 or iOS 18")
+                throw EngineError.generationFailed(backend: backend, message: "\(backend.rawValue) needs macOS 15 or iOS 18")
             }
-            return try await QwenANESpeechModel.load()
+            return try await QwenANESpeechModel.load(backend: backend)
         }
         if backend == .luxTTS {
             // LuxTTS isn't an mlx-audio-swift architecture, so it can't go

@@ -11,8 +11,8 @@ final class QwenANEBackendTests: XCTestCase {
     }
 
     /// Lays down an (empty) model set: the resolver only checks the entries exist.
-    private func fakeModelSet(at dir: URL) throws {
-        for entry in QwenANEModelLocation.requiredFiles {
+    private func fakeModelSet(at dir: URL, set: QwenANEModelSet = .qwen06) throws {
+        for entry in set.requiredFiles {
             let url = dir.appendingPathComponent(entry)
             if entry.contains(".") { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 if entry.hasSuffix(".mlmodelc") { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
@@ -48,6 +48,69 @@ final class QwenANEBackendTests: XCTestCase {
         XCTAssertTrue(b.sharesFolderWithUser)
         XCTAssertFalse(BackendID.qwen06BMobile.sharesFolderWithUser)
         XCTAssertEqual(b.availableQuants, [])
+    }
+
+    // MARK: the 1.7B build shares every rule with the 0.6B one
+
+    func testBackend17BDeclaration() {
+        let b = BackendID.qwen17BANE
+        XCTAssertEqual(b.rawValue, "qwen3-1.7b-ane")
+        XCTAssertTrue(b.isQwenANE); XCTAssertTrue(BackendID.qwen06BANE.isQwenANE)
+        XCTAssertFalse(BackendID.qwen17B.isQwenANE)
+        XCTAssertFalse(b.isQwen)
+        XCTAssertEqual(b.qwenANEKind, .qwen17); XCTAssertEqual(BackendID.qwen06BANE.qwenANEKind, .qwen06)
+        XCTAssertNil(BackendID.qwen17B.qwenANEKind)
+        XCTAssertEqual(b.speechFamily, .neuralEngine)
+        XCTAssertEqual(b.controls, BackendID.qwen06BANE.controls)
+        XCTAssertEqual(b.surfaces, BackendID.qwen06BANE.surfaces)
+        XCTAssertTrue(b.needsRefText); XCTAssertTrue(b.spec.needsRefAudio)
+        XCTAssertEqual(b.spec.modelRepo, "tinytrashlabs/Qwen3-TTS-1.7B-Base-ANE")
+        XCTAssertEqual(b.diskFolder(quantRaw: nil), QwenANEModelSet.qwen17.folderName)
+        XCTAssertEqual(b.availableQuants, [])
+        XCTAssertTrue(b.sharesFolderWithUser)
+        XCTAssertEqual(b.emotionMechanism, BackendID.qwen06BANE.emotionMechanism)
+        XCTAssertEqual(b.displayName, "Qwen 1.7B ANE")
+        XCTAssertEqual(BackendID(rawValue: "qwen3-1.7b-ane"), .qwen17BANE)
+    }
+
+    func testPlanner17BRequiresAReferenceAndKeepsTheNeuralKnobs() throws {
+        XCTAssertThrowsError(try RequestPlanner.plan(backend: .qwen17BANE, request: SynthesisRequest(text: "hi"))) {
+            XCTAssertEqual($0 as? EngineError, .refAudioRequired(.qwen17BANE))
+        }
+        var r = SynthesisRequest(text: "hi", refAudioPath: "/tmp/x.wav", refText: "hello")
+        r.firstChunkFrames = 4; r.talkSession = "reply-1"
+        for b in [BackendID.qwen06BANE, .qwen17BANE] {
+            let p = try RequestPlanner.plan(backend: b, request: r)
+            XCTAssertEqual(p.firstChunkFrames, 4, b.rawValue); XCTAssertEqual(p.talkSession, "reply-1", b.rawValue)
+        }
+        XCTAssertNil(try RequestPlanner.plan(backend: .qwen17B, request: r).talkSession)
+    }
+
+    func testModelSetsResolveSeparately() throws {
+        let support = try tempDir()
+        let defaults = isolatedDefaults()
+        XCTAssertNotEqual(QwenANEModelSet.qwen17.environmentKey, QwenANEModelSet.qwen06.environmentKey)
+        XCTAssertNotEqual(QwenANEModelSet.qwen17.defaultsKey, QwenANEModelSet.qwen06.defaultsKey)
+        XCTAssertEqual(QwenANEModelSet.of(.qwen17BANE), .qwen17); XCTAssertEqual(QwenANEModelSet.of(.qwen06BANE), .qwen06)
+        XCTAssertNil(QwenANEModelSet.of(.qwen17B))
+        XCTAssertEqual(QwenANEModelSet.qwen17.defaultDirectory(appSupport: support).path,
+                       support.path + "/GloamVoiceStudio/Models/qwen3-1.7b-ane")
+        XCTAssertEqual(QwenANEModelSet.qwen17.defaultCacheRoot(appSupport: support).path,
+                       support.path + "/GloamVoiceStudio/Cache/qwen3-1.7b-ane")
+        // a complete 0.6B set is not a 1.7B set (two talker chunks, no cp_in_proj) and the other way round
+        try fakeModelSet(at: QwenANEModelSet.qwen06.defaultDirectory(appSupport: support), set: .qwen06)
+        XCTAssertNotNil(try? QwenANEModelSet.qwen06.resolve(environment: [:], defaults: defaults, appSupport: support))
+        XCTAssertThrowsError(try QwenANEModelSet.qwen17.resolve(environment: [:], defaults: defaults, appSupport: support)) {
+            guard case .modelNotInstalled(let backend, let detail) = $0 as? EngineError else { return XCTFail("\($0)") }
+            XCTAssertEqual(backend, .qwen17BANE)
+            XCTAssertTrue(detail.contains("GLOAM_QWEN_ANE_17B_MODELS"), detail)
+        }
+        try fakeModelSet(at: QwenANEModelSet.qwen17.defaultDirectory(appSupport: support), set: .qwen17)
+        XCTAssertNotNil(try? QwenANEModelSet.qwen17.resolve(environment: [:], defaults: defaults, appSupport: support))
+        let only17 = try tempDir()
+        try fakeModelSet(at: QwenANEModelSet.qwen17.defaultDirectory(appSupport: only17), set: .qwen17)
+        XCTAssertNil(try? QwenANEModelSet.qwen06.resolve(environment: [:], defaults: defaults, appSupport: only17))
+        XCTAssertEqual(QwenANEModelSet.qwen17.requiredFiles.filter { $0.contains("talker") }.count, 4)
     }
 
     func testPlannerRequiresAReference() {

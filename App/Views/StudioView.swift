@@ -795,6 +795,8 @@ struct StudioView: View {
         switch b {
         case .qwen06BANE:
             "Clones a voice from a reference clip and its transcript on the Neural Engine, so it runs beside a chat model on the GPU. Voices without a transcript can't use it."
+        case .qwen17BANE:
+            "The 1.7B clone model on the Neural Engine: a fuller, steadier clone than 0.6B, rendering at about real time, and it still runs beside a chat model on the GPU. Voices without a transcript can't use it."
         case .qwen06B, .qwen06BMobile, .qwen17B:
             "Clones a voice from a reference clip — pick one above. (To steer delivery with words, use qwen3-design or qwen3-custom instead.)"
         case .qwenDesign:

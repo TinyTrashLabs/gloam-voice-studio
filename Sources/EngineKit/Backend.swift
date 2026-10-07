@@ -1,11 +1,12 @@
 import Foundation
+import GVoiceKit
 
 /// Which silicon a backend renders on. Requests on different families can run at the same time (a
 /// GPU render and a Neural Engine render do not contend), requests on one family queue.
 public enum SpeechFamily: String, Sendable, CaseIterable {
     /// MLX (Metal GPU), plus every other backend that is not on the Neural Engine.
     case gpu
-    /// Core ML on the Neural Engine: `qwen3-0.6b-ane`.
+    /// Core ML on the Neural Engine: `qwen3-0.6b-ane`, `qwen3-1.7b-ane`.
     case neuralEngine
 }
 
@@ -30,6 +31,10 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     /// transcript. It is not `isQwen`: that flag means "MLX Qwen, repo + quant folders".
     case qwen06BANE = "qwen3-0.6b-ane"
     case qwen17B = "qwen3-1.7b"
+    /// Qwen3-TTS 1.7B Base on the Neural Engine: the same runtime as `qwen06BANE` (QwenANE reads the model
+    /// set's size from its host config), bigger model, better clones, slower (about real time on an M5, so
+    /// it streams only just ahead of playback). Model set `tinytrashlabs/Qwen3-TTS-1.7B-Base-ANE`.
+    case qwen17BANE = "qwen3-1.7b-ane"
     case qwenDesign = "qwen3-design"
     case qwenCustom = "qwen3-custom"
     case chatterboxTurbo = "chatterbox-turbo"
@@ -55,7 +60,19 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     public static let fishCodecSampleRate = 44100
 
     /// The silicon this backend's render runs on; see `SpeechFamily`.
-    public var speechFamily: SpeechFamily { self == .qwen06BANE ? .neuralEngine : .gpu }
+    public var speechFamily: SpeechFamily { isQwenANE ? .neuralEngine : .gpu }
+
+    /// The Qwen3-TTS builds that run on the Neural Engine (`QwenANE`), whatever their size.
+    public var isQwenANE: Bool { self == .qwen06BANE || self == .qwen17BANE }
+
+    /// Which prepared-voice folder (`engines/qwen3-0.6b/` or `qwen3-1.7b/`) this ANE build reads and writes; nil for any other backend.
+    public var qwenANEKind: QwenEngineFiles.Kind? {
+        switch self {
+        case .qwen06BANE: .qwen06
+        case .qwen17BANE: .qwen17
+        default: nil
+        }
+    }
 
     /// Qwen3-TTS family — these resolve their repo from a base + quant suffix and
     /// store weights in quant-suffixed directories.
@@ -96,7 +113,7 @@ extension BackendID {
         switch self {
         case .qwen06B: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-"
         case .qwen06BMobile: nil   // ours, fixed precision — see `spec.modelRepo`
-        case .qwen06BANE: nil      // not an MLX repo
+        case .qwen06BANE, .qwen17BANE: nil      // not an MLX repo
         case .qwen17B: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-"
         case .qwenDesign: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-"
         case .qwenCustom: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-"
@@ -385,7 +402,7 @@ extension BackendID {
 
     public var controls: ControlSurface {
         switch self {
-        case .qwen06BANE:
+        case .qwen06BANE, .qwen17BANE:
             // Clone-only (no unconditioned mode on the ANE build), and the on-device sampler
             // exposes no knobs, so there are none to offer. The language hint (es, en, …) reaches
             // `QwenANEEngine.render`; nil still means auto-detect.
@@ -477,7 +494,7 @@ extension BackendID {
     /// so their voices must keep working without one.
     public var needsRefText: Bool {
         switch self {
-        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17B, .luxTTS: true
+        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17BANE, .qwen17B, .luxTTS: true
         // Breeze prompts with "[S0]<transcript>" ahead of the reference codes,
         // and the Swift port throws outright on a reference with no transcript.
         case .breezeTTS2: true
@@ -543,7 +560,7 @@ extension BackendID {
         // the reference codes too, so the room left depends on the voice.
         // QwenANESpeechModel splits a line past it itself and renders the parts
         // through one QwenTalkSession, so each part continues the one before.
-        case .qwen06BANE: nil
+        case .qwen06BANE, .qwen17BANE: nil
         }
     }
 
@@ -553,7 +570,7 @@ extension BackendID {
     /// How this backend expresses emotion. See `EmotionMechanism`.
     public var emotionMechanism: EmotionMechanism {
         switch self {
-        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
+        case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17BANE, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
         case .breezeTTS2: .directed                  // emotion is phrased into its instruction
@@ -600,6 +617,13 @@ extension BackendID {
             // `.mlmodelc` folders + host/ + vochead/, 2.07 GB, fetched by the in-app downloader into
             // `QwenANEModelLocation.defaultDirectory` (not the quant-folder layout of the MLX bakes).
             BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE",
+                        defaultSampleRate: 24000, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 8_000_000_000)
+        case .qwen17BANE:
+            // The 0.6B set's layout (`.mlmodelc` folders + host/ + vochead/), 1.7B weights: 4 talker chunks, a 2048-wide
+            // host, the 1.7B speaker encoder. The vocoder pieces and the speech encoder are the 0.6B set's own files.
+            BackendSpec(modelRepo: "tinytrashlabs/Qwen3-TTS-1.7B-Base-ANE",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 8_000_000_000)
@@ -752,7 +776,7 @@ extension BackendID {
             // neither be the Studio speak-backend nor answer chat unattended.
             // Still offered to the API, where a caller always sends `instruct`.
             [.creation, .apiServer, .downloadable]
-        case .qwen06BANE:
+        case .qwen06BANE, .qwen17BANE:
             // Renders on the Neural Engine lane wherever it is picked (Studio, chat, API), so it runs
             // beside a GPU-bound chat LLM. Clone-only: voices without a transcript are disabled per voice.
             [.studio, .chatVoice, .apiServer, .downloadable]
@@ -779,7 +803,7 @@ extension BackendID {
     /// True when this backend's model folder is one a user also keeps their own files in (the Neural
     /// Engine set's folder holds hand-prepared `voices/`, and the loader can be pointed at it by hand), so
     /// a re-download only cleans the repo's own top-level folders. See `HFSnapshotLayout.prune`.
-    public var sharesFolderWithUser: Bool { self == .qwen06BANE }
+    public var sharesFolderWithUser: Bool { isQwenANE }
 
     /// Backends appearing on `surface`, in declaration order.
     public static func on(_ surface: BackendSurfaces) -> [BackendID] {
