@@ -1,6 +1,6 @@
 # QwenANE
 
-Qwen3-TTS 0.6B on the Neural Engine. The talker and code predictor (stateful Core ML, iOS 18 /
+Qwen3-TTS (0.6B or 1.7B, same runtime) on the Neural Engine. The talker and code predictor (stateful Core ML, iOS 18 /
 macOS 15) and the vocoder upsampler run as `.mlmodelc`; the text projection, tokenizer, prompt
 building, sampler and the vocoder head run on the CPU (Accelerate). Foundation, CoreML and
 Accelerate only: no MLX, no ONNX Runtime.
@@ -23,6 +23,18 @@ concatenation is a contiguous slice of it.
 One engine renders one line at a time (an internal lock serialises callers). `render` blocks for
 about the length of the audio; call it off the main thread. `pace` runs between stages and after
 every frame; sleeping in it is how a host limits the duty cycle.
+
+## Model sizes
+
+One runtime, two sets. The size comes from the set's `host/config.json` (a 0.6B set predates the keys and reads
+as 0.6B): `hidden` (talker width: 1024 / 2048), `layers` + `talker_chunks` (28 layers in 2 chunks of 14 / 4 chunks of
+7), `text_embedding_bits` (4 / 8), `cp_hidden` (1024 for both; when it differs from `hidden` the host applies the
+checkpoint's `small_to_mtp_projection`, `host/cp_in_proj_{w,b}.npy`, to the talker's hidden state and to codec[g0]
+before the code predictor, whose Core ML inputs stay 1024 wide). The vocoder (`upF`, `upMall`, `vochead`) and the speech
+encoder are the same files in both sets (the speech tokenizer is one checkpoint); the speaker encoder is not (x-vector
+1024 / 2048). A prepared voice lives in `engines/qwen3-0.6b/` or `engines/qwen3-1.7b/` (`QwenEngineFiles.Kind`): same
+codes, different `spk_embed.npy`. Build a 1.7B set with qwen-onnx-cpu `tools/ship17.py`; run the tests per size with
+`scripts/test-qwen-ane-sizes.sh`. Numbers: docs/qwen-ane-1-7b.md.
 
 ## Model directory
 
