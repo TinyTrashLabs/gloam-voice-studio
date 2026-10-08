@@ -35,7 +35,9 @@ public actor WhisperTranscriber: Transcriber {
 
     public func transcribe(audioURL: URL, languageHint: String?) async throws -> Transcript {
         let kit = try await loadedKit()
-        let options = DecodingOptions(language: languageHint)
+        // No hint = detect. WhisperKit's default with a nil language forces the <|en|> prefill token, which
+        // makes Whisper write an ENGLISH rendering of non-English speech.
+        let options = DecodingOptions(language: languageHint, detectLanguage: languageHint == nil)
         // WhisperKit 1.0.0: transcribeWithResults returns [Result<[TranscriptionResult], Error>],
         // one element per input path — failures propagate as thrown SpeechError.
         let results = await kit.transcribeWithResults(
@@ -68,7 +70,7 @@ public actor WhisperTranscriber: Transcriber {
     public func transcribeWords(audioURL: URL,
                                 languageHint: String? = nil) async throws -> [WordTiming] {
         let kit = try await loadedKit()
-        let options = DecodingOptions(language: languageHint, wordTimestamps: true)
+        let options = DecodingOptions(language: languageHint, detectLanguage: languageHint == nil, wordTimestamps: true)
         let results = await kit.transcribeWithResults(
             audioPaths: [audioURL.path], decodeOptions: options)
         guard let first = results.first else {

@@ -89,13 +89,13 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         }
         let refURL = URL(fileURLWithPath: path)
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let memoKey = "\(path)|\(mtime)|\(text)"
+        let memoKey = "\(path)|\(mtime)|\(text)|\(request.language ?? "")"
         voiceLock.lock()
         if let hit = voices[memoKey] { voiceLock.unlock(); return hit }
         voiceLock.unlock()
 
-        let prepared = try Self.prepare(reference: refURL, transcript: text, modelsDirectory: modelsDirectory, cacheRoot: cacheRoot,
-                                        backend: backend)
+        let prepared = try Self.prepare(reference: refURL, transcript: text, language: request.language,
+                                        modelsDirectory: modelsDirectory, cacheRoot: cacheRoot, backend: backend)
         voiceLock.lock()
         if voices.count >= 8 { voices.removeAll() }
         voices[memoKey] = prepared
@@ -108,7 +108,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     /// section chosen and stored now, then used. A render never cuts anything itself. Every failure
     /// leaves as an `EngineError`. Runs on the render queue, never the main thread (the recognizer
     /// reports back on the main queue).
-    static func prepare(reference refURL: URL, transcript: String, modelsDirectory: URL, cacheRoot: URL,
+    static func prepare(reference refURL: URL, transcript: String, language: String? = nil, modelsDirectory: URL, cacheRoot: URL,
                         backend: BackendID = .qwen06BANE) throws -> QwenVoiceFiles {
         let kind = backend.qwenANEKind ?? .qwen06
         let key = SHA256.hash(data: Data(refURL.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
@@ -121,7 +121,8 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 box.result = .success(try await QwenVoicePrep.prepareEngineFolder(
                     voiceDir: voiceDir, masterWAV: master, transcript: transcript, modelsDirectory: modelsDirectory,
                     cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
-                    kind: kind, transcribe: ReferenceSections.sectionTranscriber(language: nil)).files)
+                    kind: kind, language: language,
+                    transcribe: ReferenceSections.sectionTranscriber(language: language)).files)
             } catch { box.result = .failure(error) }
             done.signal()
         }

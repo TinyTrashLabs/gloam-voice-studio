@@ -63,11 +63,12 @@ extension QwenVoicePrep {
     public static func prepareEngineFolder(
         voiceDir: URL, masterWAV: Data, transcript: String, modelsDirectory: URL, cacheDirectory: URL,
         storeFolder: Bool? = nil, kind: QwenEngineFiles.Kind = .qwen06,
+        language: String? = nil,
         transcribe: (@Sendable (Data) async -> String?)? = nil
     ) async throws -> Prepared {
         try await prepareEngineFolder(
             voiceDir: voiceDir, masterWAV: masterWAV, transcript: transcript, cacheDirectory: cacheDirectory,
-            storeFolder: storeFolder, kind: kind, transcribe: transcribe,
+            storeFolder: storeFolder, kind: kind, language: language, transcribe: transcribe,
             limitSamples: sectionLimitSamples(modelsDirectory: modelsDirectory),
             encode: { try prepare(referenceWAV: $0, transcript: $1, modelsDirectory: modelsDirectory, kind: kind) })
     }
@@ -103,11 +104,12 @@ extension QwenVoicePrep {
     static func prepareEngineFolder(
         voiceDir: URL, masterWAV: Data, transcript: String, cacheDirectory: URL,
         storeFolder: Bool? = nil, kind: QwenEngineFiles.Kind = .qwen06,
+        language: String? = nil,
         transcribe: (@Sendable (Data) async -> String?)? = nil,
         limitSamples limit: Int,
         encode: (Data, String) throws -> QwenVoiceFiles
     ) async throws -> Prepared {
-        let store = storeFolder ?? true
+        var store = storeFolder ?? true
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let masterSha = sha256Hex(masterWAV)
         let all = try samples(of: masterWAV)
@@ -132,6 +134,9 @@ extension QwenVoicePrep {
         if let e = existing, isSectionAudio(e.derivedFrom.audio, kind: kind),
            let start = e.derivedFrom.startSeconds, let end = e.derivedFrom.endSeconds,
            e.derivedFrom.sourceSha256 == nil || e.derivedFrom.sourceSha256 == masterSha,
+           // A stored section whose words are in another language than the take (an English rendering of a
+           // Spanish window) is wrong, not current: choose it again below.
+           ReferenceSection.textIsPlausibleIn(language: language, e.text),
            let wav = try? Data(contentsOf: sectionURL), sha256Hex(wav) == e.derivedFrom.sha256 {
             let r = try prepare(wav, e.text)
             if r.origin != .pack, store {
@@ -149,7 +154,8 @@ extension QwenVoicePrep {
         let cutSecs = Double(cut.samples.count) / Double(sampleRate)
         let heard = await transcribe?(cutWAV)
         let cutWords = ReferenceSection.text(heard: heard, transcript: text, cutSeconds: cutSecs,
-                                             start: cut.start, count: cut.samples.count, total: all.count).text
+                                             start: cut.start, count: cut.samples.count, total: all.count,
+                                             language: language).text
         var ended = ReferenceSection.endAtSentence(samples: cut.samples, text: cutWords, sampleRate: sampleRate)
         if let transcribe, ended.samples.count < cut.samples.count {
             ended = await verifiedSentenceEnd(cut: cut.samples, words: cutWords, guess: ended, transcribe: transcribe)
@@ -157,6 +163,12 @@ extension QwenVoicePrep {
         let sectionWAV = ReferenceSection.wavData(ended.samples, sampleRate: sampleRate)
         let cutSeconds = Double(ended.samples.count) / Double(sampleRate)
         let words = ended.text
+        // The words must be in the take's language and read at a plausible rate for the window; a section
+        // that fails is used for this render but never stored (the next prep chooses it again).
+        if !ReferenceSection.textIsPlausibleIn(language: language, words)
+            || !ReferenceSection.lengthIsPlausible(words, seconds: cutSeconds) {
+            store = false
+        }
         let start = Double(cut.start) / Double(sampleRate)
         let span = (start: start, end: start + cutSeconds)
         if store {
