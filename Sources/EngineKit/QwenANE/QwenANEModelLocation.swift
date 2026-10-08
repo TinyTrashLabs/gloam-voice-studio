@@ -9,7 +9,8 @@ import Foundation
 ///
 ///  1. the set's environment variable (`GLOAM_QWEN_ANE_MODELS`, `GLOAM_QWEN_ANE_17B_MODELS`; a models directory),
 ///  2. the set's UserDefaults key (`defaults write <bundle id> qwenANEModelsPath <dir>`, `qwenANE17BModelsPath`),
-///  3. `<Application Support>/GloamVoiceStudio/Models/qwen3-0.6b-ane/` (`qwen3-1.7b-ane`).
+///  3. the App Group's shared `Models/qwen3-0.6b-ane/` (`qwen3-1.7b-ane`), beside the MLX models (`StoragePaths.models`);
+///  4. the old per-app `<Application Support>/GloamVoiceStudio/Models/<set>/`, read for existing installs.
 ///
 /// A directory only counts when it holds the whole set, so a half-copied folder is reported as such.
 public struct QwenANEModelSet: Sendable, Equatable {
@@ -41,7 +42,14 @@ public struct QwenANEModelSet: Sendable, Equatable {
     /// The set a Neural Engine backend loads; nil for any other backend.
     public static func of(_ backend: BackendID) -> QwenANEModelSet? { all.first { $0.backend == backend } }
 
-    public func defaultDirectory(appSupport: URL = StoragePaths.appSupport) -> URL {
+    /// Where the set is installed: the App Group's shared Models folder, beside the MLX models, so Studio,
+    /// the radio and the Butler read ONE copy (2026-10-08; it used to be each app's own Application Support).
+    public func defaultDirectory(models: URL = StoragePaths.models) -> URL {
+        models.appendingPathComponent(folderName, isDirectory: true)
+    }
+
+    /// The pre-2026-10-08 per-app location, still read so an existing install keeps working.
+    public func legacyDirectory(appSupport: URL = StoragePaths.appSupport) -> URL {
         appSupport.appendingPathComponent("GloamVoiceStudio/Models/\(folderName)", isDirectory: true)
     }
 
@@ -53,7 +61,8 @@ public struct QwenANEModelSet: Sendable, Equatable {
     /// Candidate directories in resolution order.
     public func candidates(environment: [String: String] = ProcessInfo.processInfo.environment,
                            defaults: UserDefaults = .standard,
-                           appSupport: URL = StoragePaths.appSupport) -> [URL] {
+                           appSupport: URL = StoragePaths.appSupport,
+                           models: URL = StoragePaths.models) -> [URL] {
         var out: [URL] = []
         if let p = environment[environmentKey], !p.isEmpty {
             out.append(URL(fileURLWithPath: (p as NSString).expandingTildeInPath, isDirectory: true))
@@ -61,7 +70,8 @@ public struct QwenANEModelSet: Sendable, Equatable {
         if let p = defaults.string(forKey: defaultsKey), !p.isEmpty {
             out.append(URL(fileURLWithPath: (p as NSString).expandingTildeInPath, isDirectory: true))
         }
-        out.append(defaultDirectory(appSupport: appSupport))
+        out.append(defaultDirectory(models: models))
+        out.append(legacyDirectory(appSupport: appSupport))
         return out
     }
 
@@ -73,8 +83,9 @@ public struct QwenANEModelSet: Sendable, Equatable {
     /// The models directory, or `EngineError.modelNotInstalled` naming every place that was looked at.
     public func resolve(environment: [String: String] = ProcessInfo.processInfo.environment,
                         defaults: UserDefaults = .standard,
-                        appSupport: URL = StoragePaths.appSupport) throws -> URL {
-        let all = candidates(environment: environment, defaults: defaults, appSupport: appSupport)
+                        appSupport: URL = StoragePaths.appSupport,
+                        models: URL = StoragePaths.models) throws -> URL {
+        let all = candidates(environment: environment, defaults: defaults, appSupport: appSupport, models: models)
         var notes: [String] = []
         for dir in all {
             guard let missing = missingEntry(in: dir) else { return dir }
@@ -83,7 +94,7 @@ public struct QwenANEModelSet: Sendable, Equatable {
         throw EngineError.modelNotInstalled(
             backend: backend,
             detail: "the Neural Engine model set was not found. Expected at "
-                + defaultDirectory(appSupport: appSupport).path
+                + defaultDirectory(models: models).path
                 + ", or set \(environmentKey) / the \(defaultsKey) default to a models directory. Looked at: "
                 + notes.joined(separator: "; ") + ".")
     }
@@ -96,21 +107,23 @@ public enum QwenANEModelLocation {
     public static let folderName = QwenANEModelSet.qwen06.folderName
     static let requiredFiles = QwenANEModelSet.qwen06.requiredFiles
 
-    public static func defaultDirectory(appSupport: URL = StoragePaths.appSupport) -> URL {
-        QwenANEModelSet.qwen06.defaultDirectory(appSupport: appSupport)
+    public static func defaultDirectory(models: URL = StoragePaths.models) -> URL {
+        QwenANEModelSet.qwen06.defaultDirectory(models: models)
     }
 
     public static func candidates(environment: [String: String] = ProcessInfo.processInfo.environment,
                                   defaults: UserDefaults = .standard,
-                                  appSupport: URL = StoragePaths.appSupport) -> [URL] {
-        QwenANEModelSet.qwen06.candidates(environment: environment, defaults: defaults, appSupport: appSupport)
+                                  appSupport: URL = StoragePaths.appSupport,
+                                  models: URL = StoragePaths.models) -> [URL] {
+        QwenANEModelSet.qwen06.candidates(environment: environment, defaults: defaults, appSupport: appSupport, models: models)
     }
 
     public static func missingEntry(in directory: URL) -> String? { QwenANEModelSet.qwen06.missingEntry(in: directory) }
 
     public static func resolve(environment: [String: String] = ProcessInfo.processInfo.environment,
                                defaults: UserDefaults = .standard,
-                               appSupport: URL = StoragePaths.appSupport) throws -> URL {
-        try QwenANEModelSet.qwen06.resolve(environment: environment, defaults: defaults, appSupport: appSupport)
+                               appSupport: URL = StoragePaths.appSupport,
+                               models: URL = StoragePaths.models) throws -> URL {
+        try QwenANEModelSet.qwen06.resolve(environment: environment, defaults: defaults, appSupport: appSupport, models: models)
     }
 }
