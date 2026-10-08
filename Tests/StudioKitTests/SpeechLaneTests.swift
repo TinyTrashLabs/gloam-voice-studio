@@ -138,7 +138,8 @@ final class SpeechLaneTests: XCTestCase, @unchecked Sendable {
 
     func testFamilies() {
         XCTAssertEqual(BackendID.qwen06BANE.speechFamily, .neuralEngine)
-        for b in BackendID.allCases where b != .qwen06BANE { XCTAssertEqual(b.speechFamily, .gpu, b.rawValue) }
+        XCTAssertEqual(BackendID.qwen17BANE.speechFamily, .neuralEngine)
+        for b in BackendID.allCases where !b.isQwenANE { XCTAssertEqual(b.speechFamily, .gpu, b.rawValue) }
     }
 
     func testANEAndMLXRequestsOverlap() async throws {

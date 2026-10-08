@@ -7,7 +7,8 @@ final class ChatStreamedSpeechTests: XCTestCase {
 
     func testOnlyTheNeuralEngineBackendStreamsChatSpeech() {
         XCTAssertTrue(ChatSpeechScheduling.streams(.qwen06BANE))
-        for backend in BackendID.allCases where backend != .qwen06BANE {
+        XCTAssertTrue(ChatSpeechScheduling.streams(.qwen17BANE))
+        for backend in BackendID.allCases where !backend.isQwenANE {
             XCTAssertFalse(ChatSpeechScheduling.streams(backend), backend.rawValue)
         }
     }

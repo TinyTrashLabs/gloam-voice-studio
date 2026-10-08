@@ -54,6 +54,9 @@ final class ModelDownloadManager {
         .breezeTTS2: 4_600_000_000,
         // tinytrashlabs/Qwen3-TTS-0.6B-Base-ANE: 164 files, 2,066,161,318 bytes.
         .qwen06BANE: 2_100_000_000,
+        // tinytrashlabs/Qwen3-TTS-1.7B-Base-ANE: the 0.6B set's shared vocoder files plus 4 int8 talker chunks, the
+        // fp16 code predictor and 2048-wide host tables (measured on the assembled set: about 2.9 GB).
+        .qwen17BANE: 3_000_000_000,
     ]
 
     func approxBytes(for backend: BackendID) -> Int64 {
@@ -115,7 +118,7 @@ final class ModelDownloadManager {
     func directory(for backend: BackendID) -> URL {
         // The Neural Engine set downloads where its loader looks by default
         // (`QwenANEModelLocation`, which an env var / defaults key can still override).
-        if backend == .qwen06BANE { return QwenANEModelLocation.defaultDirectory() }
+        if let set = QwenANEModelSet.of(backend) { return set.defaultDirectory() }
         // Only Qwen folders are quant-suffixed from `quant(for:)`. dia2 encodes
         // size with its precision and supplies its own default, and handing it
         // a bare "8bit" pointed this at `dia2@8bit` while AppModel's loader
@@ -201,7 +204,7 @@ final class ModelDownloadManager {
         }
         // No root config.json: the set is `.mlmodelc` folders plus host/ and vochead/. Ready when the
         // loader would find a whole set — downloaded, or hand-installed behind the env var / defaults key.
-        if backend == .qwen06BANE { return (try? QwenANEModelLocation.resolve()) != nil }
+        if let set = QwenANEModelSet.of(backend) { return (try? set.resolve()) != nil }
         return isComplete(dir: directory(for: backend))
     }
 

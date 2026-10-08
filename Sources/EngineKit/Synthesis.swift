@@ -370,8 +370,8 @@ enum RequestPlanner {
                     .flatMap { $0 > 1 ? $0 : nil }
             },
             seed: knobs.seed == true ? request.seed : nil,
-            firstChunkFrames: backend == .qwen06BANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil,
-            talkSession: backend == .qwen06BANE ? request.talkSession : nil
+            firstChunkFrames: backend.isQwenANE ? request.firstChunkFrames.map { min(12, max(1, $0)) } : nil,
+            talkSession: backend.isQwenANE ? request.talkSession : nil
         )
     }
 }

@@ -18,30 +18,32 @@ import Foundation
 import GVoiceKit
 
 extension QwenVoicePrep {
-    public static let sectionMember = "engines/qwen3-0.6b/ref.wav"
+    public static let sectionMember = sectionMember(.qwen06)
+    /// `engines/qwen3-<size>/ref.wav`: where a voice's section audio lives for `kind`.
+    public static func sectionMember(_ kind: QwenEngineFiles.Kind) -> String { kind.directory + "/ref.wav" }
 
     /// A section's audio path: `ref.wav`, or a pack's suffixed `ref-<key>.wav` for a take (import keeps the
     /// pack's name in voice.json while installing the file under its plain name).
-    static func isSectionAudio(_ path: String) -> Bool {
-        path == sectionMember || (path.hasPrefix("engines/qwen3-0.6b/ref-") && path.hasSuffix(".wav"))
+    static func isSectionAudio(_ path: String, kind: QwenEngineFiles.Kind = .qwen06) -> Bool {
+        path == sectionMember(kind) || (path.hasPrefix(kind.directory + "/ref-") && path.hasSuffix(".wav"))
     }
 
-    /// The voice's `engines/qwen3-0.6b/` files, or nil when absent or unusable.
-    public static func storedFolder(in voiceDir: URL) -> QwenEngineFiles? {
-        let dir = voiceDir.appendingPathComponent(QwenEngineFiles.directory, isDirectory: true)
+    /// The voice's `engines/qwen3-*/` files for `kind`, or nil when absent or unusable.
+    public static func storedFolder(in voiceDir: URL, kind: QwenEngineFiles.Kind = .qwen06) -> QwenEngineFiles? {
+        let dir = voiceDir.appendingPathComponent(kind.directory, isDirectory: true)
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
         var files: [String: Data] = [:]
         for n in names {
             guard let d = try? Data(contentsOf: dir.appendingPathComponent(n)), d.count <= QwenEngineFiles.maxNPYBytes else { continue }
             files[n] = d
         }
-        return try? QwenEngineFiles.decode(files: files)
+        return try? QwenEngineFiles.decode(files: files, kind: kind)
     }
 
     /// Writes a prepared voice into the folder. voice.json is the commit marker: gone first, written last.
     public static func writeFolder(_ payload: QwenEngineFiles, in voiceDir: URL) {
         guard let files = try? payload.files() else { return }
-        let dir = voiceDir.appendingPathComponent(QwenEngineFiles.directory, isDirectory: true)
+        let dir = voiceDir.appendingPathComponent(payload.kind.directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: dir.appendingPathComponent(QwenEngineFiles.voiceFile))
         for (name, data) in files where name != QwenEngineFiles.voiceFile {
@@ -60,15 +62,15 @@ extension QwenVoicePrep {
     @discardableResult
     public static func prepareEngineFolder(
         voiceDir: URL, masterWAV: Data, transcript: String, modelsDirectory: URL, cacheDirectory: URL,
-        storeFolder: Bool? = nil,
+        storeFolder: Bool? = nil, kind: QwenEngineFiles.Kind = .qwen06,
         language: String? = nil,
         transcribe: (@Sendable (Data) async -> String?)? = nil
     ) async throws -> Prepared {
         try await prepareEngineFolder(
             voiceDir: voiceDir, masterWAV: masterWAV, transcript: transcript, cacheDirectory: cacheDirectory,
-            storeFolder: storeFolder, language: language, transcribe: transcribe,
+            storeFolder: storeFolder, kind: kind, language: language, transcribe: transcribe,
             limitSamples: sectionLimitSamples(modelsDirectory: modelsDirectory),
-            encode: { try prepare(referenceWAV: $0, transcript: $1, modelsDirectory: modelsDirectory) })
+            encode: { try prepare(referenceWAV: $0, transcript: $1, modelsDirectory: modelsDirectory, kind: kind) })
     }
 
     /// The sentence-end cut whose audio says exactly its transcript. `endAtSentence` places the cut by a
@@ -101,7 +103,7 @@ extension QwenVoicePrep {
     /// Test seam: the encoder's input length and the encoders themselves are injected.
     static func prepareEngineFolder(
         voiceDir: URL, masterWAV: Data, transcript: String, cacheDirectory: URL,
-        storeFolder: Bool? = nil,
+        storeFolder: Bool? = nil, kind: QwenEngineFiles.Kind = .qwen06,
         language: String? = nil,
         transcribe: (@Sendable (Data) async -> String?)? = nil,
         limitSamples limit: Int,
@@ -112,23 +114,24 @@ extension QwenVoicePrep {
         let masterSha = sha256Hex(masterWAV)
         let all = try samples(of: masterWAV)
         let trimmedCount = ReferenceTail.end(of: all, sampleRate: sampleRate)
-        let existing = storedFolder(in: voiceDir)
+        let existing = storedFolder(in: voiceDir, kind: kind)
+        let sectionMember = Self.sectionMember(kind)
 
         func prepare(_ wav: Data, _ words: String) throws -> Prepared {
             try prepared(fromPack: existing, referenceWAV: wav, transcript: words,
-                         cacheDirectory: cacheDirectory, encode: encode)
+                         cacheDirectory: cacheDirectory, kind: kind, encode: encode)
         }
 
         // The master fits the encoder: no section.
         if trimmedCount <= limit {
             let r = try prepare(masterWAV, text)
-            if r.origin != .pack, store { writeFolder(try r.enginePayload(), in: voiceDir) }
+            if r.origin != .pack, store { writeFolder(try r.enginePayload(kind: kind), in: voiceDir) }
             return r
         }
 
         // A stored section for THIS master, intact: read it, cut nothing.
         let sectionURL = voiceDir.appendingPathComponent(sectionMember)
-        if let e = existing, isSectionAudio(e.derivedFrom.audio),
+        if let e = existing, isSectionAudio(e.derivedFrom.audio, kind: kind),
            let start = e.derivedFrom.startSeconds, let end = e.derivedFrom.endSeconds,
            e.derivedFrom.sourceSha256 == nil || e.derivedFrom.sourceSha256 == masterSha,
            // A stored section whose words are in another language than the take (an English rendering of a
@@ -137,7 +140,7 @@ extension QwenVoicePrep {
            let wav = try? Data(contentsOf: sectionURL), sha256Hex(wav) == e.derivedFrom.sha256 {
             let r = try prepare(wav, e.text)
             if r.origin != .pack, store {
-                writeFolder(try r.enginePayload(audio: sectionMember, window: (start, end), sourceSHA256: masterSha), in: voiceDir)
+                writeFolder(try r.enginePayload(audio: sectionMember, window: (start, end), sourceSHA256: masterSha, kind: kind), in: voiceDir)
             }
             return r
         }
@@ -174,7 +177,7 @@ extension QwenVoicePrep {
         }
         let r = try prepare(sectionWAV, words)
         if store {
-            writeFolder(try r.enginePayload(audio: sectionMember, window: span, sourceSHA256: masterSha), in: voiceDir)
+            writeFolder(try r.enginePayload(audio: sectionMember, window: span, sourceSHA256: masterSha, kind: kind), in: voiceDir)
         }
         return r
     }

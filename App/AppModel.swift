@@ -2334,14 +2334,22 @@ final class AppModel {
     }
 
     /// Loads the Neural Engine voice in the background and prepares the voice the API will most likely be asked
-    /// for (the server's default voice, else the selected one), so the first `qwen3-0.6b-ane` request does not
-    /// pay the ~44 s of Core ML load, voice preparation and first-call compilation. Does nothing when the model
+    /// for (the server's default voice, else the selected one), so the first `qwen3-0.6b-ane` / `qwen3-1.7b-ane`
+    /// request does not pay the ~44 s of Core ML load, voice preparation and first-call compilation. The build it
+    /// warms is the selected backend when that is a Neural Engine one, else the 0.6B, else the 1.7B (whichever
+    /// has an installed set). Does nothing when the model
     /// set is not installed, when the `prewarmNeuralSpeech` default is off, or while a warm-up is already running.
     /// Low priority, off the main actor, cancelled by `shutdownForExit`; its wall time is logged (category prewarm).
+    /// The Neural Engine backend to warm: the selected one if its set is installed, else the first installed one.
+    func neuralPrewarmBackend() -> BackendID? {
+        let order = ([backend].filter(\.isQwenANE)) + [BackendID.qwen06BANE, .qwen17BANE]
+        return order.first { QwenANEModelSet.of($0).flatMap { try? $0.resolve() } != nil }
+    }
+
     func prewarmNeuralSpeech() {
         guard neuralPrewarm == nil,
               UserDefaults.standard.object(forKey: "prewarmNeuralSpeech") as? Bool ?? true,
-              (try? QwenANEModelLocation.resolve()) != nil else { return }
+              let warmBackend = neuralPrewarmBackend() else { return }
         let candidates = [serverDefaultVoice, selectedVoiceSlug ?? ""].filter { !$0.isEmpty }
         let voices = voices, neural = neuralSpeechEngine
         neuralPrewarm = Task.detached(priority: .background) { [weak self] in
@@ -2356,7 +2364,7 @@ final class AppModel {
                 }
             }
             do {
-                try await neural.warm(backend: .qwen06BANE, request: request)
+                try await neural.warm(backend: warmBackend, request: request)
                 AppLog.prewarm.log("neural speech ready in \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public)s (voice \(slug ?? "none", privacy: .public))")
             } catch is CancellationError {
                 AppLog.prewarm.log("neural speech warm-up cancelled")

@@ -48,18 +48,19 @@ public enum QwenVoicePrep {
     /// match; otherwise prepares it and (re)writes `voice.json`, `ref_codes.npy`, `spk_embed.npy`
     /// (the layout `QwenVoiceFiles(directory:)` reads). A pure function of its inputs: no global state.
     public static func prepared(referenceWAV: Data, transcript: String, cacheDirectory: URL,
-                                modelsDirectory: URL) throws -> QwenVoiceFiles {
+                                modelsDirectory: URL, kind: QwenEngineFiles.Kind = .qwen06) throws -> QwenVoiceFiles {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let sha = sha256Hex(referenceWAV)
-        if let hit = cached(directory: cacheDirectory, sha: sha, text: text) { return hit }
+        if let hit = cached(directory: cacheDirectory, sha: sha, text: text, kind: kind) { return hit }
 
-        let voice = try prepare(referenceWAV: referenceWAV, transcript: text, modelsDirectory: modelsDirectory)
+        let voice = try prepare(referenceWAV: referenceWAV, transcript: text, modelsDirectory: modelsDirectory, kind: kind)
         try write(voice, sha: sha, to: cacheDirectory)
         return voice
     }
 
     /// Prepares without touching any cache.
-    public static func prepare(referenceWAV: Data, transcript: String, modelsDirectory: URL) throws -> QwenVoiceFiles {
+    public static func prepare(referenceWAV: Data, transcript: String, modelsDirectory: URL,
+                               kind: QwenEngineFiles.Kind = .qwen06) throws -> QwenVoiceFiles {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         // Same order as tools/prep_voice.py: trim a cut-off tail, then encode.
         let all = try samples(of: referenceWAV)
@@ -77,7 +78,7 @@ public enum QwenVoicePrep {
         }
         return QwenVoiceFiles(refText: text,
                               refCodes: try codes(speech, samples),
-                              spkEmbedding: try embedding(speaker, samples))
+                              spkEmbedding: try embedding(speaker, samples, dimension: kind.speakerDimension))
     }
 
     /// The longest section a Qwen voice may store: the encoder's input, but never more than 256 codec
@@ -138,7 +139,7 @@ public enum QwenVoicePrep {
         return (0..<16).map { g in (0..<T).map { t in c[[0, g, t] as [NSNumber]].intValue } }
     }
 
-    private static func embedding(_ model: MLModel, _ x: [Float]) throws -> [Float] {
+    private static func embedding(_ model: MLModel, _ x: [Float], dimension: Int) throws -> [Float] {
         let (mel, frames) = QwenMel.logMel(x)
         let F = inputLength(model, "mel", axis: 1, default: speakerFrames)
         guard frames <= F else { throw QwenVoicePrepError.referenceTooLong(seconds: Double(x.count) / Double(sampleRate)) }
@@ -152,10 +153,10 @@ public enum QwenVoicePrep {
         do {
             out = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: ["mel": arr, "n_frames": n]))
         } catch { throw QwenVoicePrepError.modelFailed("speaker encoder: \(error)") }
-        guard let e = out.featureValue(for: "embedding")?.multiArrayValue, e.count == 1024 else {
-            throw QwenVoicePrepError.modelFailed("speaker encoder returned no 1024 embedding")
+        guard let e = out.featureValue(for: "embedding")?.multiArrayValue, e.count == dimension else {
+            throw QwenVoicePrepError.modelFailed("speaker encoder returned no \(dimension)-value embedding (is this model set the other size's?)")
         }
-        return (0..<1024).map { e[$0].floatValue }
+        return (0..<dimension).map { e[$0].floatValue }
     }
 
     // MARK: WAV
@@ -209,7 +210,7 @@ public enum QwenVoicePrep {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func cached(directory: URL, sha: String, text: String) -> QwenVoiceFiles? {
+    static func cached(directory: URL, sha: String, text: String, kind: QwenEngineFiles.Kind = .qwen06) -> QwenVoiceFiles? {
         guard let raw = try? Data(contentsOf: directory.appendingPathComponent("voice.json")),
               let j = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
               j["source_sha256"] as? String == sha,
@@ -217,7 +218,7 @@ public enum QwenVoicePrep {
               j["mel"] as? String == melKind,
               (j["ref_text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == text,
               let v = try? QwenVoiceFiles(directory: directory),
-              v.refCodes.count == 16, !(v.refCodes[0].isEmpty), v.spkEmbedding.count == 1024 else { return nil }
+              v.refCodes.count == 16, !(v.refCodes[0].isEmpty), v.spkEmbedding.count == kind.speakerDimension else { return nil }
         return v
     }
 
@@ -236,12 +237,12 @@ public enum QwenVoicePrep {
             .write(to: directory.appendingPathComponent("voice.json"), options: .atomic)
     }
 
-    /// `ref_codes.npy` (int32 (1,16,T)) and `spk_embed.npy` (float32 (1024,)) bytes for a voice.
+    /// `ref_codes.npy` (int32 (1,16,T)) and `spk_embed.npy` (float32 (dimension,)) bytes for a voice.
     static func npyFiles(_ v: QwenVoiceFiles) -> (codes: Data, spk: Data) {
         let T = v.refCodes[0].count
         var codes = [Int32](); codes.reserveCapacity(16 * T)
         for g in 0..<16 { codes.append(contentsOf: v.refCodes[g].map { Int32($0) }) }
-        return (npy(codes, descr: "<i4", shape: "(1, 16, \(T))"), npy(v.spkEmbedding, descr: "<f4", shape: "(1024,)"))
+        return (npy(codes, descr: "<i4", shape: "(1, 16, \(T))"), npy(v.spkEmbedding, descr: "<f4", shape: "(\(v.spkEmbedding.count),)"))
     }
 
     /// .npy v1.0, little-endian, C order.

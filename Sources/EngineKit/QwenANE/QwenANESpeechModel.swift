@@ -3,7 +3,10 @@ import Foundation
 import GVoiceKit
 import QwenANE
 
-/// `qwen3-0.6b-ane`: Qwen3-TTS 0.6B on the Neural Engine (Core ML), no MLX, no GPU.
+/// `qwen3-0.6b-ane` / `qwen3-1.7b-ane`: Qwen3-TTS on the Neural Engine (Core ML), no MLX, no GPU. One class for
+/// both sizes: the size is whatever the model set's host config says (`QwenANE` reads it), and `backend` only
+/// picks the set, the voice folder (`engines/qwen3-0.6b/` or `qwen3-1.7b/`), the cache and the error labels. Every
+/// behaviour below (talk sessions, break splitting, streaming, warm-up, the section rule) is shared.
 ///
 /// A Studio voice is a reference clip + its transcript. `QwenVoicePrep` turns that into speech-tokenizer
 /// codes and a speaker embedding once and caches them on disk next to the model set
@@ -20,6 +23,8 @@ import QwenANE
 @available(macOS 15.0, iOS 18.0, *)
 public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     public let sampleRate = 24000
+    public let backend: BackendID
+    private let kind: QwenEngineFiles.Kind
     private let engine: QwenANEEngine
     private let modelsDirectory: URL
     private let cacheRoot: URL
@@ -36,35 +41,51 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     public static let maxReferenceSeconds = Double(QwenVoicePrep.maxSamples) / 24000
 
     public static func defaultCacheRoot(appSupport: URL = StoragePaths.appSupport) -> URL {
-        appSupport.appendingPathComponent("GloamVoiceStudio/Cache/\(QwenANEModelLocation.folderName)", isDirectory: true)
+        defaultCacheRoot(for: .qwen06BANE, appSupport: appSupport)
+    }
+
+    public static func defaultCacheRoot(for backend: BackendID, appSupport: URL = StoragePaths.appSupport) -> URL {
+        (QwenANEModelSet.of(backend) ?? .qwen06).defaultCacheRoot(appSupport: appSupport)
     }
 
     /// Loads the Core ML models (seconds; blocks the calling thread, so call it off the main thread).
-    public init(modelsDirectory: URL, cacheRoot: URL = QwenANESpeechModel.defaultCacheRoot()) throws {
+    public init(modelsDirectory: URL, backend: BackendID = .qwen06BANE, cacheRoot: URL? = nil) throws {
+        guard let kind = backend.qwenANEKind else {
+            throw EngineError.generationFailed(backend: backend, message: "not a Neural Engine backend")
+        }
+        self.backend = backend
+        self.kind = kind
         self.modelsDirectory = modelsDirectory
-        self.cacheRoot = cacheRoot
+        self.cacheRoot = cacheRoot ?? Self.defaultCacheRoot(for: backend)
         do { engine = try QwenANEEngine(modelsDirectory: modelsDirectory) }
-        catch { throw EngineError.generationFailed(backend: .qwen06BANE, message: "loading the model set at \(modelsDirectory.path): \(error)") }
+        catch { throw EngineError.generationFailed(backend: backend, message: "loading the model set at \(modelsDirectory.path): \(error)") }
+        guard engine.speakerDimension == kind.speakerDimension else {
+            throw EngineError.generationFailed(
+                backend: backend, message: "the model set at \(modelsDirectory.path) is a \(engine.speakerDimension)-wide talker, not \(backend.rawValue)'s")
+        }
         // A/B switch for measurements: GLOAM_QWEN_ANE_PREFIX_CACHE=0 renders every line from row 0 (same audio, slower).
         engine.options.prefixCache = ProcessInfo.processInfo.environment["GLOAM_QWEN_ANE_PREFIX_CACHE"] != "0"
     }
 
-    public static func load(cacheRoot: URL = QwenANESpeechModel.defaultCacheRoot()) async throws -> QwenANESpeechModel {
-        let dir = try QwenANEModelLocation.resolve()
+    public static func load(backend: BackendID = .qwen06BANE, cacheRoot: URL? = nil) async throws -> QwenANESpeechModel {
+        guard let set = QwenANEModelSet.of(backend) else {
+            throw EngineError.generationFailed(backend: backend, message: "not a Neural Engine backend")
+        }
+        let dir = try set.resolve()
         return try await Task.detached(priority: .utility) {
-            try QwenANESpeechModel(modelsDirectory: dir, cacheRoot: cacheRoot)
+            try QwenANESpeechModel(modelsDirectory: dir, backend: backend, cacheRoot: cacheRoot)
         }.value
     }
 
     // MARK: voices
 
     private func voice(for request: ProviderRequest) throws -> QwenVoiceFiles {
-        guard let path = request.refAudioPath else { throw EngineError.refAudioRequired(.qwen06BANE) }
+        guard let path = request.refAudioPath else { throw EngineError.refAudioRequired(backend) }
         let text = (request.refText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw EngineError.generationFailed(
-                backend: .qwen06BANE,
-                message: "this voice has no reference transcript; qwen3-0.6b-ane clones from audio plus its exact text")
+                backend: backend,
+                message: "this voice has no reference transcript; \(backend.rawValue) clones from audio plus its exact text")
         }
         let refURL = URL(fileURLWithPath: path)
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
@@ -74,7 +95,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         voiceLock.unlock()
 
         let prepared = try Self.prepare(reference: refURL, transcript: text, language: request.language,
-                                    modelsDirectory: modelsDirectory, cacheRoot: cacheRoot)
+                                        modelsDirectory: modelsDirectory, cacheRoot: cacheRoot, backend: backend)
         voiceLock.lock()
         if voices.count >= 8 { voices.removeAll() }
         voices[memoKey] = prepared
@@ -87,7 +108,9 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     /// section chosen and stored now, then used. A render never cuts anything itself. Every failure
     /// leaves as an `EngineError`. Runs on the render queue, never the main thread (the recognizer
     /// reports back on the main queue).
-    static func prepare(reference refURL: URL, transcript: String, language: String? = nil, modelsDirectory: URL, cacheRoot: URL) throws -> QwenVoiceFiles {
+    static func prepare(reference refURL: URL, transcript: String, language: String? = nil, modelsDirectory: URL, cacheRoot: URL,
+                        backend: BackendID = .qwen06BANE) throws -> QwenVoiceFiles {
+        let kind = backend.qwenANEKind ?? .qwen06
         let key = SHA256.hash(data: Data(refURL.standardizedFileURL.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         let voiceDir = refURL.deletingLastPathComponent()
         let box = Box()
@@ -98,7 +121,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 box.result = .success(try await QwenVoicePrep.prepareEngineFolder(
                     voiceDir: voiceDir, masterWAV: master, transcript: transcript, modelsDirectory: modelsDirectory,
                     cacheDirectory: cacheRoot.appendingPathComponent(key, isDirectory: true),
-                    language: language,
+                    kind: kind, language: language,
                     transcribe: ReferenceSections.sectionTranscriber(language: language)).files)
             } catch { box.result = .failure(error) }
             done.signal()
@@ -107,11 +130,11 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
         switch box.result {
         case .success(let files)?: return files
         case .failure(let error as QwenVoicePrepError)?:
-            throw EngineError.generationFailed(backend: .qwen06BANE, message: error.localizedDescription)
+            throw EngineError.generationFailed(backend: backend, message: error.localizedDescription)
         case .failure(let error)?:
-            throw EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)")
+            throw EngineError.generationFailed(backend: backend, message: "\(error)")
         case nil:
-            throw EngineError.generationFailed(backend: .qwen06BANE, message: "voice prep returned nothing")
+            throw EngineError.generationFailed(backend: backend, message: "voice prep returned nothing")
         }
     }
 
@@ -149,7 +172,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
     /// The silence between parts: the pass gap every engine's split line uses.
     static var gapSeconds: Double { Double(GloamEngine.passGap(sampleRate: 24000).count) / 24000 }
 
-    static func log(_ part: QwenBreakPart) { NSLog("qwen3-0.6b-ane: %@", part.logLine) }
+    private func log(_ part: QwenBreakPart) { NSLog("%@: %@", backend.rawValue, part.logLine) }
 
     /// The session a request continues, when it names one: the same key, voice and language reuse it (one
     /// sampler stream, each call carrying on from the last), anything else opens a new one with the request's
@@ -184,7 +207,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                 do {
                     let parts = parts(of: text, voice: voice, language: language)
                     if let session = talkSession(for: request, voice: voice) {
-                        let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: Self.log)
+                        let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: log)
                         cont.resume(returning: b.samples)
                         return
                     }
@@ -194,10 +217,10 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                         return
                     }
                     let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
-                    let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: Self.log)
+                    let b = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, onPart: log)
                     cont.resume(returning: b.samples)
                 } catch {
-                    cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
+                    cont.resume(throwing: EngineError.generationFailed(backend: backend, message: "\(error)"))
                 }
             }
         }
@@ -221,7 +244,7 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                     } catch let e as EngineError {
                         cont.resume(throwing: e)
                     } catch {
-                        cont.resume(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
+                        cont.resume(throwing: EngineError.generationFailed(backend: backend, message: "\(error)"))
                     }
                 }
             }
@@ -249,12 +272,12 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                         // line. Streamed, so no redraw.
                         _ = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, firstChunkFrames: schedule,
                                                     cancelled: { stopped.value }, onAudio: { continuation.yield($0) },
-                                                    onPart: Self.log)
+                                                    onPart: log)
                     } else if parts.count == 1 {
                         let r = try engine.render(text: text, voice: voice, chunkFrames: schedule, language: language,
                                                   cancelled: { stopped.value }, onAudio: { continuation.yield($0) })
                         if r.stopReason == .contextFull {
-                            NSLog("qwen3-0.6b-ane: line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
+                            NSLog("\(backend.rawValue): line hit the 1024-row talker window and was cut short: \(text.prefix(60))")
                         }
                     } else {
                         // Streamed parts cannot be redrawn (their chunks are already out), but they still share
@@ -262,13 +285,13 @@ public final class QwenANESpeechModel: SpeechModel, @unchecked Sendable {
                         let session = Self.session(engine: engine, voice: voice, language: language, seed: seed)
                         _ = try session.renderBreak(parts: parts, gapSeconds: Self.gapSeconds, firstChunkFrames: schedule,
                                                     cancelled: { stopped.value }, onAudio: { continuation.yield($0) },
-                                                    onPart: Self.log)
+                                                    onPart: log)
                     }
                     continuation.finish()
                 } catch let e as EngineError {
                     continuation.finish(throwing: e)
                 } catch {
-                    continuation.finish(throwing: EngineError.generationFailed(backend: .qwen06BANE, message: "\(error)"))
+                    continuation.finish(throwing: EngineError.generationFailed(backend: backend, message: "\(error)"))
                 }
             }
         }

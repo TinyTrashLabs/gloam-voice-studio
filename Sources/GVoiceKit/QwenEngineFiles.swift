@@ -2,9 +2,11 @@ import CryptoKit
 import Foundation
 import ZIPFoundation
 
-/// The `engines/qwen3-0.6b/` folder of a `.gvoice` pack: Qwen3-TTS's PREPARED voice, so a device can
-/// skip the on-device voice prep (~5 s on a phone). docs/gvoice-format.md ("The `qwen3-0.6b` prepared
-/// voice") is normative; this type is its Swift form.
+/// The `engines/qwen3-0.6b/` (or `engines/qwen3-1.7b/`) folder of a `.gvoice` pack: Qwen3-TTS's PREPARED
+/// voice, so a device can skip the on-device voice prep (~5 s on a phone). docs/gvoice-format.md ("The
+/// `qwen3-0.6b` prepared voice") is normative; this type is its Swift form. The two sizes share the speech
+/// tokenizer (same codes) but not the speaker encoder (1024 vs 2048 floats), so each size keeps its own folder:
+/// `Kind` says which.
 ///
 /// Foundation-only on purpose. The two arrays travel as raw `.npy` bytes and are only HEADER-checked
 /// and range-checked here; turning them into tensors is the Qwen engine's business (`QwenANE`).
@@ -12,8 +14,21 @@ import ZIPFoundation
 /// The per-device KV warm-up state is NOT part of this: it depends on the device and runtime, so it
 /// stays a local cache.
 public struct QwenEngineFiles: Equatable, Sendable {
-    public static let engineID = "qwen3-0.6b"
-    public static let directory = "engines/qwen3-0.6b"
+    /// Which Qwen3-TTS size a folder was prepared for.
+    public struct Kind: Hashable, Sendable {
+        public let engineID: String
+        public let speakerDimension: Int
+        public var directory: String { "engines/\(engineID)" }
+        public static let qwen06 = Kind(engineID: "qwen3-0.6b", speakerDimension: 1024)
+        public static let qwen17 = Kind(engineID: "qwen3-1.7b", speakerDimension: 2048)
+        public static let all: [Kind] = [.qwen06, .qwen17]
+        /// The kind whose folder is `engines/<engine>/`, or nil for any other engine.
+        public static func forEngine(_ engine: String) -> Kind? { all.first { $0.engineID == engine } }
+    }
+
+    /// The 0.6B folder's names, kept for the callers that only know that one.
+    public static let engineID = Kind.qwen06.engineID
+    public static let directory = Kind.qwen06.directory
     public static let voiceFile = "voice.json"
     public static let refCodesFile = "ref_codes.npy"
     public static let spkEmbedFile = "spk_embed.npy"
@@ -21,8 +36,8 @@ public struct QwenEngineFiles: Equatable, Sendable {
     /// 16 codebooks of the 12 Hz speech tokenizer, each code in `0..<codebookSize`.
     public static let codeGroups = 16
     public static let codebookSize = 2048
-    /// 0.6B Base's x-vector size. (1.7B's differs, which is why the folder is scoped to 0.6b.)
-    public static let speakerDimension = 1024
+    /// 0.6B Base's x-vector size. (1.7B's is 2048: `Kind.qwen17`.)
+    public static let speakerDimension = Kind.qwen06.speakerDimension
     /// The speech encoder takes at most 20 s = 250 frames at 12.5 Hz; a little headroom.
     public static let maxFrames = 256
     /// Ceilings checked before anything is parsed: the members are attacker-controlled like every other.
@@ -53,6 +68,8 @@ public struct QwenEngineFiles: Equatable, Sendable {
         }
     }
 
+    /// The size this folder belongs to.
+    public var kind: Kind = .qwen06
     /// Exact transcript of the audio the codes encode.
     public var text: String
     public var derivedFrom: DerivedFrom
@@ -61,8 +78,9 @@ public struct QwenEngineFiles: Equatable, Sendable {
     /// `spk_embed.npy`: float32 (`<f4`), C order, shape (1024,).
     public var spkEmbedding: Data
 
-    public init(text: String, derivedFrom: DerivedFrom, refCodes: Data, spkEmbedding: Data) {
+    public init(text: String, derivedFrom: DerivedFrom, refCodes: Data, spkEmbedding: Data, kind: Kind = .qwen06) {
         self.text = text; self.derivedFrom = derivedFrom; self.refCodes = refCodes; self.spkEmbedding = spkEmbedding
+        self.kind = kind
     }
 
     public static func sha256Hex(_ data: Data) -> String {
@@ -120,12 +138,13 @@ public struct QwenEngineFiles: Equatable, Sendable {
         guard !bad else { throw Invalid("\(Self.refCodesFile) holds a code outside 0..<\(Self.codebookSize)") }
 
         let sp = try NPYLayout(spkEmbedding, name: Self.spkEmbedFile)
-        guard sp.descr == "<f4", sp.shape == [Self.speakerDimension] else {
-            throw Invalid("\(Self.spkEmbedFile) must be float32 (\(Self.speakerDimension),)")
+        let dim = kind.speakerDimension
+        guard sp.descr == "<f4", sp.shape == [dim] else {
+            throw Invalid("\(Self.spkEmbedFile) must be float32 (\(dim),)")
         }
         try sp.requireExactSize(elementSize: 4, name: Self.spkEmbedFile)
         let nonFinite = spkEmbedding.withUnsafeBytes { raw -> Bool in
-            (0..<Self.speakerDimension).contains { i in
+            (0..<dim).contains { i in
                 !Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: sp.dataOffset + i * 4, as: UInt32.self))).isFinite
             }
         }
@@ -144,12 +163,12 @@ public struct QwenEngineFiles: Equatable, Sendable {
         }
     }
 
-    /// The speaker embedding as 1024 floats. Validates first.
+    /// The speaker embedding (`kind.speakerDimension` floats). Validates first.
     public func decodedSpeakerEmbedding() throws -> [Float] {
         try validate()
         let sp = try NPYLayout(spkEmbedding, name: Self.spkEmbedFile)
         return spkEmbedding.withUnsafeBytes { raw in
-            (0..<Self.speakerDimension).map {
+            (0..<kind.speakerDimension).map {
                 Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: sp.dataOffset + $0 * 4, as: UInt32.self)))
             }
         }
@@ -180,9 +199,9 @@ public struct QwenEngineFiles: Equatable, Sendable {
     public func members(variant: String = "base") throws -> [String: Data] {
         try validate()
         let key = try GVoice.safeComponent(variant)
-        let codes = "\(Self.directory)/\(Self.name("ref_codes", ext: "npy", variant: key))"
-        let spk = "\(Self.directory)/\(Self.name("spk_embed", ext: "npy", variant: key))"
-        let voice = "\(Self.directory)/\(Self.name("voice", ext: "json", variant: key))"
+        let codes = "\(kind.directory)/\(Self.name("ref_codes", ext: "npy", variant: key))"
+        let spk = "\(kind.directory)/\(Self.name("spk_embed", ext: "npy", variant: key))"
+        let voice = "\(kind.directory)/\(Self.name("voice", ext: "json", variant: key))"
         let json = VoiceJSON(refCodes: codes, spkEmbedding: spk, text: text, derivedFrom: derivedFrom)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -204,7 +223,7 @@ public struct QwenEngineFiles: Equatable, Sendable {
     /// Reads the folder from bare-name files (a store's engine assets, or a pack's members by last
     /// component). Returns the files only if they validate; the paths in voice.json must stay inside
     /// `engines/qwen3-0.6b/` and each must name a file present in `files`.
-    public static func decode(files: [String: Data]) throws -> QwenEngineFiles {
+    public static func decode(files: [String: Data], kind: Kind = .qwen06) throws -> QwenEngineFiles {
         guard let raw = files[voiceFile] ?? files.first(where: { $0.key.hasPrefix("voice") && $0.key.hasSuffix(".json") })?.value else {
             throw Invalid("no voice.json")
         }
@@ -212,8 +231,8 @@ public struct QwenEngineFiles: Equatable, Sendable {
         let j: VoiceJSON
         do { j = try JSONDecoder().decode(VoiceJSON.self, from: raw) } catch { throw Invalid("voice.json: \(error)") }
         func member(_ path: String) throws -> Data {
-            let prefix = directory + "/"
-            guard path.hasPrefix(prefix) else { throw Invalid("\(path) is outside \(directory)/") }
+            let prefix = kind.directory + "/"
+            guard path.hasPrefix(prefix) else { throw Invalid("\(path) is outside \(kind.directory)/") }
             let leaf = String(path.dropFirst(prefix.count))
             guard (try? GVoice.safeComponent(leaf)) != nil else { throw Invalid("unsafe path \(path)") }
             // A take's voice.json names its pack members ("ref_codes-hype.npy"),
@@ -225,7 +244,7 @@ public struct QwenEngineFiles: Equatable, Sendable {
             return d
         }
         let out = QwenEngineFiles(text: j.text, derivedFrom: j.derivedFrom,
-                                  refCodes: try member(j.refCodes), spkEmbedding: try member(j.spkEmbedding))
+                                  refCodes: try member(j.refCodes), spkEmbedding: try member(j.spkEmbedding), kind: kind)
         try out.validate()
         return out
     }
@@ -243,31 +262,31 @@ public struct QwenEngineFiles: Equatable, Sendable {
 
     /// The folder for `variant` inside a pack, or nil when it is absent or in any way unusable
     /// (Rule 1: a bad optional member degrades, it never fails the pack).
-    public static func read(fromPack pack: Data, variant: String = "base") -> QwenEngineFiles? {
+    public static func read(fromPack pack: Data, variant: String = "base", kind: Kind = .qwen06) -> QwenEngineFiles? {
         let archive: Archive
         do { archive = try Archive(data: pack, accessMode: .read) } catch { return nil }
         guard let manifest = try? manifestObject(in: archive),
               let engines = manifest["engines"] as? [String: Any],
-              let perVariant = engines[engineID] as? [String: Any],
+              let perVariant = engines[kind.engineID] as? [String: Any],
               let listed = perVariant[variant] as? [String] else { return nil }
         var files: [String: Data] = [:]
         for member in listed {
             let path = GVoice.normalizedMember(member)
-            guard path.hasPrefix(directory + "/") else { continue }
-            let leaf = String(path.dropFirst(directory.count + 1))
+            guard path.hasPrefix(kind.directory + "/") else { continue }
+            let leaf = String(path.dropFirst(kind.directory.count + 1))
             guard (try? GVoice.safeComponent(leaf)) != nil, let entry = archive[path],
                   entry.uncompressedSize <= UInt64(maxNPYBytes) else { continue }
             var out = Data()
             guard (try? archive.extract(entry, consumer: { out.append($0) })) != nil else { continue }
             files[leaf] = out
         }
-        return try? decode(files: files)
+        return try? decode(files: files, kind: kind)
     }
 
-    /// `pack` with `files` as its `engines/qwen3-0.6b/` rendition for `variant`, replacing any
+    /// `pack` with `files` as its `engines/<kind>/` rendition for `variant`, replacing any
     /// earlier one. Everything else, including manifest keys this build does not know, is kept.
     public static func write(_ files: QwenEngineFiles, intoPack pack: Data, variant: String = "base") throws -> Data {
-        try GVoice.replacingEngine(engineID, variant: variant, members: try files.members(variant: variant), inPack: pack)
+        try GVoice.replacingEngine(files.kind.engineID, variant: variant, members: try files.members(variant: variant), inPack: pack)
     }
 
     private static func manifestObject(in archive: Archive) throws -> [String: Any] {

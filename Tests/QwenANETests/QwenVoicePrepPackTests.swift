@@ -140,12 +140,14 @@ final class QwenVoicePrepPackTests: XCTestCase {
         guard let m = ProcessInfo.processInfo.environment["QWEN_ANE_MODELS"], !m.isEmpty else { throw XCTSkip("QWEN_ANE_MODELS is not set") }
         let ref = wav(seconds: 3), text = "a tone"
         let models = URL(fileURLWithPath: m)
+        // the model set's own size: a 1.7B set's speaker encoder makes 2048-wide x-vectors
+        let kind: QwenEngineFiles.Kind = ((try? HostConfig(path: models.appendingPathComponent("host/config.json").path))?.hidden ?? 1024) == 2048 ? .qwen17 : .qwen06
         let first = try QwenVoicePrep.prepared(fromPack: nil, referenceWAV: ref, transcript: text,
-                                               cacheDirectory: tempDir(), modelsDirectory: models)
+                                               cacheDirectory: tempDir(), modelsDirectory: models, kind: kind)
         XCTAssertEqual(first.origin, .computed)
-        let payload = try first.enginePayload()
+        let payload = try first.enginePayload(kind: kind)
         let second = try QwenVoicePrep.prepared(fromPack: payload, referenceWAV: ref, transcript: text, cacheDirectory: tempDir(),
-                                                modelsDirectory: URL(fileURLWithPath: "/nonexistent"))   // would throw if it prepared
+                                                modelsDirectory: URL(fileURLWithPath: "/nonexistent"), kind: kind)   // would throw if it prepared
         XCTAssertEqual(second.origin, .pack)
         XCTAssertEqual(second.files.refCodes, first.files.refCodes)
         XCTAssertEqual(second.files.spkEmbedding, first.files.spkEmbedding)

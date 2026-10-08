@@ -6,6 +6,18 @@ struct HostConfig {
     let codecBos, codecEos, codecPad, codecThink, codecNothink, codecThinkBos, codecThinkEos: Int
     let vocab: Int
     let groups: Int
+    /// Talker width: 1024 (0.6B), 2048 (1.7B). Sets every row the host builds for the talker.
+    let hidden: Int
+    /// Width of the text embedding (the input of the text projection): 2048 in both sizes.
+    let textHidden: Int
+    /// Code predictor width (1024 in both sizes). When it differs from `hidden` (1.7B) the host applies the
+    /// model's small_to_mtp_projection to the talker's hidden state and codec[g0] before the code predictor.
+    let cpHidden: Int
+    let layers: Int
+    /// Talker Core ML chunks (`talker0` ... `talker<n-1>`, `layers / talkerChunks` layers each): 2 for 0.6B, 4 for 1.7B.
+    let talkerChunks: Int
+    /// Bits of the text embedding table: 4 (0.6B), 8 (1.7B).
+    let textEmbeddingBits: Int
     /// `codec_language_id`: lower-case language name -> codec token id ("spanish" -> 2054).
     let codecLanguageIDs: [String: Int]
     init(path: String) throws {
@@ -18,6 +30,14 @@ struct HostConfig {
         codecThink = i("codec_think"); codecNothink = i("codec_nothink")
         codecThinkBos = i("codec_think_bos"); codecThinkEos = i("codec_think_eos")
         vocab = i("vocab"); groups = i("num_code_groups")
+        // A 0.6B set's config predates the size keys: every default below is the 0.6B value.
+        func i(_ k: String, default d: Int) -> Int { (j[k] as? Int) ?? d }
+        hidden = i("hidden", default: 1024); textHidden = i("text_hidden", default: 2048)
+        cpHidden = i("cp_hidden", default: 1024); layers = i("layers", default: 28)
+        talkerChunks = i("talker_chunks", default: 2); textEmbeddingBits = i("text_embedding_bits", default: 4)
+        guard hidden > 0, layers > 0, talkerChunks > 0, layers % talkerChunks == 0, [4, 8].contains(textEmbeddingBits) else {
+            throw QwenANEError.invalid("host config: inconsistent sizes (hidden \(hidden), layers \(layers), chunks \(talkerChunks), text bits \(textEmbeddingBits))")
+        }
         var langs: [String: Int] = [:]
         for (k, v) in (j["codec_language_id"] as? [String: Any]) ?? [:] { if let id = v as? Int { langs[k.lowercased()] = id } }
         codecLanguageIDs = langs
@@ -26,10 +46,13 @@ struct HostConfig {
 
 /// Host-side tables (text embedding + projection, codec embeddings) and the tokenizer.
 final class HostTables {
-    static let H = 1024
     let cfg: HostConfig
     let tok: QwenTokenizer
+    /// Talker width (see `HostConfig.hidden`).
+    var hidden: Int { cfg.hidden }
     private let teQ, teS, teB, w1, b1, w2, b2, codec, cp: NPY
+    /// small_to_mtp_projection (cpHidden x hidden, fp32) and its bias; nil when the widths match.
+    private let cpProjW, cpProjB: NPY?
 
     init(dir: String) throws {
         cfg = try HostConfig(path: dir + "/config.json")
@@ -43,13 +66,36 @@ final class HostTables {
         b2 = try NPY(path: dir + "/text_proj_linear_fc2_b.npy")
         codec = try NPY(path: dir + "/talker_codec_embedding.npy")
         cp = try NPY(path: dir + "/cp_codec_embedding.npy")
+        if cfg.hidden != cfg.cpHidden {
+            cpProjW = try NPY(path: dir + "/cp_in_proj_w.npy"); cpProjB = try NPY(path: dir + "/cp_in_proj_b.npy")
+            guard cpProjW!.shape == [cfg.cpHidden, cfg.hidden], cpProjB!.shape == [cfg.cpHidden] else {
+                throw QwenANEError.invalid("cp_in_proj has the wrong shape for a \(cfg.hidden)-wide talker")
+            }
+        } else { cpProjW = nil; cpProjB = nil }
+        guard codec.shape.last == cfg.hidden, cp.shape.last == cfg.hidden else {
+            throw QwenANEError.invalid("the codec embedding tables are not \(cfg.hidden) wide")
+        }
     }
 
-    /// text_proj: dequant 4-bit rows (group 64, MLX affine) -> fc1 -> silu -> fc2. Returns n x 1024.
+    /// True when the code predictor takes a projection of the talker's width (1.7B).
+    var projectsForCodePredictor: Bool { cpProjW != nil }
+
+    /// small_to_mtp_projection of a talker-width vector (fp32 sgemv): what the code predictor's `hidden` and `e0`
+    /// inputs are made of. The identity when the two widths match.
+    func cpInput(_ v: [Float]) -> [Float] {
+        guard let w = cpProjW, let b = cpProjB else { return v }
+        var y = [Float](repeating: 0, count: cfg.cpHidden)
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(cfg.cpHidden), Int32(cfg.hidden), 1, w.f32, Int32(cfg.hidden), v, 1, 0, &y, 1)
+        for o in 0..<cfg.cpHidden { y[o] += b.f32[o] }
+        return y
+    }
+
+    /// text_proj: dequant 4- or 8-bit rows (group 64, MLX affine) -> fc1 -> silu -> fc2. Returns n x hidden.
     func textProj(_ ids: [Int]) -> [Float] {
         let n = ids.count
         if n == 0 { return [] }
-        let D = 2048, groupSize = 64, groups = D / groupSize, wordsPerRow = D / 8
+        let D = cfg.textHidden, H = cfg.hidden, groupSize = 64, groups = D / groupSize
+        let bits = cfg.textEmbeddingBits, perWord = 32 / bits, mask = UInt32((1 << bits) - 1), wordsPerRow = D / perWord
         var x = [Float](repeating: 0, count: n * D)
         let q = teQ.u32, s = teS, b = teB
         for (r, id) in ids.enumerated() {
@@ -57,30 +103,32 @@ final class HostTables {
                 let sc = s.float(at: id * groups + g), bi = b.float(at: id * groups + g)
                 for j in 0..<groupSize {
                     let k = g * groupSize + j
-                    let nib = (q[id * wordsPerRow + k / 8] >> UInt32(4 * (k % 8))) & 0xF
-                    x[r * D + k] = Float(nib) * sc + bi
+                    let code = (q[id * wordsPerRow + k / perWord] >> UInt32(bits * (k % perWord))) & mask
+                    x[r * D + k] = Float(code) * sc + bi
                 }
             }
         }
         var h = [Float](repeating: 0, count: n * D)
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(n), Int32(D), Int32(D), 1, x, Int32(D), w1.f32, Int32(D), 0, &h, Int32(D))
         for r in 0..<n { for o in 0..<D { let v = h[r * D + o] + b1.f32[o]; h[r * D + o] = v / (1 + expf(-v)) } }
-        var y = [Float](repeating: 0, count: n * 1024)
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(n), 1024, Int32(D), 1, h, Int32(D), w2.f32, Int32(D), 0, &y, 1024)
-        for r in 0..<n { for o in 0..<1024 { y[r * 1024 + o] += b2.f32[o] } }
+        var y = [Float](repeating: 0, count: n * H)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(n), Int32(H), Int32(D), 1, h, Int32(D), w2.f32, Int32(D), 0, &y, Int32(H))
+        for r in 0..<n { for o in 0..<H { y[r * H + o] += b2.f32[o] } }
         return y
     }
 
     /// Talker codec embedding row (fp32; the table may be stored fp16).
     func codecRow(_ id: Int) -> [Float] {
-        var r = [Float](repeating: 0, count: 1024)
-        codec.copyFloats(from: id * 1024, count: 1024, to: &r)
+        let H = cfg.hidden
+        var r = [Float](repeating: 0, count: H)
+        codec.copyFloats(from: id * H, count: H, to: &r)
         return r
     }
     /// cp table for sub-codebook k (0..14), code c (fp32; the table may be stored fp16).
     func cpRow(_ k: Int, _ c: Int) -> [Float] {
-        var r = [Float](repeating: 0, count: 1024)
-        cp.copyFloats(from: (k * 2048 + c) * 1024, count: 1024, to: &r)
+        let H = cfg.hidden
+        var r = [Float](repeating: 0, count: H)
+        cp.copyFloats(from: (k * 2048 + c) * H, count: H, to: &r)
         return r
     }
 }
@@ -94,7 +142,7 @@ struct QwenContinuation {
 }
 
 struct Prompt {
-    var embeds: [Float]        // T x 1024
+    var embeds: [Float]        // T x hidden
     var T: Int
     var nTextTokens: Int
     var textIds: [Int]
@@ -132,7 +180,7 @@ public enum QwenLanguage {
 }
 
 final class VoicePrompt {
-    static let H = 1024
+    let H: Int
     let roleIds: [Int]
     let role: [Float]          // 3 x H
     let comb: [Float]          // 5 x H
@@ -144,7 +192,7 @@ final class VoicePrompt {
     let codecIcl: [Float]      // (Tref + 1) x H
     /// role + comb + refRows: the rows every line of this voice starts with.
     let prefix: [Float]
-    var prefixRows: Int { prefix.count / Self.H }
+    var prefixRows: Int { prefix.count / H }
     /// Talker KV for the leading `kv.rows` rows (a multiple of the prefill chunk). Touched under the engine's lock.
     var kv: KVPrefix? = nil
     private let host: HostTables
@@ -152,7 +200,7 @@ final class VoicePrompt {
     /// Codec ICL rows (+ tts_pad) for frame-major codes (frames x 16), summed in the same order as the
     /// reference's rows: first-codebook row, then the 15 code-predictor rows, then tts_pad.
     func codecRows(frameMajor codes: [Int64]) -> [Float] {
-        let H = Self.H, n = codes.count / 16
+        let n = codes.count / 16
         var out = [Float](repeating: 0, count: n * H)
         for t in 0..<n {
             let r0 = host.codecRow(Int(codes[t * 16]))
@@ -171,7 +219,7 @@ final class VoicePrompt {
     /// Text rows (+ codec_pad) for an already tokenised transcript.
     func textRows(ids: [Int]) -> [Float] {
         var rows = host.textProj(ids)
-        for r in 0..<(rows.count / Self.H) { for j in 0..<Self.H { rows[r * Self.H + j] += padRow[j] } }
+        for r in 0..<(rows.count / H) { for j in 0..<H { rows[r * H + j] += padRow[j] } }
         return rows
     }
 
@@ -188,7 +236,8 @@ final class VoicePrompt {
     /// prefix rows, so a voice's prompt (and its KV) is cached per language.
     init(host: HostTables, voice: QwenVoiceFiles, language: String? = nil) {
         let c = host.cfg
-        let H = Self.H
+        let H = c.hidden
+        self.H = H
         refTextIds = Self.transcriptIds(host, voice.refText)
         // The first three ids of "<|im_start|>assistant\n<line>": the role rows. (A line that begins with a
         // newline can merge with the third id, so `buildICLPrompt` checks them against `roleIds` per line.)
@@ -243,7 +292,7 @@ final class VoicePrompt {
 func buildICLPrompt(host: HostTables, voice: QwenVoiceFiles, text: String, language: String? = nil,
                     voicePrompt: VoicePrompt? = nil, keepVoicePrompt: Bool = false,
                     continuation: QwenContinuation? = nil) -> Prompt {
-    let H = 1024
+    let H = host.hidden
     let vp = voicePrompt ?? VoicePrompt(host: host, voice: voice, language: language)
     let tgtIds = host.tok.encode("<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n")
     let ts = min(3, tgtIds.count), te = max(ts, tgtIds.count - 5)

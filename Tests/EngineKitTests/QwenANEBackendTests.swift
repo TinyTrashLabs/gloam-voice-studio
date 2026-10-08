@@ -11,8 +11,8 @@ final class QwenANEBackendTests: XCTestCase {
     }
 
     /// Lays down an (empty) model set: the resolver only checks the entries exist.
-    private func fakeModelSet(at dir: URL) throws {
-        for entry in QwenANEModelLocation.requiredFiles {
+    private func fakeModelSet(at dir: URL, set: QwenANEModelSet = .qwen06) throws {
+        for entry in set.requiredFiles {
             let url = dir.appendingPathComponent(entry)
             if entry.contains(".") { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 if entry.hasSuffix(".mlmodelc") { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
@@ -50,6 +50,71 @@ final class QwenANEBackendTests: XCTestCase {
         XCTAssertEqual(b.availableQuants, [])
     }
 
+    // MARK: the 1.7B build shares every rule with the 0.6B one
+
+    func testBackend17BDeclaration() {
+        let b = BackendID.qwen17BANE
+        XCTAssertEqual(b.rawValue, "qwen3-1.7b-ane")
+        XCTAssertTrue(b.isQwenANE); XCTAssertTrue(BackendID.qwen06BANE.isQwenANE)
+        XCTAssertFalse(BackendID.qwen17B.isQwenANE)
+        XCTAssertFalse(b.isQwen)
+        XCTAssertEqual(b.qwenANEKind, .qwen17); XCTAssertEqual(BackendID.qwen06BANE.qwenANEKind, .qwen06)
+        XCTAssertNil(BackendID.qwen17B.qwenANEKind)
+        XCTAssertEqual(b.speechFamily, .neuralEngine)
+        XCTAssertEqual(b.controls, BackendID.qwen06BANE.controls)
+        XCTAssertEqual(b.surfaces, BackendID.qwen06BANE.surfaces)
+        XCTAssertTrue(b.needsRefText); XCTAssertTrue(b.spec.needsRefAudio)
+        XCTAssertEqual(b.spec.modelRepo, "tinytrashlabs/Qwen3-TTS-1.7B-Base-ANE")
+        XCTAssertEqual(b.diskFolder(quantRaw: nil), QwenANEModelSet.qwen17.folderName)
+        XCTAssertEqual(b.availableQuants, [])
+        XCTAssertTrue(b.sharesFolderWithUser)
+        XCTAssertEqual(b.emotionMechanism, BackendID.qwen06BANE.emotionMechanism)
+        XCTAssertEqual(b.displayName, "Qwen 1.7B ANE")
+        XCTAssertEqual(BackendID(rawValue: "qwen3-1.7b-ane"), .qwen17BANE)
+    }
+
+    func testPlanner17BRequiresAReferenceAndKeepsTheNeuralKnobs() throws {
+        XCTAssertThrowsError(try RequestPlanner.plan(backend: .qwen17BANE, request: SynthesisRequest(text: "hi"))) {
+            XCTAssertEqual($0 as? EngineError, .refAudioRequired(.qwen17BANE))
+        }
+        var r = SynthesisRequest(text: "hi", refAudioPath: "/tmp/x.wav", refText: "hello")
+        r.firstChunkFrames = 4; r.talkSession = "reply-1"
+        for b in [BackendID.qwen06BANE, .qwen17BANE] {
+            let p = try RequestPlanner.plan(backend: b, request: r)
+            XCTAssertEqual(p.firstChunkFrames, 4, b.rawValue); XCTAssertEqual(p.talkSession, "reply-1", b.rawValue)
+        }
+        XCTAssertNil(try RequestPlanner.plan(backend: .qwen17B, request: r).talkSession)
+    }
+
+    func testModelSetsResolveSeparately() throws {
+        let support = try tempDir()
+        let defaults = isolatedDefaults()
+        XCTAssertNotEqual(QwenANEModelSet.qwen17.environmentKey, QwenANEModelSet.qwen06.environmentKey)
+        XCTAssertNotEqual(QwenANEModelSet.qwen17.defaultsKey, QwenANEModelSet.qwen06.defaultsKey)
+        XCTAssertEqual(QwenANEModelSet.of(.qwen17BANE), .qwen17); XCTAssertEqual(QwenANEModelSet.of(.qwen06BANE), .qwen06)
+        XCTAssertNil(QwenANEModelSet.of(.qwen17B))
+        XCTAssertEqual(QwenANEModelSet.qwen17.defaultDirectory(models: support).path, support.path + "/qwen3-1.7b-ane",
+                       "installed in the shared Models folder")
+        XCTAssertEqual(QwenANEModelSet.qwen17.legacyDirectory(appSupport: support).path,
+                       support.path + "/GloamVoiceStudio/Models/qwen3-1.7b-ane")
+        XCTAssertEqual(QwenANEModelSet.qwen17.defaultCacheRoot(appSupport: support).path,
+                       support.path + "/GloamVoiceStudio/Cache/qwen3-1.7b-ane")
+        // a complete 0.6B set is not a 1.7B set (two talker chunks, no cp_in_proj) and the other way round
+        try fakeModelSet(at: QwenANEModelSet.qwen06.defaultDirectory(models: support), set: .qwen06)
+        XCTAssertNotNil(try? QwenANEModelSet.qwen06.resolve(environment: [:], defaults: defaults, appSupport: support, models: support))
+        XCTAssertThrowsError(try QwenANEModelSet.qwen17.resolve(environment: [:], defaults: defaults, appSupport: support, models: support)) {
+            guard case .modelNotInstalled(let backend, let detail) = $0 as? EngineError else { return XCTFail("\($0)") }
+            XCTAssertEqual(backend, .qwen17BANE)
+            XCTAssertTrue(detail.contains("GLOAM_QWEN_ANE_17B_MODELS"), detail)
+        }
+        try fakeModelSet(at: QwenANEModelSet.qwen17.defaultDirectory(models: support), set: .qwen17)
+        XCTAssertNotNil(try? QwenANEModelSet.qwen17.resolve(environment: [:], defaults: defaults, appSupport: support, models: support))
+        let only17 = try tempDir()
+        try fakeModelSet(at: QwenANEModelSet.qwen17.defaultDirectory(models: only17), set: .qwen17)
+        XCTAssertNil(try? QwenANEModelSet.qwen06.resolve(environment: [:], defaults: defaults, appSupport: only17, models: only17))
+        XCTAssertEqual(QwenANEModelSet.qwen17.requiredFiles.filter { $0.contains("talker") }.count, 4)
+    }
+
     func testPlannerRequiresAReference() {
         XCTAssertThrowsError(try RequestPlanner.plan(backend: .qwen06BANE, request: SynthesisRequest(text: "hi"))) {
             XCTAssertEqual($0 as? EngineError, .refAudioRequired(.qwen06BANE))
@@ -61,32 +126,45 @@ final class QwenANEBackendTests: XCTestCase {
     func testResolutionOrderIsEnvThenDefaultsThenApplicationSupport() throws {
         let env = try tempDir(), pref = try tempDir(), support = try tempDir()
         try fakeModelSet(at: env); try fakeModelSet(at: pref)
-        try fakeModelSet(at: QwenANEModelLocation.defaultDirectory(appSupport: support))
+        try fakeModelSet(at: QwenANEModelLocation.defaultDirectory(models: support))
         let defaults = isolatedDefaults()
         defaults.set(pref.path, forKey: QwenANEModelLocation.defaultsKey)
 
         XCTAssertEqual(try QwenANEModelLocation.resolve(environment: [QwenANEModelLocation.environmentKey: env.path],
-                                                        defaults: defaults, appSupport: support).path, env.path)
-        XCTAssertEqual(try QwenANEModelLocation.resolve(environment: [:], defaults: defaults, appSupport: support).path, pref.path)
+                                                        defaults: defaults, appSupport: support, models: support).path, env.path)
+        XCTAssertEqual(try QwenANEModelLocation.resolve(environment: [:], defaults: defaults, appSupport: support, models: support).path, pref.path)
         defaults.removeObject(forKey: QwenANEModelLocation.defaultsKey)
-        XCTAssertEqual(try QwenANEModelLocation.resolve(environment: [:], defaults: defaults, appSupport: support).path,
-                       QwenANEModelLocation.defaultDirectory(appSupport: support).path)
+        XCTAssertEqual(try QwenANEModelLocation.resolve(environment: [:], defaults: defaults, appSupport: support, models: support).path,
+                       QwenANEModelLocation.defaultDirectory(models: support).path)
     }
 
-    func testDefaultLocationIsApplicationSupportGloamVoiceStudioModels() {
-        let support = URL(fileURLWithPath: "/tmp/AppSupport")
-        XCTAssertEqual(QwenANEModelLocation.defaultDirectory(appSupport: support).path,
-                       "/tmp/AppSupport/GloamVoiceStudio/Models/qwen3-0.6b-ane")
+    func testDefaultLocationIsTheSharedModelsFolder() {
+        XCTAssertEqual(QwenANEModelLocation.defaultDirectory(models: URL(fileURLWithPath: "/tmp/Group/Models")).path,
+                       "/tmp/Group/Models/qwen3-0.6b-ane")
+        XCTAssertEqual(QwenANEModelSet.qwen06.defaultDirectory().path,
+                       StoragePaths.models.appendingPathComponent("qwen3-0.6b-ane").path, "beside the MLX models")
+    }
+
+    func testAnInstallInTheOldPerAppFolderStillResolves() throws {
+        let support = try tempDir(), models = try tempDir()
+        try fakeModelSet(at: QwenANEModelSet.qwen06.legacyDirectory(appSupport: support), set: .qwen06)
+        XCTAssertEqual(try QwenANEModelSet.qwen06.resolve(environment: [:], defaults: isolatedDefaults(),
+                                                          appSupport: support, models: models).path,
+                       QwenANEModelSet.qwen06.legacyDirectory(appSupport: support).path)
+        try fakeModelSet(at: QwenANEModelSet.qwen06.defaultDirectory(models: models), set: .qwen06)
+        XCTAssertEqual(try QwenANEModelSet.qwen06.resolve(environment: [:], defaults: isolatedDefaults(),
+                                                          appSupport: support, models: models).path,
+                       QwenANEModelSet.qwen06.defaultDirectory(models: models).path, "the shared copy wins")
     }
 
     func testMissingModelSetNamesTheExpectedPath() throws {
         let support = try tempDir(), bad = try tempDir()
         XCTAssertThrowsError(try QwenANEModelLocation.resolve(
             environment: [QwenANEModelLocation.environmentKey: bad.path],
-            defaults: isolatedDefaults(), appSupport: support)) { error in
+            defaults: isolatedDefaults(), appSupport: support, models: support)) { error in
             guard case EngineError.modelNotInstalled(let backend, let detail) = error else { return XCTFail("\(error)") }
             XCTAssertEqual(backend, .qwen06BANE)
-            XCTAssertTrue(detail.contains(QwenANEModelLocation.defaultDirectory(appSupport: support).path), detail)
+            XCTAssertTrue(detail.contains(QwenANEModelLocation.defaultDirectory(models: support).path), detail)
             XCTAssertTrue(detail.contains(bad.path), "names the override that was tried")
             XCTAssertTrue(detail.contains("missing"), detail)
             XCTAssertTrue(detail.contains(QwenANEModelLocation.environmentKey), detail)
@@ -102,7 +180,7 @@ final class QwenANEBackendTests: XCTestCase {
 
     func testProviderThrowsModelNotInstalledBeforeLoadingAnything() async throws {
         // No env override, empty defaults: the real default path decides. Skip when the dev copy exists.
-        if QwenANEModelLocation.missingEntry(in: QwenANEModelLocation.defaultDirectory()) == nil
+        if QwenANEModelLocation.candidates(environment: [:]).contains(where: { QwenANEModelLocation.missingEntry(in: $0) == nil })
             || ProcessInfo.processInfo.environment[QwenANEModelLocation.environmentKey] != nil { throw XCTSkip("a model set is installed here") }
         do {
             _ = try await MLXModelProvider().loadModel(backend: .qwen06BANE)
