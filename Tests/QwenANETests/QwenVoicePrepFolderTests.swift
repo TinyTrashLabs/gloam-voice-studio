@@ -37,7 +37,8 @@ final class QwenVoicePrepFolderTests: XCTestCase {
                                   spkEmbedding: [Float](repeating: 0.25, count: 1024))
         }
     }
-    private func run(_ master: Data, _ e: Encoder, words: String = "alpha beta gamma. delta epsilon zeta. eta theta iota.",
+    private func run(_ master: Data, _ e: Encoder, words: String = String(repeating: "alpha beta gamma. delta epsilon zeta. eta theta iota. ", count: 8)
+                         .trimmingCharacters(in: .whitespaces),
                      heard: String? = nil) async throws -> QwenVoicePrep.Prepared {
         try await QwenVoicePrep.prepareEngineFolder(
             voiceDir: voiceDir, masterWAV: master, transcript: words, cacheDirectory: cache,
@@ -182,5 +183,48 @@ final class QwenVoicePrepFolderTests: XCTestCase {
         XCTAssertLessThanOrEqual(section.count, limit); XCTAssertGreaterThan(section.count, 12 * 24_000)
         let d = try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir)?.derivedFrom)
         XCTAssertEqual(d.sourceSha256, ReferenceSection.sha256Hex(m))
+    }
+
+    // MARK: the section's words are in the take's language
+
+    private static let spanish = (0 ..< 8).map { _ in "yo creo que no hay nada que te pueda decir, lo más complicado es por eso." }
+        .joined(separator: " ")
+    private static let englishRendering = (0 ..< 8).map { _ in "I think there is nothing that I can say to you." }
+        .joined(separator: " ")
+
+    /// 2026-10-06: Whisper with no language told decoded Bad Bunny's Spanish as English, at a plausible
+    /// rate, and that English was stored as the Spanish take's section transcript (Qwen then rendered static).
+    func testAnEnglishRenderingOfASpanishTakeIsNeverStored() async throws {
+        let e = Encoder()
+        let r = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: master(seconds: 40), transcript: Self.spanish, cacheDirectory: cache,
+            language: "es", transcribe: { _ in Self.englishRendering }, limitSamples: limit, encode: fake(e))
+        let stored = try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir))
+        XCTAssertTrue(ReferenceSection.textIsPlausibleIn(language: "es", stored.text), stored.text)
+        XCTAssertFalse(stored.text.contains("nothing"), stored.text)
+        XCTAssertTrue(ReferenceSection.textIsPlausibleIn(language: "es", r.files.refText))
+    }
+
+    /// A section already stored with the wrong language (written before this check) is chosen again.
+    func testAStoredSectionInTheWrongLanguageIsReplaced() async throws {
+        let e = Encoder()
+        let m = master(seconds: 40)
+        _ = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: m, transcript: Self.spanish, cacheDirectory: cache,
+            transcribe: { _ in Self.englishRendering }, limitSamples: limit, encode: fake(e))   // no language: old behaviour
+        XCTAssertFalse(ReferenceSection.textIsPlausibleIn(language: "es", try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir)).text))
+        _ = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: m, transcript: Self.spanish, cacheDirectory: cache,
+            language: "es", transcribe: { _ in nil }, limitSamples: limit, encode: fake(e))
+        XCTAssertTrue(ReferenceSection.textIsPlausibleIn(language: "es", try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir)).text))
+    }
+
+    /// A master transcript that is itself in the wrong language is used for the render but not stored.
+    func testASectionInTheWrongLanguageIsNotStoredAtAll() async throws {
+        let e = Encoder()
+        _ = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: master(seconds: 40), transcript: Self.englishRendering, cacheDirectory: cache,
+            language: "es", transcribe: { _ in nil }, limitSamples: limit, encode: fake(e))
+        XCTAssertNil(QwenVoicePrep.storedFolder(in: voiceDir))
     }
 }

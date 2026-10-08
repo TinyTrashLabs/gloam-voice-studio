@@ -78,7 +78,7 @@ public enum ReferenceSections {
         let prepared = try? await QwenVoicePrep.prepareEngineFolder(
             voiceDir: refURL.deletingLastPathComponent(), masterWAV: master, transcript: text,
             modelsDirectory: models, cacheDirectory: cacheRoot.appendingPathComponent(String(key), isDirectory: true),
-            transcribe: sectionTranscriber(language: language))
+            language: language, transcribe: sectionTranscriber(language: language))
         return prepared?.origin == .computed
     }
 
@@ -89,6 +89,7 @@ public enum ReferenceSections {
     /// section ended three words after its transcript.
     public static func sectionTranscriber(language: String?) -> @Sendable (Data) async -> String? {
         let hint = language.flatMap { $0.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map { String($0).lowercased() } }
+            .flatMap { $0.count == 2 ? $0 : nil }  // "auto"/"spanish" are not Whisper codes: nil detects
         if let folder = installedWhisperFolder() {
             let whisper = WhisperTranscriber(modelFolder: folder)
             return { wav in
