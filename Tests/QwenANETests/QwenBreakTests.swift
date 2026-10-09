@@ -117,4 +117,23 @@ final class QwenBreakTests: XCTestCase {
         XCTAssertTrue(b2.samples.isEmpty)
         XCTAssertFalse(streamed.isEmpty)
     }
+
+    func testAnotherLineBetweenPartsLeavesTheBreakUnchanged() async throws {
+        // The iPhone hands the engine to a "Hey DJ" reply between a break's parts (beforePart). The break's own
+        // stream (carry, sampler) must not notice: same seed, same frames as an uninterrupted render.
+        try QwenTestModels.requireSlow()
+        let e = try QwenTestModels.engine()
+        let voice = try e.loadVoice(named: "sonny-vale")
+        let other = try e.loadVoice(named: "benson")
+        let parts = QwenTalkSessionTests.parts
+        let plain = try QwenTalkSession(engine: e, voice: voice, seed: 42).renderBreak(parts: parts)
+        var hooks: [Int] = []
+        let interrupted = try await QwenTalkSession(engine: e, voice: voice, seed: 42).renderBreak(parts: parts, beforePart: { i in
+            hooks.append(i)
+            _ = try QwenTalkSession(engine: e, voice: other, seed: 7).renderBreak(parts: ["One moment, let me check that for you."])
+        })
+        XCTAssertEqual(hooks, [1], "the hook runs between parts, never before the first")
+        XCTAssertEqual(interrupted.parts.map(\.frames), plain.parts.map(\.frames), "the break is frame-for-frame the same")
+        XCTAssertEqual(interrupted.samples.count, plain.samples.count)
+    }
 }

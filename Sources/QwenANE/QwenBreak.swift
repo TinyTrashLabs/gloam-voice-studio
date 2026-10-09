@@ -222,25 +222,53 @@ extension QwenTalkSession {
                             cancelled: () -> Bool = { false }, pace: () -> Void = {},
                             onAudio: (([Float]) -> Void)? = nil,
                             onPart: ((QwenBreakPart) -> Void)? = nil) throws -> QwenBreak {
-        let sr = sampleRate
-        let gap = [Float](repeating: 0, count: Int((gapSeconds * Double(sr)).rounded()))
-        var out = QwenBreak(seed: seed, sampleRate: sr, samples: [], parts: [])
+        var out = QwenBreak(seed: seed, sampleRate: sampleRate, samples: [], parts: [])
         for (i, part) in parts.enumerated() {
             if cancelled() { break }
-            if i > 0 { if let onAudio { onAudio(gap) } else { out.samples += gap } }
-            let t0 = Date()
-            let r = try render(part, chunkFrames: i == 0 ? firstChunkFrames : nil, cancelled: cancelled,
-                               pace: pace, onAudio: onAudio)
-            if onAudio == nil { out.samples += r.samples }
-            let report = QwenBreakPart(index: i, text: part, frames: r.frames, takes: r.takes, stopReason: r.stopReason,
-                                       contextFrames: r.contextFrames, longestPause: r.silenceBefore.longestPause,
-                                       derailed: Self.derailed(r), audioSeconds: r.audioSeconds,
-                                       renderSeconds: Date().timeIntervalSince(t0), frameCap: r.frameCap,
-                                       timings: r.timings)
-            out.parts.append(report)
-            onPart?(report)
-            if r.stopReason == .cancelled { break }
+            let stop = try renderPart(i, part, into: &out, gapSeconds: gapSeconds, firstChunkFrames: firstChunkFrames,
+                                      cancelled: cancelled, pace: pace, onAudio: onAudio, onPart: onPart)
+            if stop { break }
         }
         return out
+    }
+
+    /// `renderBreak(parts:…)` with a hook between parts: `beforePart(i)` runs (awaited) before every part after
+    /// the first, while this session holds no engine lock. A caller that serialises renders hands the engine to
+    /// an urgent line there (an iPhone "Hey DJ" reply waited 25 s behind a four-part news break, 2026-10-08) and
+    /// resumes this break after it; the session's own stream (carry, sampler) is untouched in between.
+    public func renderBreak(parts: [String], gapSeconds: Double = 0.15, firstChunkFrames: [Int]? = nil,
+                            cancelled: () -> Bool = { false }, pace: () -> Void = {},
+                            onAudio: (([Float]) -> Void)? = nil,
+                            onPart: ((QwenBreakPart) -> Void)? = nil,
+                            beforePart: (Int) async throws -> Void) async throws -> QwenBreak {
+        var out = QwenBreak(seed: seed, sampleRate: sampleRate, samples: [], parts: [])
+        for (i, part) in parts.enumerated() {
+            if i > 0 { try await beforePart(i) }
+            if cancelled() { break }
+            let stop = try renderPart(i, part, into: &out, gapSeconds: gapSeconds, firstChunkFrames: firstChunkFrames,
+                                      cancelled: cancelled, pace: pace, onAudio: onAudio, onPart: onPart)
+            if stop { break }
+        }
+        return out
+    }
+
+    /// One part of a break into `out` (its leading gap, its audio, its report). True = stop the break.
+    private func renderPart(_ i: Int, _ part: String, into out: inout QwenBreak, gapSeconds: Double,
+                            firstChunkFrames: [Int]?, cancelled: () -> Bool, pace: () -> Void,
+                            onAudio: (([Float]) -> Void)?, onPart: ((QwenBreakPart) -> Void)?) throws -> Bool {
+        let gap = [Float](repeating: 0, count: Int((gapSeconds * Double(sampleRate)).rounded()))
+        if i > 0 { if let onAudio { onAudio(gap) } else { out.samples += gap } }
+        let t0 = Date()
+        let r = try render(part, chunkFrames: i == 0 ? firstChunkFrames : nil, cancelled: cancelled,
+                           pace: pace, onAudio: onAudio)
+        if onAudio == nil { out.samples += r.samples }
+        let report = QwenBreakPart(index: i, text: part, frames: r.frames, takes: r.takes, stopReason: r.stopReason,
+                                   contextFrames: r.contextFrames, longestPause: r.silenceBefore.longestPause,
+                                   derailed: Self.derailed(r), audioSeconds: r.audioSeconds,
+                                   renderSeconds: Date().timeIntervalSince(t0), frameCap: r.frameCap,
+                                   timings: r.timings)
+        out.parts.append(report)
+        onPart?(report)
+        return r.stopReason == .cancelled
     }
 }
