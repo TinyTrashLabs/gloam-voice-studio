@@ -672,8 +672,9 @@ extension BackendID {
                         needsLicenseAck: false, needsRefAudio: true,
                         minRAMBytes: 8_000_000_000)
         case .audio8:
-            // Apache 2.0, so no license ack. 2,565,323,043 bytes on HF. The RAM floor is a
-            // placeholder until the measured one lands (Task 12).
+            // Apache 2.0, so no license ack. 2,565,323,043 bytes on HF. RAM floor: measured
+            // render peak 3.83 GB (Benson line, streaming, 2.9 GB of it resident weights) x 2 = 7.66 GB,
+            // rounded up to the next GB.
             BackendSpec(modelRepo: "tinytrashlabs/Audio8-TTS-0.6B-MLX",
                         defaultSampleRate: 44100, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: false,

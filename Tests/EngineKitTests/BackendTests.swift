@@ -86,6 +86,7 @@ final class BackendTests: XCTestCase {
         XCTAssertFalse(spec.honorsTags)
         XCTAssertFalse(spec.needsLicenseAck)
         XCTAssertFalse(spec.needsRefAudio)
+        // Measured peak 3.83 GB x 2 = 7.66 GB, rounded up to the next GB.
         XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
         XCTAssertEqual(BackendID.audio8.emotionMechanism, .variantClipOnly)
         let c = BackendID.audio8.controls
