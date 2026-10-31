@@ -33,7 +33,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
       "state" : {
-        "revision" : "b6d9740950ceb15b26edc869f6ba6fda3e369ba7"
+        "revision" : "f6713a393b0af17c50a6c725666e5967f4f0f96d"
       }
     },
     {
