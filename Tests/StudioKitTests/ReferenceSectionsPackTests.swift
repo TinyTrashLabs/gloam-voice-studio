@@ -35,7 +35,7 @@ final class ReferenceSectionsPackTests: XCTestCase {
     func testSectionsAreChosenOnceStoredAndTravelByteForByte() async throws {
         _ = try lib.save(name: "Cruz", refWav: master(seconds: 70), refText: words)
         let written = await lib.prepareSections("cruz")
-        XCTAssertEqual(Set(written), ["lux-tts", "pocket-tts"])
+        XCTAssertEqual(Set(written), ["lux-tts", "pocket-tts", "audio8"])
 
         let lux = try files(lib, "lux-tts"), pocket = try files(lib, "pocket-tts")
         XCTAssertNotNil(lux["ref.wav"]); XCTAssertNotNil(pocket["ref.wav"])
@@ -71,10 +71,12 @@ final class ReferenceSectionsPackTests: XCTestCase {
         XCTAssertNotEqual(try files(lib, "lux-tts")["ref.wav"], before)
     }
 
-    func testAMasterThatFitsGetsNoSections() async throws {
+    func testAMasterThatFitsGetsOnlyAudio8SoItsCodesCanBeCachedBesideIt() async throws {
         _ = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
         let written = await lib.prepareSections("cruz")
-        XCTAssertEqual(written, [])
+        XCTAssertEqual(written, ["audio8"])
+        let again = await lib.prepareSections("cruz")
+        XCTAssertEqual(again, [])
     }
 
     /// A section is part of the pack: writing one is a new revision; keeping one is not.
