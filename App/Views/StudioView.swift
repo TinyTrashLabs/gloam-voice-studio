@@ -806,6 +806,9 @@ struct StudioView: View {
             + "the identity stays fixed; your Direction shapes the delivery."
         case .fishS2Pro:
             "Clone a voice (optional). Emotion & sounds come from the [tags] above; fine-tune dynamics in Advanced. Free-text Direction isn't supported here."
+        case .audio8:
+            "Clone a voice from a reference clip and its exact transcript, or use the stock voice. "
+            + "Delivery comes from the reference clip; no [tags] or free-text Direction."
         case .breezeTTS2:
             "Pick a voice to clone it, write a Direction to design one from scratch, or do both "
             + "to steer a cloned voice's tone and pace. Emotion and Expression below add to that "

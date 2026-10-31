@@ -2240,6 +2240,8 @@ final class AppModel {
             return "Acknowledge the \(backend.rawValue) license in Settings → Models first."
         case .refAudioRequired:
             return "This model needs a reference voice."
+        case .refTextRequired(let backend):
+            return "\(backend.displayName) needs the exact transcript of the reference clip. Add one to this voice first."
         case .generationFailed(_, let message):
             return "Generation failed: \(message)"
         case .invalidSpeed(let s):

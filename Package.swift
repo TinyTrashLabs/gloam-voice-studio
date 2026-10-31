@@ -105,9 +105,12 @@ let package = Package(
         // Qwen (`continuing(_:previousText:previousCodes:)`, `lastGeneratedCodes`,
         // `framesPerTextToken`), additive: the iPhone app renders a long read as
         // one performance like QwenTalkSession.
+        // fab030b (2026-10-31, TinyTrashLabs/mlx-audio-swift#20, branch feat/audio8, not yet
+        // merged): Audio8 on the Fish model code (model_type "fish_qwen3_omni") via config keys.
+        // Repin to the merge commit once #20 lands.
         .package(
             url: "https://github.com/TinyTrashLabs/mlx-audio-swift.git",
-            revision: "233c0d71da3dfd8d83a4b51549e1ae01c50b11b8"),
+            revision: "fab030b1d983f142a9e361c9041dbaa962f1394e"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.6")),
         // Pinned to the commit that merges upstream #390 (the Gemma4 VLM
         // kvSharedOnly fix so QAT checkpoints — gemma-4-e2b/e4b — load; our own

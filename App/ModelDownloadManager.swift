@@ -37,6 +37,8 @@ final class ModelDownloadManager {
         .chatterbox: 2_300_000_000,
         .chatterboxTurbo: 2_300_000_000,
         .fishS2Pro: 11_100_000_000,
+        // tinytrashlabs/Audio8-TTS-0.6B-MLX @ de28670: 2,565,323,043 bytes total.
+        .audio8: 2_565_323_043,
         // The HF repo is 389MB total; only the 54 small per-voice .pt (PyTorch)
         // duplicates (~28MB combined) are redundant — the 327MB main-model
         // safetensors file has no .pt counterpart. downloadRepoSnapshot below

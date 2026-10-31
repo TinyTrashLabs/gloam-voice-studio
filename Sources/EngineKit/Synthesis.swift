@@ -224,6 +224,8 @@ public struct SynthesisChunk: Sendable {
 public enum EngineError: Error, Equatable, Sendable {
     case licenseAckRequired(BackendID)
     case refAudioRequired(BackendID)
+    /// A reference voice was given without the transcript the backend conditions on.
+    case refTextRequired(BackendID)
     case generationFailed(backend: BackendID, message: String)
     case invalidSpeed(Float)
     case instructRequired(BackendID)
@@ -238,6 +240,8 @@ extension EngineError: LocalizedError {
         switch self {
         case .modelNotInstalled(let backend, let detail):
             return "\(backend.rawValue) is not installed: \(detail)"
+        case .refTextRequired(let backend):
+            return "\(backend.displayName) needs the exact transcript of the reference clip; this voice has none."
         default:
             return nil
         }
@@ -266,6 +270,12 @@ enum RequestPlanner {
             guard let s else { return nil }
             let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
+        }
+
+        // Audio8 conditions on the reference's exact words; a clip with no (or a blank)
+        // transcript would render garbage, so fail loudly instead.
+        if backend == .audio8 && hasRef && clean(refText) == nil {
+            throw EngineError.refTextRequired(backend)
         }
 
         // Instruct: honored only when the backend allows it AND (on clone-capable

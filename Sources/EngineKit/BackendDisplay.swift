@@ -16,6 +16,7 @@ extension BackendID {
         case .qwenCustom: "Qwen Custom"
         case .chatterboxTurbo: "Chatterbox Turbo"
         case .fishS2Pro: "Fish S2 Pro"
+        case .audio8: "Audio8"
         case .breezeTTS2: "Breeze"
         case .chatterbox: "Chatterbox"
         case .kokoro: "Kokoro"
@@ -40,7 +41,7 @@ extension BackendID {
     /// before a free alternative.
     public static let autoSwitchPreference: [BackendID] = [
         .qwen17B, .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17BANE,
-        .chatterboxTurbo, .chatterbox, .luxTTS, .pocketTTS,
+        .chatterboxTurbo, .chatterbox, .luxTTS, .pocketTTS, .audio8,
         .kokoro, .qwenCustom, .breezeTTS2, .fishS2Pro, .supertonic,
     ]
 
