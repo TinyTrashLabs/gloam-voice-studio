@@ -133,15 +133,37 @@ public enum ReferenceSections {
     }
 
     /// Writes the codes of `section` next to it, with the hash of the audio they were encoded from.
-    public static func audio8StoreCodes(_ values: [Int32], frames: Int, for section: Audio8Section) throws {
+    /// Pass `audioSha256` taken BEFORE the encode: hashing here would stamp the codes with whatever
+    /// `ref.wav` holds now, which is another section's audio if it was re-stored while encoding.
+    public static func audio8StoreCodes(_ values: [Int32], frames: Int, for section: Audio8Section,
+                                        audioSha256: String? = nil) throws {
         guard audio8CodesAreValid(values, shape: [audio8Codebooks, frames], seconds: section.seconds) else {
             throw EngineError.generationFailed(backend: .audio8, message: "encoded reference codes are implausible")
         }
-        guard let hash = ReferenceSection.sha256Hex(ofFile: section.audioURL) else {
+        guard let hash = audioSha256 ?? ReferenceSection.sha256Hex(ofFile: section.audioURL) else {
             throw EngineError.generationFailed(backend: .audio8, message: "cannot hash the section audio")
         }
         try NPYInt32.write(values, shape: [audio8Codebooks, frames], to: section.codesURL)
         try JSONEncoder().encode(["audioSha256": hash]).write(to: section.codesKeyURL, options: .atomic)
+    }
+
+    /// Drops the stored sections whose words were sliced from the voice's own transcript
+    /// (`derivedFrom.by == "transcript-slice"`: Audio8's, and Lux's for a long master), with the codes cached
+    /// beside them, so the next `prepare` (or first use) stores them again from the corrected transcript.
+    /// Call when the transcript of the voice in `voiceDirectory` changed. A section whose words came from
+    /// on-device recognition or from the user's own window edit does not depend on the transcript and stays.
+    public static func invalidateTranscriptSections(inVoiceDirectory voiceDirectory: URL) {
+        let fm = FileManager.default
+        for engine in [audio8Engine, "lux-tts"] {
+            let dir = voiceDirectory.appendingPathComponent("engines/\(engine)", isDirectory: true)
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(LuxReferenceWindow.renditionMetaName)),
+                  let rendition = try? JSONDecoder().decode(LuxReferenceWindow.Rendition.self, from: data),
+                  rendition.derivedFrom?.by == "transcript-slice" else { continue }
+            for name in [LuxReferenceWindow.renditionAudioName, LuxReferenceWindow.renditionMetaName,
+                         audio8CodesName, audio8CodesKeyName] {
+                try? fm.removeItem(at: dir.appendingPathComponent(name))
+            }
+        }
     }
 
     /// Chooses and stores, once, every section the voice at `refURL` needs for the engines whose lengths

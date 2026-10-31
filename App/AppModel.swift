@@ -1395,6 +1395,8 @@ final class AppModel {
                      refText: String? = nil, refWav: Data? = nil) throws -> VoiceMeta {
         // Takes live inside the voice's folder and move with it.
         let meta = try voices.update(slug, name: name, refText: refText, refWav: refWav)
+        // A new recording or a corrected transcript changes what the engines' sections are cut from.
+        if refText != nil || refWav != nil { voices.prepareSectionsInBackground(meta.slug) }
         if meta.slug != slug {
             chat.voiceRenamed(from: slug, to: meta.slug)
             if selectedVoiceSlug == slug { selectedVoiceSlug = meta.slug }
@@ -1420,7 +1422,10 @@ final class AppModel {
         for url in urls {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do { _ = try GVoice.import(try Data(contentsOf: url), into: voices) }
+            do {
+                let imported = try GVoice.import(try Data(contentsOf: url), into: voices)
+                voices.prepareSectionsInBackground(imported.slug)
+            }
             catch { failures.append("\(url.lastPathComponent): \(describeAny(error))") }
         }
         voicesVersion += 1
@@ -2131,6 +2136,7 @@ final class AppModel {
     @discardableResult
     func saveFoundryVoice(_ candidate: FoundryCandidate, name: String) throws -> VoiceMeta {
         let meta = try voices.save(name: name, refWav: candidate.wavData, refText: candidate.auditionLine)
+        voices.prepareSectionsInBackground(meta.slug)
         voicesVersion += 1
         selectedVoiceSlug = meta.slug
         lastSavedFoundrySlug = meta.slug
@@ -2212,6 +2218,7 @@ final class AppModel {
                                   provenance: VoiceLibrary.takeProvenance(origin: "generated",
                                                                           engine: baker.rawValue),
                                   variantOf: baseSlug)
+                voices.prepareSectionsInBackground("\(baseSlug)-\(expr.rawValue)")
                 await refreshEngineStatus()   // model resident now — update the RAM chip
             } catch {
                 foundryError = "Generation failed for \(expr.label): \(describeAny(error))"

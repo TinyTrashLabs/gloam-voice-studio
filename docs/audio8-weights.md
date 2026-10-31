@@ -16,7 +16,7 @@ python -I scripts/convert_audio8.py <snapshot dir> <out dir>   # needs torch + s
 hf upload tinytrashlabs/Audio8-TTS-0.6B-MLX <out dir> .
 ```
 
-The converter does not alter or quantise weights. It prefixes the slow/fast transformer tensors with `model.`,
+The converter does not re-train or quantise weights (the codec tensors are stored as fp32; the transformer tensors are copied as they are). It prefixes the slow/fast transformer tensors with `model.`,
 converts `codec.pth` to `codec.safetensors`, and writes `config.json` with every `FishS1DACBuildConfig` key explicit
 (missing keys silently fall back to Fish defaults) plus the Audio8-specific `max_frames_per_text_token: 12.0` and
 `reference_budget_scale: 1.95`. It also writes the README model card crediting Edge0.

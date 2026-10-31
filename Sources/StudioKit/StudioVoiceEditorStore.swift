@@ -82,6 +82,7 @@ public final class StudioVoiceEditorStore: ObservableObject, VoiceLibraryStore {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { throw VoiceStoreError.emptyTranscript }
         _ = try library.update(voice.slug, refText: t)
+        library.prepareSectionsInBackground(voice.slug)
         reload()
     }
 

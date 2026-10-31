@@ -1,4 +1,5 @@
 import Foundation
+import GVoiceKit
 import MLX
 import MLXAudioCore
 import MLXAudioTTS
@@ -330,12 +331,15 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         if let cached = ReferenceSections.audio8CachedCodes(for: section) {
             return (MLXArray(cached.values, [10, cached.frames]), section.text)
         }
+        // Hash the section before encoding it: if a save re-stores it meanwhile, the codes must not
+        // be stamped with the new audio's hash (a cache entry that would pass every check).
+        let audioHash = ReferenceSection.sha256Hex(ofFile: section.audioURL)
         let (_, audio) = try loadAudioArray(from: section.audioURL, sampleRate: fish.sampleRate)
         let codes = try fish.encodeReference(audio)
         audio8EncodeCalls.add(1)
         eval(codes)
         let frames = codes.dim(1)
-        do { try ReferenceSections.audio8StoreCodes(codes.asArray(Int32.self), frames: frames, for: section) }
+        do { try ReferenceSections.audio8StoreCodes(codes.asArray(Int32.self), frames: frames, for: section, audioSha256: audioHash) }
         catch { audio8Log.error("could not cache Audio8 reference codes (\(String(describing: error), privacy: .public)); they will be re-encoded") }
         return (codes, section.text)
     }

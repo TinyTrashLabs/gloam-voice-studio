@@ -483,7 +483,8 @@ struct VoiceSidebarView: View {
                 let name = metaJSON["name"] as? String ?? subdir.lastPathComponent
                 let refText = metaJSON["refText"] as? String ?? ""
                 let refWav = try Data(contentsOf: refURL)
-                _ = try model.voices.save(name: name, refWav: refWav, refText: refText)
+                let saved = try model.voices.save(name: name, refWav: refWav, refText: refText)
+                model.voices.prepareSectionsInBackground(saved.slug)
             } catch {
                 failures.append("\(subdir.lastPathComponent): \(model.describeAny(error))")
             }

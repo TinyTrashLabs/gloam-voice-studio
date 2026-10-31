@@ -126,7 +126,7 @@ This repo only rearranges the weights so the Fish DualAR loader in
 [TinyTrashLabs/mlx-audio-swift](https://github.com/TinyTrashLabs/mlx-audio-swift) (PR #20) can load them:
 the slow and fast transformer tensors are stored under `model.*` in `model.safetensors`, the codec is
 converted from `codec.pth` to `codec.safetensors`, and `config.json` is written in the `fish_qwen3_omni` layout.
-No weights are altered or quantised.
+No weights are re-trained or quantised; the codec tensors are stored as fp32.
 
 ## Audio8-specific config keys
 

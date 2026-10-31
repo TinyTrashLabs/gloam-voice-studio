@@ -102,6 +102,16 @@ public struct VoiceLibrary: Sendable {
         return written
     }
 
+    /// `prepareSections` for the app's save / import / edit paths: runs at utility priority off the
+    /// calling actor, so it never delays the UI or a render that is about to start. The returned task is
+    /// for tests; callers drop it. The cut needs no model (an Audio8 section of a master over 20 s runs
+    /// the on-device recogniser when one is authorised, which is why this is never done on the main thread).
+    @discardableResult
+    public func prepareSectionsInBackground(_ slug: String) -> Task<[String], Never> {
+        let library = self
+        return Task.detached(priority: .utility) { await library.prepareSections(slug) }
+    }
+
     /// Prepares and stores the Qwen section of the voice and of every take (language references, emotions)
     /// that has a master and a transcript, so an export carries `engines/qwen3-0.6b/` for each of them.
     /// Sections already complete for their master are kept. Returns the slugs prepared now.
@@ -462,8 +472,10 @@ public struct VoiceLibrary: Sendable {
             meta.name = name
             meta.slug = newSlug
         }
+        var transcriptChanged = false
         if let refText {
-            changed = changed || refText != meta.refText
+            transcriptChanged = refText != meta.refText
+            changed = changed || transcriptChanged
             meta.refText = refText
         }
         // An empty string clears the description, as nil on the model means "unset".
@@ -483,6 +495,9 @@ public struct VoiceLibrary: Sendable {
                 .write(to: voiceDir.appendingPathComponent("ref.wav"))
         }
         try write(meta, to: voiceDir)
+        // Sections sliced from the old transcript (Audio8's, a long master's Lux window) would keep
+        // conditioning on the words that were just corrected; the next prepare stores them again.
+        if transcriptChanged { ReferenceSections.invalidateTranscriptSections(inVoiceDirectory: voiceDir) }
         return changed ? try touchRevision(meta.slug) : meta
     }
 

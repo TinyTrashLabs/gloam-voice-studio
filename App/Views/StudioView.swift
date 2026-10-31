@@ -104,6 +104,7 @@ struct StudioView: View {
                     return
                 }
                 try model.voices.update(slug, refText: text)
+                model.voices.prepareSectionsInBackground(slug)
                 model.voicesVersion += 1
             } catch {
                 transcribeError = "Transcription failed: \(error.localizedDescription)"

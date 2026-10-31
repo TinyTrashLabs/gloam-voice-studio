@@ -179,6 +179,23 @@ final class ReferenceSectionsTests: XCTestCase {
         XCTAssertThrowsError(try ReferenceSections.audio8StoreCodes([Int32](repeating: 1, count: 40), frames: 4, for: section))
     }
 
+    /// Codes encoded from the old section but written after a re-store carry the OLD hash, so they are not trusted.
+    func testCodesStampedWithTheHashTakenBeforeTheEncodeAreRejectedAfterARestore() async throws {
+        let section = try await nineSecondSection()
+        let before = try XCTUnwrap(ReferenceSection.sha256Hex(ofFile: section.audioURL))
+        let ref = section.audioURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ref.wav")
+        let window = LuxReferenceWindow.Window(samples: sentences(count: 1, seconds: 3), text: "Edited words.", seconds: 3.5,
+                                               startSeconds: 0, sourceSeconds: 9)
+        XCTAssertTrue(LuxReferenceWindow.store(window, forReference: ref, sampleRate: rate, engine: "audio8"))
+        let restored = try await unwrapSection(ref, "Edited words.")
+        let n = frames(for: restored)
+        try ReferenceSections.audio8StoreCodes((0 ..< 10 * n).map { Int32($0 % 900) }, frames: n, for: restored, audioSha256: before)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: restored), "hash of the replaced audio: not trusted")
+        try ReferenceSections.audio8StoreCodes((0 ..< 10 * n).map { Int32($0 % 900) }, frames: n, for: restored)
+        XCTAssertNotNil(ReferenceSections.audio8CachedCodes(for: restored))
+    }
+
     func testStoringANewSectionRemovesCodes() async throws {
         let section = try await nineSecondSection()
         try storeValidCodes(for: section)
