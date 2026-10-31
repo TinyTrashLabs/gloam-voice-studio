@@ -1,7 +1,7 @@
 # App Review notes
 
 Paste-ready text for App Store Connect's "Notes" field on this build (limit:
-4000 characters; this text is 3589). Plain text below the divider.
+4000 characters; this text is 3932). Plain text below the divider.
 
 ---
 
@@ -26,4 +26,4 @@ The bundled voice ("Ava") and every catalog voice are CC0-licensed: the bundled 
 Before cloning any voice (record, capture, or import), a one-time consent sheet requires the user to confirm they have the right to use that voice before "I Understand" is enabled. Every exported WAV is tagged in its file metadata with a "Generated with Gloam Voice Studio" provenance comment.
 
 7. Model weight licenses acknowledged before download
-Three optional backends carry restrictive licenses: Fish S2-Pro (Fish Audio Research License), Breeze TTS 2 (BreezeBlue Research and Non-Commercial License) and SuperTonic (Open RAIL-M). For each, the app shows that model's own license text and requires explicit acknowledgment before download; declining cancels. Acknowledging one never unlocks another. All other backends (Chatterbox, Chatterbox-Turbo, Qwen3-TTS, Kokoro, LuxTTS, pocket-tts) use MIT/Apache-2.0 weights with no gate. In every case weights are downloaded by the user, on their own Mac, directly from the publisher's HuggingFace listing — the app does not redistribute or bundle any of these weights.
+Three optional backends carry restrictive licenses: Fish S2-Pro (Fish Audio Research License), Breeze TTS 2 (BreezeBlue Research and Non-Commercial License) and SuperTonic (Open RAIL-M). For each, the app shows that model's own license text and requires explicit acknowledgment before download; declining cancels. Acknowledging one never unlocks another. The other backends use permissive weights with no gate: Chatterbox, Chatterbox-Turbo (MIT); Qwen3-TTS, Kokoro, LuxTTS, Dia 2 (Apache-2.0); pocket-tts (CC-BY-4.0). Weights are downloaded by the user, on their own Mac, from Hugging Face: the publisher's own listing, the mlx-community conversion, or, for formats nobody else publishes (the Neural Engine Qwen3 sets, the smaller Qwen3 0.6B build, LuxTTS, SuperTonic and Dia 2 converted for MLX), Tiny Trash Labs' own conversion under the original license. None of these weights are bundled in the app.

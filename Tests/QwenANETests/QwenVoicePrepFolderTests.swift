@@ -46,6 +46,20 @@ final class QwenVoicePrepFolderTests: XCTestCase {
     }
     private var sectionURL: URL { voiceDir.appendingPathComponent(QwenVoicePrep.sectionMember) }
 
+    /// Qwen reads the reference text and the script as one stream, so a transcript that stops mid-sentence
+    /// ("...West Coast crew") runs into the script: every render opened "Crew Hi, it's Jeff". The text the
+    /// encoder gets, and the one stored, always end a sentence.
+    func testAnUnfinishedTranscriptIsEndedBeforeItIsUsed() async throws {
+        var seen: [String] = []
+        let e = Encoder(), encode = fake(e)
+        _ = try await QwenVoicePrep.prepareEngineFolder(
+            voiceDir: voiceDir, masterWAV: master(seconds: 10), transcript: "Big shout to the West Coast crew ",
+            cacheDirectory: cache, transcribe: nil, limitSamples: limit,
+            encode: { wav, text in seen.append(text); return try encode(wav, text) })
+        XCTAssertEqual(seen, ["Big shout to the West Coast crew."])
+        XCTAssertEqual(try XCTUnwrap(QwenVoicePrep.storedFolder(in: voiceDir)).text, "Big shout to the West Coast crew.")
+    }
+
     func testSectionEndsAtASentenceEnd() async throws {
         let words = (0 ..< 12).map { "uno dos tres cuatro cinco seis siete ocho nueve diez once doce\($0 == 11 ? "" : ".")" }
             .joined(separator: " ") + " y luego"
