@@ -44,7 +44,8 @@ void gvfx_stretch_reset(GVFXStretchRef ref);
 
 /// Reads the remaining buffered output with no further input (the tail that
 /// `process` leaves in the analysis latency), then resets the stretcher.
-void gvfx_stretch_flush(GVFXStretchRef ref, float *output, int outCount);
+/// `playbackRate` is the stream's input/output ratio (the pace).
+void gvfx_stretch_flush(GVFXStretchRef ref, float *output, int outCount, float playbackRate);
 
 /// Whole-buffer time stretch with latency compensated: `outCount` samples
 /// out for `inCount` in, pitch unchanged. Returns 0 if the input is shorter

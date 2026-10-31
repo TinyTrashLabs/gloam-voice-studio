@@ -85,11 +85,11 @@ void gvfx_stretch_reset(GVFXStretchRef ref) {
     }
 }
 
-void gvfx_stretch_flush(GVFXStretchRef ref, float *output, int outCount) {
+void gvfx_stretch_flush(GVFXStretchRef ref, float *output, int outCount, float playbackRate) {
     if (!ref || !output || outCount <= 0) return;
     float *outPtrs[1] = { output };
     try {
-        reinterpret_cast<Wrapper *>(ref)->stretch.flush(outPtrs, outCount);
+        reinterpret_cast<Wrapper *>(ref)->stretch.flush(outPtrs, outCount, playbackRate);
     } catch (...) {
     }
 }

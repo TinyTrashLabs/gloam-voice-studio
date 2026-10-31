@@ -361,7 +361,9 @@ enum RequestPlanner {
             // (same user-facing knob, backend-native implementation instead of a
             // post-hoc resample) — see GloamEngine.performSynthesis for the other
             // half of this (skipping SpeedAdjust when this is non-nil).
-            speed: knobs.speed != nil ? request.speed : nil,
+            // Audio8's speed knob is the post-hoc pitch-preserving stretch, so
+            // its plan carries no native speed (else GloamEngine would skip it).
+            speed: (knobs.speed != nil && backend != .audio8) ? request.speed : nil,
             numSteps: knobs.numSteps != nil ? request.numStepsOverride : nil,
             guidanceScale: knobs.guidanceScale != nil ? request.guidanceScaleOverride : nil,
             tShift: knobs.tShift != nil ? request.tShiftOverride : nil,

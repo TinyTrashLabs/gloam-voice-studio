@@ -478,7 +478,10 @@ public actor GloamEngine {
         // Whole-take post processing is not chunk-safe. Preserve its exact
         // behavior and expose one final chunk until those processors gain
         // stateful streaming implementations.
-        if request.speed != 1 || request.fx != nil {
+        // Audio8 is the exception for pace: its stretcher is stateful, so the
+        // stream keeps flowing at any speed (fx still needs the whole take).
+        let streamsPace = backend == .audio8 && request.fx == nil && request.speed > 0
+        if (request.speed != 1 && !streamsPace) || request.fx != nil {
             let result = try await performSynthesis(backend: backend, request: request)
             continuation.yield(SynthesisChunk(
                 samples: result.samples, sampleRate: result.sampleRate))
@@ -493,9 +496,18 @@ public actor GloamEngine {
         var sampleCount = 0
         // A capped backend's long line streams piece by piece: the first
         // sentence group plays while the rest render.
+        // One stretcher for the whole stream: primed once, flushed once.
+        let stretcher: PitchPreservingStream? = (streamsPace && request.speed != 1)
+            ? PitchPreservingStream(speed: request.speed, sampleRate: model.sampleRate) : nil
         try await renderPasses(of: plan, backend: backend, model: model, streaming: true) { samples in
-            sampleCount += samples.count
-            continuation.yield(SynthesisChunk(samples: samples, sampleRate: model.sampleRate))
+            let out = stretcher?.push(samples) ?? samples
+            guard !out.isEmpty else { return }
+            sampleCount += out.count
+            continuation.yield(SynthesisChunk(samples: out, sampleRate: model.sampleRate))
+        }
+        if let tail = stretcher?.finish(), !tail.isEmpty {
+            sampleCount += tail.count
+            continuation.yield(SynthesisChunk(samples: tail, sampleRate: model.sampleRate))
         }
         let wall = Date().timeIntervalSince(start)
         engineLog.log("synth stream \(request.text.count, privacy: .public) chars → \(String(format: "%.2f", Double(sampleCount) / Double(model.sampleRate)), privacy: .public)s audio in \(String(format: "%.1f", wall), privacy: .public)s")
