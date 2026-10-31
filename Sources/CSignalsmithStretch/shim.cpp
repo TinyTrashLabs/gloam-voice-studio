@@ -85,4 +85,27 @@ void gvfx_stretch_reset(GVFXStretchRef ref) {
     }
 }
 
+void gvfx_stretch_flush(GVFXStretchRef ref, float *output, int outCount) {
+    if (!ref || !output || outCount <= 0) return;
+    float *outPtrs[1] = { output };
+    try {
+        reinterpret_cast<Wrapper *>(ref)->stretch.flush(outPtrs, outCount);
+    } catch (...) {
+    }
+}
+
+int gvfx_stretch_exact(GVFXStretchRef ref,
+                       const float *input, int inCount,
+                       float *output, int outCount) {
+    if (!ref || !input || !output || inCount <= 0 || outCount <= 0) return 0;
+    const float *inPtrs[1] = { input };
+    float *outPtrs[1] = { output };
+    try {
+        return reinterpret_cast<Wrapper *>(ref)->stretch
+            .exact(inPtrs, inCount, outPtrs, outCount) ? 1 : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
 }

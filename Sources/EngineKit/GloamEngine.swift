@@ -549,7 +549,11 @@ public actor GloamEngine {
         // flow-matching duration conditioning), the provider already handled it —
         // skip the generic post-hoc resample so speed isn't applied twice.
         let postHocSpeed = plan.speed != nil ? 1.0 : request.speed
-        var samples = SpeedAdjust.apply(raw, speed: postHocSpeed)
+        // Audio8 reads ~35% slower than Qwen, so its pace knob must not shift
+        // pitch: it gets a time stretch. Every other backend keeps the resample.
+        var samples = backend == .audio8
+            ? PitchPreservingSpeed.apply(raw, speed: postHocSpeed, sampleRate: model.sampleRate)
+            : SpeedAdjust.apply(raw, speed: postHocSpeed)
         if let preset = request.fx {
             // Effects run after the speed resample so a preset's tuning is not
             // altered by an unrelated `speed`. Driven through the same block

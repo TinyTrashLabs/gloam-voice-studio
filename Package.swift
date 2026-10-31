@@ -237,6 +237,8 @@ let package = Package(
                 // (PocketSpeechModel dlopens the actual library at runtime).
                 "CSherpaOnnx",
                 "VoiceFXKit",
+                // Pitch-preserving pace for Audio8 (PitchPreservingSpeed).
+                "CSignalsmithStretch",
             ],
             path: "Sources/EngineKit",
             // convert_weights.py is a one-time dev tool (LuxTTS torch -> safetensors),
