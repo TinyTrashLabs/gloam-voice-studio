@@ -7,6 +7,7 @@
 // transcript) and the one call a library makes after a voice is saved,
 // imported or its master changes: `prepare`.
 
+import AVFoundation
 import Foundation
 import GVoiceKit
 import QwenANE
@@ -43,6 +44,15 @@ public enum ReferenceSections {
     /// reference codes (about 21.5 frames/s), both transcripts and the output.
     public static let audio8MaxSeconds = 20.0
     public static let audio8CodesName = "ref_codes.npy"
+    /// Records which `ref.wav` the codes were encoded from (its SHA-256); codes without a matching key are not trusted.
+    public static let audio8CodesKeyName = "ref_codes.json"
+    /// Audio8's codec rate: its section is stored at least this fine, so nothing above 12 kHz is lost
+    /// (a >= 44.1 kHz master keeps its own rate; only a lower one is resampled up).
+    public static let audio8SectionRate = 44_100
+    static let audio8CodecHop = 2_048.0
+    static let audio8Codebooks = 10
+    static let audio8SemanticSize: Int32 = 4_096
+    static let audio8ResidualSize: Int32 = 1_024
 
     /// What Audio8 conditions on for one voice: the stored section's audio and its exact transcript,
     /// and where its cached reference codes live.
@@ -51,25 +61,29 @@ public enum ReferenceSections {
         public let text: String
         public let seconds: Double
         public var codesURL: URL { audioURL.deletingLastPathComponent().appendingPathComponent(ReferenceSections.audio8CodesName) }
+        var codesKeyURL: URL { audioURL.deletingLastPathComponent().appendingPathComponent(ReferenceSections.audio8CodesKeyName) }
     }
 
     /// Audio8's section for the voice at `refURL` (`engines/audio8/ref.wav` + `voice.json`): the stored one
     /// when it is current for this master, else one chosen now and stored. A master of at most 20 s is
     /// used whole with its full transcript (stored as a section too, so its codes can be cached beside it
     /// and go stale with it); a longer one is cut once by `ReferenceSection.cut` with the Lux transcript
-    /// rule. Nil when the voice has no transcript (Audio8 cannot clone without the exact words) or the
-    /// master cannot be read. A render never cuts a section it does not store.
+    /// rule. The section is stored at 44.1 kHz or the master's own higher rate. Nil when the voice has no
+    /// transcript (Audio8 cannot clone without the exact words) or the master cannot be read. A render
+    /// never cuts a section it does not store.
     public static func audio8Section(forReference refURL: URL, refText: String) async -> Audio8Section? {
         let dir = LuxReferenceWindow.renditionDir(forReference: refURL, engine: audio8Engine)
         let audioURL = dir.appendingPathComponent(LuxReferenceWindow.renditionAudioName)
         if let stored = LuxReferenceWindow.storedRendition(forReference: refURL, engine: audio8Engine),
            FileManager.default.fileExists(atPath: audioURL.path) {
-            let seconds = stored.derivedFrom.map { $0.endSeconds - $0.startSeconds } ?? 0
+            let seconds = audioSeconds(audioURL) ?? stored.derivedFrom.map { $0.endSeconds - $0.startSeconds } ?? 0
             return Audio8Section(audioURL: audioURL, text: stored.text.trimmingCharacters(in: .whitespacesAndNewlines), seconds: seconds)
         }
         let text = refText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let master = try? LuxOnnx.loadMono24k(refURL), !master.isEmpty else { return nil }
-        let rate = LuxOnnx.sampleRate
+        guard !text.isEmpty else { return nil }
+        let nativeRate = (try? AVAudioFile(forReading: refURL).processingFormat.sampleRate).map { Int($0.rounded()) } ?? 0
+        let rate = max(audio8SectionRate, nativeRate)
+        guard let master = try? LuxOnnx.loadMono(refURL, sampleRate: rate), !master.isEmpty else { return nil }
         let seconds = Double(master.count) / Double(rate)
         let window: LuxReferenceWindow.Window
         if seconds > audio8MaxSeconds {
@@ -82,26 +96,52 @@ public enum ReferenceSections {
             whole.approximate = true   // the master's own transcript, "transcript-slice"
             window = whole
         }
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent(audio8CodesName))   // codes of a replaced section
+        // `store` also removes the codes of whatever section it replaces.
         guard LuxReferenceWindow.store(window, forReference: refURL, sampleRate: rate, engine: audio8Engine) else { return nil }
         return Audio8Section(audioURL: audioURL, text: window.text, seconds: window.seconds)
     }
 
-    /// The cached reference codes (`[10, T]`, int32) of `section`, or nil when absent, unreadable, the wrong
-    /// shape, or older than the section's audio (the section was replaced).
+    private static func audioSeconds(_ url: URL) -> Double? {
+        guard let f = try? AVAudioFile(forReading: url), f.processingFormat.sampleRate > 0 else { return nil }
+        return Double(f.length) / f.processingFormat.sampleRate
+    }
+
+    /// Whether `values` (`[10, frames]`, row-major) are plausible codes for `seconds` of audio.
+    static func audio8CodesAreValid(_ values: [Int32], shape: [Int], seconds: Double) -> Bool {
+        guard shape.count == 2, shape[0] == audio8Codebooks, shape[1] > 0, values.count == shape[0] * shape[1] else { return false }
+        let frames = shape[1]
+        let expected = Int((seconds * Double(audio8SectionRate) / audio8CodecHop).rounded())
+        let ceiling = Int((audio8MaxSeconds * Double(audio8SectionRate) / audio8CodecHop).rounded(.up)) + 2
+        guard abs(frames - expected) <= 2, frames <= ceiling else { return false }
+        for (i, v) in values.enumerated() {
+            let limit = i < frames ? audio8SemanticSize : audio8ResidualSize
+            if v < 0 || v >= limit { return false }
+        }
+        return true
+    }
+
+    /// The cached reference codes (`[10, T]`, int32) of `section`, or nil unless they were encoded from THIS
+    /// `ref.wav` (the recorded SHA-256 matches its bytes; copying, restoring or importing cannot fake that)
+    /// and are plausible (shape, frame count for the section's length, every index inside its codebook).
     public static func audio8CachedCodes(for section: Audio8Section) -> (values: [Int32], frames: Int)? {
-        let fm = FileManager.default
-        func modified(_ u: URL) -> Date? { (try? fm.attributesOfItem(atPath: u.path))?[.modificationDate] as? Date }
-        guard let codesDate = modified(section.codesURL), let audioDate = modified(section.audioURL),
-              codesDate.addingTimeInterval(10) >= audioDate,   // an import rewrites both files within moments
+        guard let keyData = try? Data(contentsOf: section.codesKeyURL),
+              let key = try? JSONDecoder().decode([String: String].self, from: keyData),
+              let recorded = key["audioSha256"], recorded == ReferenceSection.sha256Hex(ofFile: section.audioURL),
               let npy = try? NPYInt32.read(section.codesURL),
-              npy.shape.count == 2, npy.shape[0] == 10, npy.shape[1] > 0 else { return nil }
+              audio8CodesAreValid(npy.values, shape: npy.shape, seconds: section.seconds) else { return nil }
         return (npy.values, npy.shape[1])
     }
 
-    /// Writes the codes of `section` next to it.
+    /// Writes the codes of `section` next to it, with the hash of the audio they were encoded from.
     public static func audio8StoreCodes(_ values: [Int32], frames: Int, for section: Audio8Section) throws {
-        try NPYInt32.write(values, shape: [10, frames], to: section.codesURL)
+        guard audio8CodesAreValid(values, shape: [audio8Codebooks, frames], seconds: section.seconds) else {
+            throw EngineError.generationFailed(backend: .audio8, message: "encoded reference codes are implausible")
+        }
+        guard let hash = ReferenceSection.sha256Hex(ofFile: section.audioURL) else {
+            throw EngineError.generationFailed(backend: .audio8, message: "cannot hash the section audio")
+        }
+        try NPYInt32.write(values, shape: [audio8Codebooks, frames], to: section.codesURL)
+        try JSONEncoder().encode(["audioSha256": hash]).write(to: section.codesKeyURL, options: .atomic)
     }
 
     /// Chooses and stores, once, every section the voice at `refURL` needs for the engines whose lengths

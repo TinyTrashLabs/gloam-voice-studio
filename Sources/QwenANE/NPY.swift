@@ -127,7 +127,8 @@ public enum NPYInt32 {
     public static func read(_ url: URL) throws -> (shape: [Int], values: [Int32]) {
         let npy = try NPY(path: url.path)
         guard npy.descr == "<i4" else { throw QwenANEError.invalid("npy dtype \(npy.descr), expected <i4") }
-        let values = Array(UnsafeBufferPointer(start: npy.i32, count: npy.count))
+        // The pointer is into the mmap: keep `npy` alive until the copy is done.
+        let values = withExtendedLifetime(npy) { Array(UnsafeBufferPointer(start: npy.i32, count: npy.count)) }
         return (npy.shape, values)
     }
 }

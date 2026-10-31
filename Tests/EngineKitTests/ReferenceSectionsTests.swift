@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import GVoiceKit
 import QwenANE
@@ -70,8 +71,10 @@ final class ReferenceSectionsTests: XCTestCase {
         let ref = try makeVoice(master)
         let section = try await unwrapSection(ref, text)
         XCTAssertEqual(section.text, text, "full transcript, no cut")
-        let stored = try LuxOnnx.loadMono24k(section.audioURL)
+        let stored = try LuxOnnx.loadMono(section.audioURL, sampleRate: rate)
         XCTAssertEqual(stored.count, master.count, accuracy: rate / 100, "the whole master")
+        let file = try AVAudioFile(forReading: section.audioURL)
+        XCTAssertEqual(file.processingFormat.sampleRate, 44_100, "stored at the codec's rate, not 24 kHz")
     }
 
     func testAudio8SectionStaleWhenMasterChanges() async throws {
@@ -79,7 +82,7 @@ final class ReferenceSectionsTests: XCTestCase {
         let first = try await unwrapSection(ref, transcript(sentences: 13))
         XCTAssertNotNil(LuxReferenceWindow.storedRendition(forReference: ref, engine: "audio8"))
         // A cached-codes file from the old section must not outlive it.
-        try ReferenceSections.audio8StoreCodes([Int32](repeating: 1, count: 10 * 4), frames: 4, for: first)
+        try storeValidCodes(for: first)
         XCTAssertNotNil(ReferenceSections.audio8CachedCodes(for: first))
 
         try ReferenceSection.wavData(sentences(count: 9, seconds: 5.5, frequency: 330), sampleRate: rate).write(to: ref)
@@ -105,24 +108,88 @@ final class ReferenceSectionsTests: XCTestCase {
         XCTAssertFalse(again.contains("audio8"), "a current section is kept")
     }
 
-    func testCodesRoundTripAndStaleByAge() async throws {
+    private func frames(for section: ReferenceSections.Audio8Section) -> Int {
+        Int((section.seconds * 44_100 / 2_048).rounded())
+    }
+
+    private func storeValidCodes(for section: ReferenceSections.Audio8Section) throws {
+        let n = frames(for: section)
+        try ReferenceSections.audio8StoreCodes((0 ..< 10 * n).map { Int32($0 % 900) }, frames: n, for: section)
+    }
+
+    private func nineSecondSection() async throws -> ReferenceSections.Audio8Section {
         let ref = try makeVoice(sentences(count: 3, seconds: 2.5))
-        let section = try await unwrapSection(ref, transcript(sentences: 3))
+        return try await unwrapSection(ref, transcript(sentences: 3))
+    }
+
+    func testMatchingKeyAcceptsCodesAndNumpyHeaderIsValid() async throws {
+        let section = try await nineSecondSection()
         XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section))
-        let values = (0 ..< 10 * 7).map { Int32($0) }
-        try ReferenceSections.audio8StoreCodes(values, frames: 7, for: section)
+        try storeValidCodes(for: section)
         let cached = try XCTUnwrap(ReferenceSections.audio8CachedCodes(for: section))
-        XCTAssertEqual(cached.values, values)
-        XCTAssertEqual(cached.frames, 7)
-        // numpy-readable header: magic, version 1.0, 64-byte aligned.
+        XCTAssertEqual(cached.frames, frames(for: section))
+        XCTAssertEqual(cached.values.count, 10 * cached.frames)
         let bytes = try Data(contentsOf: section.codesURL)
         XCTAssertEqual(Array(bytes.prefix(8)), [0x93, 0x4E, 0x55, 0x4D, 0x50, 0x59, 1, 0])
         let headerLen = Int(bytes[8]) | Int(bytes[9]) << 8
         XCTAssertEqual((10 + headerLen) % 64, 0)
-        XCTAssertEqual(bytes.count, 10 + headerLen + values.count * 4)
-        // A section newer than its codes (replaced by another tool) invalidates them.
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: section.codesURL.path)
+        XCTAssertEqual(bytes.count, 10 + headerLen + cached.values.count * 4)
+    }
+
+    func testReplacedAudioWithOlderMtimeRejectsCodes() async throws {
+        let section = try await nineSecondSection()
+        try storeValidCodes(for: section)
+        XCTAssertNotNil(ReferenceSections.audio8CachedCodes(for: section))
+        // Different audio, back-dated before the codes: an mtime check would have kept the codes.
+        try ReferenceSection.wavData(sentences(count: 3, seconds: 2.5, frequency: 440), sampleRate: 44_100).write(to: section.audioURL)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-86_400)], ofItemAtPath: section.audioURL.path)
         XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section))
+    }
+
+    func testCodesWithoutAKeyAreIgnored() async throws {
+        let section = try await nineSecondSection()
+        try storeValidCodes(for: section)
+        try FileManager.default.removeItem(at: section.codesKeyURL)   // e.g. codes that arrived in an imported pack
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section))
+    }
+
+    func testOutOfRangeAndWrongShapeCodesAreRejected() async throws {
+        let section = try await nineSecondSection()
+        try storeValidCodes(for: section)
+        let n = frames(for: section)
+        func plant(_ values: [Int32], frames f: Int) throws {   // valid key, hostile payload
+            try NPYInt32.write(values, shape: [10, f], to: section.codesURL)
+        }
+        let good = (0 ..< 10 * n).map { Int32($0 % 900) }
+        var big = good; big[3] = 4_096                     // semantic row out of range
+        try plant(big, frames: n)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section), "row 0 index 4096")
+        var residual = good; residual[n + 1] = 1_024      // residual row out of range
+        try plant(residual, frames: n)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section), "residual index 1024")
+        var negative = good; negative[5] = -1
+        try plant(negative, frames: n)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section), "negative index")
+        try plant(Array(good.prefix(10 * (n + 5))) + [Int32](repeating: 1, count: 50), frames: n + 5)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section), "wrong frame count")
+        try NPYInt32.write(Array(good.prefix(9 * n)), shape: [9, n], to: section.codesURL)
+        XCTAssertNil(ReferenceSections.audio8CachedCodes(for: section), "wrong codebook count")
+        try plant(good, frames: n)
+        XCTAssertNotNil(ReferenceSections.audio8CachedCodes(for: section), "the good payload is accepted again")
+        XCTAssertThrowsError(try ReferenceSections.audio8StoreCodes([Int32](repeating: 1, count: 40), frames: 4, for: section))
+    }
+
+    func testStoringANewSectionRemovesCodes() async throws {
+        let section = try await nineSecondSection()
+        try storeValidCodes(for: section)
+        // The window editor's path: the shared store, not audio8Section.
+        let ref = section.audioURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ref.wav")
+        let window = LuxReferenceWindow.Window(samples: sentences(count: 1, seconds: 3), text: "Edited.", seconds: 3.5,
+                                               startSeconds: 0, sourceSeconds: 9)
+        XCTAssertTrue(LuxReferenceWindow.store(window, forReference: ref, sampleRate: rate, engine: "audio8"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: section.codesURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: section.codesKeyURL.path))
     }
 }
 

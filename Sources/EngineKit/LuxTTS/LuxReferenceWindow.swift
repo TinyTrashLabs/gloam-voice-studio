@@ -136,6 +136,10 @@ public enum LuxReferenceWindow {
         let dir = renditionDir(forReference: refURL, engine: engine)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let audioURL = dir.appendingPathComponent(renditionAudioName)
+        // A new section voids anything cached from the old one (Audio8's reference codes and their key).
+        for stale in ["ref_codes.npy", "ref_codes.json"] {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(stale))
+        }
         let wav = ReferenceSection.wavData(window.samples, sampleRate: sampleRate)
         guard (try? wav.write(to: audioURL, options: .atomic)) != nil else { return false }
         let rendition = Rendition(

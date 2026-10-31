@@ -144,9 +144,14 @@ public enum LuxOnnx {
     /// Decode any audio file to mono float at 24 kHz. The ONNX path carries no
     /// MLX dependency, so it cannot borrow MLXAudioCore's loader.
     public static func loadMono24k(_ url: URL) throws -> [Float] {
+        try loadMono(url, sampleRate: LuxMel.sampleRate)
+    }
+
+    /// Decode any audio file to mono float at `sampleRate`.
+    public static func loadMono(_ url: URL, sampleRate: Int) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
         guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                         sampleRate: Double(LuxMel.sampleRate),
+                                         sampleRate: Double(sampleRate),
                                          channels: 1, interleaved: false),
               let converter = AVAudioConverter(from: file.processingFormat, to: target)
         else { throw SynthError.badPrompt("\(url.lastPathComponent): unsupported audio format") }

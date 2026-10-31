@@ -4,6 +4,7 @@ import MLXAudioCore
 import MLXAudioTTS
 import MLXLMCommon
 import MLXRandom
+import os
 
 extension BackendID {
     /// Breeze's own sampler defaults, for the app's Advanced sliders and their
@@ -16,6 +17,8 @@ extension BackendID {
         return (p.topP, p.topK, p.repetitionPenalty ?? 1, BreezeTTSModel.defaultCFGScale)
     }
 }
+
+private let audio8Log = Logger(subsystem: "fm.gloam.studio", category: "audio8")
 
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
@@ -332,7 +335,8 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         audio8EncodeCalls.add(1)
         eval(codes)
         let frames = codes.dim(1)
-        try? ReferenceSections.audio8StoreCodes(codes.asArray(Int32.self), frames: frames, for: section)
+        do { try ReferenceSections.audio8StoreCodes(codes.asArray(Int32.self), frames: frames, for: section) }
+        catch { audio8Log.error("could not cache Audio8 reference codes (\(String(describing: error), privacy: .public)); they will be re-encoded") }
         return (codes, section.text)
     }
 
