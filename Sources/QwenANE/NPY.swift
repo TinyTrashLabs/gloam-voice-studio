@@ -101,3 +101,33 @@ func widenHalf(_ src: UnsafePointer<UInt16>, _ dst: UnsafeMutablePointer<Float>,
     if exp == 31 { return Float(bitPattern: sign | 0x7F80_0000 | (man << 13)) }
     return Float(bitPattern: sign | UInt32(exp - 15 + 127) << 23 | (man << 13))
 }
+
+/// Whole-file int32 matrix helpers (Audio8's cached reference codes, `[codebooks, frames]`, C order).
+/// Public so EngineKit can cache codes beside a voice's stored section without the mmap class.
+public enum NPYInt32 {
+    /// Writes `values` (row-major) as a version-1.0 `<i4` .npy, atomically.
+    public static func write(_ values: [Int32], shape: [Int], to url: URL) throws {
+        guard shape.reduce(1, *) == values.count, !shape.isEmpty else {
+            throw QwenANEError.invalid("npy shape \(shape) does not match \(values.count) values")
+        }
+        let dims = shape.count == 1 ? "(\(shape[0]),)" : "(" + shape.map(String.init).joined(separator: ", ") + ")"
+        var header = "{'descr': '<i4', 'fortran_order': False, 'shape': \(dims), }"
+        // magic(6) + version(2) + len(2) + header + '\n' must be a multiple of 64.
+        let pad = (64 - ((10 + header.utf8.count + 1) % 64)) % 64
+        header += String(repeating: " ", count: pad) + "\n"
+        var data = Data([0x93]) + Data("NUMPY".utf8) + Data([1, 0])
+        let n = UInt16(header.utf8.count)
+        data.append(UInt8(n & 0xFF)); data.append(UInt8(n >> 8))
+        data.append(Data(header.utf8))
+        values.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Reads an `<i4` .npy; throws on any other dtype or a malformed file.
+    public static func read(_ url: URL) throws -> (shape: [Int], values: [Int32]) {
+        let npy = try NPY(path: url.path)
+        guard npy.descr == "<i4" else { throw QwenANEError.invalid("npy dtype \(npy.descr), expected <i4") }
+        let values = Array(UnsafeBufferPointer(start: npy.i32, count: npy.count))
+        return (npy.shape, values)
+    }
+}

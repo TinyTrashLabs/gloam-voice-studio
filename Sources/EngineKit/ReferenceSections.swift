@@ -38,8 +38,74 @@ public enum ReferenceSections {
         return cut.samples
     }
 
+    public static let audio8Engine = "audio8"
+    /// Audio8 conditions on at most this much reference: its 2,048-position context is shared by the
+    /// reference codes (about 21.5 frames/s), both transcripts and the output.
+    public static let audio8MaxSeconds = 20.0
+    public static let audio8CodesName = "ref_codes.npy"
+
+    /// What Audio8 conditions on for one voice: the stored section's audio and its exact transcript,
+    /// and where its cached reference codes live.
+    public struct Audio8Section: Sendable, Equatable {
+        public let audioURL: URL
+        public let text: String
+        public let seconds: Double
+        public var codesURL: URL { audioURL.deletingLastPathComponent().appendingPathComponent(ReferenceSections.audio8CodesName) }
+    }
+
+    /// Audio8's section for the voice at `refURL` (`engines/audio8/ref.wav` + `voice.json`): the stored one
+    /// when it is current for this master, else one chosen now and stored. A master of at most 20 s is
+    /// used whole with its full transcript (stored as a section too, so its codes can be cached beside it
+    /// and go stale with it); a longer one is cut once by `ReferenceSection.cut` with the Lux transcript
+    /// rule. Nil when the voice has no transcript (Audio8 cannot clone without the exact words) or the
+    /// master cannot be read. A render never cuts a section it does not store.
+    public static func audio8Section(forReference refURL: URL, refText: String) async -> Audio8Section? {
+        let dir = LuxReferenceWindow.renditionDir(forReference: refURL, engine: audio8Engine)
+        let audioURL = dir.appendingPathComponent(LuxReferenceWindow.renditionAudioName)
+        if let stored = LuxReferenceWindow.storedRendition(forReference: refURL, engine: audio8Engine),
+           FileManager.default.fileExists(atPath: audioURL.path) {
+            let seconds = stored.derivedFrom.map { $0.endSeconds - $0.startSeconds } ?? 0
+            return Audio8Section(audioURL: audioURL, text: stored.text.trimmingCharacters(in: .whitespacesAndNewlines), seconds: seconds)
+        }
+        let text = refText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let master = try? LuxOnnx.loadMono24k(refURL), !master.isEmpty else { return nil }
+        let rate = LuxOnnx.sampleRate
+        let seconds = Double(master.count) / Double(rate)
+        let window: LuxReferenceWindow.Window
+        if seconds > audio8MaxSeconds {
+            guard let picked = await LuxReferenceWindow.pick(
+                samples: master, sampleRate: rate, refText: text, maxSeconds: audio8MaxSeconds) else { return nil }
+            window = picked
+        } else {
+            var whole = LuxReferenceWindow.Window(
+                samples: master, text: text, seconds: seconds, startSeconds: 0, sourceSeconds: seconds)
+            whole.approximate = true   // the master's own transcript, "transcript-slice"
+            window = whole
+        }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(audio8CodesName))   // codes of a replaced section
+        guard LuxReferenceWindow.store(window, forReference: refURL, sampleRate: rate, engine: audio8Engine) else { return nil }
+        return Audio8Section(audioURL: audioURL, text: window.text, seconds: window.seconds)
+    }
+
+    /// The cached reference codes (`[10, T]`, int32) of `section`, or nil when absent, unreadable, the wrong
+    /// shape, or older than the section's audio (the section was replaced).
+    public static func audio8CachedCodes(for section: Audio8Section) -> (values: [Int32], frames: Int)? {
+        let fm = FileManager.default
+        func modified(_ u: URL) -> Date? { (try? fm.attributesOfItem(atPath: u.path))?[.modificationDate] as? Date }
+        guard let codesDate = modified(section.codesURL), let audioDate = modified(section.audioURL),
+              codesDate.addingTimeInterval(10) >= audioDate,   // an import rewrites both files within moments
+              let npy = try? NPYInt32.read(section.codesURL),
+              npy.shape.count == 2, npy.shape[0] == 10, npy.shape[1] > 0 else { return nil }
+        return (npy.values, npy.shape[1])
+    }
+
+    /// Writes the codes of `section` next to it.
+    public static func audio8StoreCodes(_ values: [Int32], frames: Int, for section: Audio8Section) throws {
+        try NPYInt32.write(values, shape: [10, frames], to: section.codesURL)
+    }
+
     /// Chooses and stores, once, every section the voice at `refURL` needs for the engines whose lengths
-    /// its master exceeds (Lux 30 s with its transcript, Pocket 10 s). Call after a voice is saved,
+    /// its master exceeds (Lux 30 s with its transcript, Pocket 10 s, Audio8 20 s with its transcript). Call after a voice is saved,
     /// imported or its master replaced; sections already stored for this master are kept as they are.
     /// Qwen's section is made by `QwenVoicePrep.prepareEngineFolder` (it needs the model files to know
     /// the encoder's length). Returns the engines whose section was written now.
@@ -56,6 +122,10 @@ public enum ReferenceSections {
         if !had, (try? pocketSamples(forReference: refURL)) != nil,
            LuxReferenceWindow.storedRendition(forReference: refURL, engine: pocketEngine, requiresText: false) != nil {
             written.append(pocketEngine)
+        }
+        if LuxReferenceWindow.storedRendition(forReference: refURL, engine: audio8Engine) == nil,
+           await audio8Section(forReference: refURL, refText: refText) != nil {
+            written.append(audio8Engine)
         }
         return written
     }
