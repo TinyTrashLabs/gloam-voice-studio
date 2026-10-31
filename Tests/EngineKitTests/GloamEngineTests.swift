@@ -1,4 +1,5 @@
 import XCTest
+import MLXLMCommon
 @testable import EngineKit
 
 final class FakeModel: SpeechModel, @unchecked Sendable {
@@ -278,5 +279,118 @@ final class GloamEngineTests: XCTestCase {
         async let r4 = engine.synthesize(backend: .chatterboxTurbo, request: req)
         _ = try await (r1, r2, r3, r4)
         XCTAssertEqual(overlapModel.maxConcurrent, 1)
+    }
+}
+
+
+// MARK: - Audio8 streaming (model-backed; skipped unless AUDIO8_MODEL_DIR is set)
+
+final class Audio8StreamingTests: XCTestCase {
+    private static var refWav: String { ProcessInfo.processInfo.environment["AUDIO8_REF_WAV"] ?? "" }
+    private static var refText: String { ProcessInfo.processInfo.environment["AUDIO8_REF_TEXT"] ?? "" }
+    private static let line = "Welcome back to the late show. Tonight we have a long list of songs for you, and a few stories about the people who made them. Pour yourself something warm, settle in, and stay awhile, because we are not going anywhere."
+
+    private func loadModel() async throws -> any SpeechModel {
+        guard let dir = ProcessInfo.processInfo.environment["AUDIO8_MODEL_DIR"], !dir.isEmpty else {
+            throw XCTSkip("set AUDIO8_MODEL_DIR to run Audio8 model-backed tests")
+        }
+        try XCTSkipUnless(!Self.refWav.isEmpty && !Self.refText.isEmpty
+                          && FileManager.default.fileExists(atPath: Self.refWav),
+                          "set AUDIO8_REF_WAV and AUDIO8_REF_TEXT (reference clip and its exact transcript)")
+        let provider = MLXModelProvider(modelPathResolver: { $0 == .audio8 ? dir : nil })
+        return try await provider.loadModel(backend: .audio8)
+    }
+
+    private var request: ProviderRequest {
+        ProviderRequest(text: Self.line, refAudioPath: Self.refWav, refText: Self.refText,
+                        temperature: 0.7, topP: 0.8, seed: 7)
+    }
+
+    func testAudio8StreamsMoreThanOneChunk() async throws {
+        let model = try await loadModel()
+        let start = Date()
+        var arrivals: [Double] = []
+        var total = 0
+        for try await chunk in model.synthesizeStream(request) {
+            arrivals.append(Date().timeIntervalSince(start))
+            total += chunk.count
+        }
+        let wall = Date().timeIntervalSince(start)
+        print("AUDIO8 stream: chunks=\(arrivals.count) first=\(arrivals.first ?? -1)s wall=\(wall)s audio=\(Double(total) / Double(model.sampleRate))s")
+        XCTAssertGreaterThanOrEqual(arrivals.count, 3)
+        XCTAssertLessThan(arrivals.first ?? .infinity, wall * 0.4,
+                          "first chunk must land before 40% of wall time (arrivals \(arrivals), wall \(wall))")
+    }
+
+    func testAudio8ParameterMappingIsSharedAndExposesOnlyTempTopPSeed() {
+        var base = GenerateParameters(maxTokens: 100, temperature: 0.5, topP: 0.9, topK: 40)
+        base.repetitionPenalty = 1.1
+        let request = ProviderRequest(text: "x", temperature: 0.8, topP: 0.7, topK: 5,
+                                      repetitionPenalty: 1.5, seed: 9)
+        let p = MLXSpeechModel.audio8Parameters(request, base: base)
+        XCTAssertEqual(p.temperature, 0.8)
+        XCTAssertEqual(p.topP, 0.7)
+        XCTAssertEqual(p.seed, 9)
+        XCTAssertEqual(p.topK, 40, "topK is not exposed for Audio8")
+        XCTAssertEqual(p.repetitionPenalty, 1.1, "repetition penalty is not exposed for Audio8")
+        let untouched = MLXSpeechModel.audio8Parameters(ProviderRequest(text: "x"), base: base)
+        XCTAssertEqual(untouched.temperature, 0.5)
+        XCTAssertEqual(untouched.topP, 0.9)
+    }
+
+    func testAudio8SynthesizeConcatenatesTheStream() async throws {
+        let model = try await loadModel()
+        let samples = try await model.synthesize(request)
+        XCTAssertGreaterThan(samples.count, model.sampleRate * 3)
+    }
+
+    func testAudio8StreamCancelStopsPromptly() async throws {
+        let model = try await loadModel()
+        let stream = model.synthesizeStream(request)
+        let firstSeen = expectation(description: "first chunk")
+        let finishedAt = Box<Date?>(nil)
+        let afterCancel = Box(0)
+        let cancelledAt = Box<Date?>(nil)
+        let consumer = Task {
+            do {
+                for try await _ in stream {
+                    if cancelledAt.value != nil { afterCancel.value += 1 }
+                    if finishedAt.value == nil, cancelledAt.value == nil { firstSeen.fulfill() }
+                    try Task.checkCancellation()
+                }
+            } catch {}
+            finishedAt.value = Date()
+        }
+        await fulfillment(of: [firstSeen], timeout: 120)
+        cancelledAt.value = Date()
+        consumer.cancel()
+        await consumer.value
+        let elapsed = finishedAt.value!.timeIntervalSince(cancelledAt.value!)
+        XCTAssertLessThan(elapsed, 1.0, "stream must finish within 1 s of cancel")
+        XCTAssertLessThanOrEqual(afterCancel.value, 1, "no further chunks after cancel")
+        // Producer side: the generating task itself ended within 1 s of the cancel.
+        let speech = try XCTUnwrap(model as? MLXSpeechModel)
+        let deadline = Date().addingTimeInterval(1.0)
+        while speech.audio8ActiveGenerations.value > 0, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(speech.audio8ActiveGenerations.value, 0, "generation still running 1 s after cancel")
+        // GPU is free again: a short render completes right away.
+        let t0 = Date()
+        let again = try await model.synthesize(ProviderRequest(text: "Hello there.", refAudioPath: Self.refWav,
+                                                               refText: Self.refText, seed: 1))
+        XCTAssertFalse(again.isEmpty)
+        let seconds = Double(again.count) / Double(model.sampleRate)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), max(10, seconds * 8), "follow-up render was starved by a leaked generation")
+    }
+}
+
+private final class Box<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _v: T
+    init(_ v: T) { _v = v }
+    var value: T {
+        get { lock.lock(); defer { lock.unlock() }; return _v }
+        set { lock.lock(); defer { lock.unlock() }; _v = newValue }
     }
 }
