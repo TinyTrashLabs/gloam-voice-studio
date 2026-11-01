@@ -61,4 +61,15 @@ final class BackendSurfacesTests: XCTestCase {
         XCTAssertLessThan(studio.firstIndex(of: .fishS2Pro)!,
                           studio.firstIndex(of: .chatterbox)!)
     }
+
+    /// The Neural Engine builds need macOS 15. On macOS 14 they used to be
+    /// pickable and downloadable (2 GB) and then fail with "needs macOS 15":
+    /// they appear on no surface there.
+    func testNeuralEngineBuildsAreHiddenBeforeMacOS15() {
+        for surface: BackendSurfaces in [.studio, .chatVoice, .apiServer, .downloadable] {
+            XCTAssertFalse(BackendID.on(surface, macOSMajor: 14).contains(where: \.isQwenANE), "\(surface)")
+            XCTAssertTrue(BackendID.on(surface, macOSMajor: 15).contains(.qwen06BANE), "\(surface)")
+        }
+        XCTAssertEqual(BackendID.on(.studio, macOSMajor: 14).count, BackendID.on(.studio, macOSMajor: 15).count - 2)
+    }
 }

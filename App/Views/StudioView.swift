@@ -162,9 +162,7 @@ struct StudioView: View {
             // Partitioned rather than sorted by a `contains`-pair predicate:
             // that comparator is not a strict weak ordering, which can trap
             // inside Swift's sort.
-            let compatible = BackendID.allCases.filter {
-                $0.surfaces.contains(.studio) && caps.supports($0)
-            }
+            let compatible = BackendID.on(.studio).filter { caps.supports($0) }
             let orderedCompatible = compatible.filter { caps.engines.contains($0.rawValue) }
                 + compatible.filter { !caps.engines.contains($0.rawValue) }
             // Every engine that can speak this voice, baked renditions first —

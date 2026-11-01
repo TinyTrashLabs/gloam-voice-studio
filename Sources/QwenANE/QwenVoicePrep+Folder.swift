@@ -110,7 +110,9 @@ extension QwenVoicePrep {
         encode: (Data, String) throws -> QwenVoiceFiles
     ) async throws -> Prepared {
         var store = storeFolder ?? true
-        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Ended as a sentence: a stored voice.json without the full stop no longer matches, so a voice
+        // prepared before this is re-encoded once, from the same audio.
+        let text = ReferenceSection.endingASentence(transcript)
         let masterSha = sha256Hex(masterWAV)
         let all = try samples(of: masterWAV)
         let trimmedCount = ReferenceTail.end(of: all, sampleRate: sampleRate)

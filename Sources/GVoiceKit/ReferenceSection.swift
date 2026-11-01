@@ -291,6 +291,14 @@ public enum ReferenceSection {
     }
 
     /// Whether `text` ends a sentence (`. ! ? …`, optionally followed by closing quotes/brackets).
+    /// `text`, trimmed, with a full stop added unless it already ends a sentence. Qwen reads a reference
+    /// transcript and the script as one stream, so one that stops mid-sentence ("...West Coast crew") runs
+    /// into the script and every render opens with its last word.
+    public static func endingASentence(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty || endsSentence(t) ? t : t + "."
+    }
+
     public static func endsSentence(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmed = t.last.map { "\"'”’»)]".contains($0) } == true ? String(t.dropLast()) : t

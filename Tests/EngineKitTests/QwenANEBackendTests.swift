@@ -257,7 +257,9 @@ final class QwenANEBackendTests: XCTestCase {
         // as the render queue is: the recognizer reports back on the main queue, which prep blocks on.
         do {
             _ = try await Task.detached {
-                try QwenANESpeechModel.prepare(reference: ref, transcript: "some words of the master",
+                // About 0.8 words a second: a transcript too sparse for its audio is never stored
+                // (ReferenceSection.lengthIsPlausible), which would hide the window this test checks.
+                try QwenANESpeechModel.prepare(reference: ref, transcript: String(repeating: "some words of the master ", count: 10),
                                                modelsDirectory: dir, cacheRoot: dir.appendingPathComponent("cache"))
             }.value
             XCTFail("an empty model set cannot prepare a voice")

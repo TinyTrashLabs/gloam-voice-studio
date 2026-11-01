@@ -805,8 +805,26 @@ extension BackendID {
     /// a re-download only cleans the repo's own top-level folders. See `HFSnapshotLayout.prune`.
     public var sharesFolderWithUser: Bool { isQwenANE }
 
-    /// Backends appearing on `surface`, in declaration order.
-    public static func on(_ surface: BackendSurfaces) -> [BackendID] {
-        allCases.filter { $0.surfaces.contains(surface) }
+    /// The oldest macOS that can run this backend: the Neural Engine builds use
+    /// Core ML APIs from macOS 15 (`QwenANESpeechModel`); the rest run on the
+    /// app's minimum, 14.
+    public var minimumMacOSMajor: Int { isQwenANE ? 15 : 14 }
+
+    /// Whether this Mac's macOS can run it. On iOS (18+) every backend that
+    /// exists there qualifies.
+    public func runs(onMacOSMajor major: Int) -> Bool {
+        #if os(macOS)
+        major >= minimumMacOSMajor
+        #else
+        true
+        #endif
+    }
+
+    /// Backends appearing on `surface` on this Mac, in declaration order. A
+    /// backend this macOS can't run appears nowhere: not pickable, not offered
+    /// for download (a 2 GB Neural Engine set on macOS 14 would only fail).
+    public static func on(_ surface: BackendSurfaces,
+                          macOSMajor: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion) -> [BackendID] {
+        allCases.filter { $0.surfaces.contains(surface) && $0.runs(onMacOSMajor: macOSMajor) }
     }
 }
