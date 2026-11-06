@@ -39,6 +39,10 @@ public enum BackendID: String, CaseIterable, Sendable, Codable {
     case qwenCustom = "qwen3-custom"
     case chatterboxTurbo = "chatterbox-turbo"
     case fishS2Pro = "fish-s2-pro"
+    /// Tiny Trash Labs' Audio8 TTS (0.6B, Apache 2.0): a Fish-architecture (`fish_qwen3_omni`) model
+    /// that clones from a reference clip AND its exact transcript, 44.1 kHz. Loads through the same
+    /// generic path as Fish; behaviour differences live in config keys.
+    case audio8
     /// BreezeBlue's Breeze TTS 2 (3B, English + Chinese). Clones from a
     /// reference pair, designs a voice from a Direction alone, and — the only
     /// backend that does both at once — lets a Direction steer a cloned voice
@@ -423,6 +427,13 @@ extension BackendID {
             ControlSurface(voiceClone: .optional, instruct: .none,
                            language: false,
                            knobs: Knobs(temperature: 0.3...1.2))
+        case .audio8:
+            // Clone is optional (a stock voice works), but a reference needs its transcript
+            // (`needsRefText`). No tags and no Direction: emotion comes from the reference clip.
+            // The speed range is Task 11's pitch-preserving control.
+            ControlSurface(voiceClone: .optional, instruct: .none,
+                           language: false,
+                           knobs: Knobs(temperature: 0.3...1.2, speed: 0.9...1.25))
         case .breezeTTS2:
             // Clone, design (Direction with no voice), or both. Language is
             // read from the text itself — the model's prompt has no language
@@ -498,6 +509,9 @@ extension BackendID {
         // Breeze prompts with "[S0]<transcript>" ahead of the reference codes,
         // and the Swift port throws outright on a reference with no transcript.
         case .breezeTTS2: true
+        // Audio8 prompts with the reference transcript ahead of the reference codes (like Fish's
+        // prompt), and garbles without the exact words: the planner rejects the pair.
+        case .audio8: true
         case .dia2: false   // optional reference clip is prefix conditioning, not a transcript pair
         default: false
         }
@@ -553,6 +567,10 @@ extension BackendID {
     public var maxSecondsPerPass: Double? {
         switch self {
         case .breezeTTS2: 60
+        // 2,048 context positions shared by reference codes, both transcripts and output:
+        // (2048 - 20 s reference x 21.5 frames/s - ~400 transcript/prompt positions) / 21.5
+        // frames/s = ~55 s, divided by a 1.35 slow-pace margin = ~41 s; 40 s to round down.
+        case .audio8: 40
         case .qwen06B, .qwen06BMobile, .qwen17B, .qwenDesign, .qwenCustom,
              .chatterboxTurbo, .fishS2Pro, .chatterbox, .kokoro, .supertonic,
              .luxTTS, .pocketTTS, .dia2: nil
@@ -573,6 +591,7 @@ extension BackendID {
         case .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17BANE, .qwen17B: .variantClipOnly   // pure clone; emotion via acted clips
         case .qwenDesign, .qwenCustom: .textDriven   // emotion via instruct/style prompt
         case .fishS2Pro: .inlineMarker               // emotion via leading [marker] text
+        case .audio8: .variantClipOnly               // no tags, no direction: prosody comes from the ref clip
         case .breezeTTS2: .directed                  // emotion is phrased into its instruction
         case .chatterbox: .liveKnob(.exaggeration)
         case .chatterboxTurbo: .variantClipOnly      // "emotion_adv": false — no knob
@@ -651,6 +670,14 @@ extension BackendID {
             BackendSpec(modelRepo: "mlx-community/chatterbox-turbo-fp16",
                         defaultSampleRate: 24000, honorsTags: false,
                         needsLicenseAck: false, needsRefAudio: true,
+                        minRAMBytes: 8_000_000_000)
+        case .audio8:
+            // Apache 2.0, so no license ack. 2,565,323,043 bytes on HF. RAM floor: measured
+            // render peak 3.93 GB (Benson line, streaming, 2.9 GB of it resident weights) x 2 = 7.86 GB,
+            // rounded up to the next GB.
+            BackendSpec(modelRepo: "tinytrashlabs/Audio8-TTS-0.6B-MLX",
+                        defaultSampleRate: 44100, honorsTags: false,
+                        needsLicenseAck: false, needsRefAudio: false,
                         minRAMBytes: 8_000_000_000)
         case .fishS2Pro:
             BackendSpec(modelRepo: "mlx-community/fish-audio-s2-pro-bf16",
@@ -764,7 +791,7 @@ extension BackendID {
     /// order in the enum IS presentation order. Curated lists are gone.
     public var surfaces: BackendSurfaces {
         switch self {
-        case .qwen06B, .qwen06BMobile, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .chatterbox:
+        case .qwen06B, .qwen06BMobile, .qwen17B, .qwenCustom, .chatterboxTurbo, .fishS2Pro, .audio8, .chatterbox:
             [.studio, .chatVoice, .apiServer, .downloadable]
         case .breezeTTS2:
             // Not `.creation`: the Voice Foundry is built around qwen3-design

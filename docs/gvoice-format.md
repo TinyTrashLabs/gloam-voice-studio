@@ -113,7 +113,9 @@ length. Some engines condition on less: LuxTTS takes at most 30 s (its
 saturating relative positional encoding stops separating positions past
 roughly 50 s, and the sampler degrades into bursts around dead air — nothing
 errors, the audio simply comes back wrong), Pocket 10 s, Qwen3-TTS 0.6B as
-much as its speech encoder's fixed input (40 s; 20 s on older model sets).
+much as its speech encoder's fixed input (40 s; 20 s on older model sets),
+Audio8 20 s (its 2,048-position context is shared by the reference codes at
+about 21.5 frames/s, both transcripts and the output).
 
 **An engine never picks a section while it renders.** The section is chosen
 ONCE, when the voice is prepared — saved, imported, its master replaced, or
@@ -134,7 +136,7 @@ the one in GVoiceKit / QwenANE (`QwenVoicePrep.prepareEngineFolder`) /
 EngineKit (`ReferenceSections.prepare`); an app that only renders reads the
 folders.
 
-For `lux-tts` and `pocket-tts` the folder holds:
+For `lux-tts`, `pocket-tts` and `audio8` the folder holds:
 
 ```json
 {
@@ -155,7 +157,25 @@ For `lux-tts` and `pocket-tts` the folder holds:
 `sourceSha256` is the hash of the master the section was cut from: a reader
 whose master no longer hashes to it MUST treat the section as stale and
 prepare a new one; a section without it (written before the field existed) is
-accepted. Pocket needs no transcript, so its `text` is empty. For
+accepted. Pocket needs no transcript, so its `text` is empty.
+
+`audio8` needs the section's exact transcript (a voice without one cannot be
+cloned by it). A master of at most 20 s is stored whole with its full
+transcript (`by: "transcript-slice"`, span 0 to the master's length); a longer
+one is cut once to at most 20 s by the same rule as `lux-tts`. Its `ref.wav` is
+stored at 44.1 kHz, or at the master's own rate when that is higher (Audio8's
+codec runs at 44.1 kHz and reproduces the reference's top end, so it is never
+stored below it). Its folder is `ref.wav` + `voice.json` + `ref_codes.npy` +
+`ref_codes.json`. `ref_codes.npy` is the codec codes of `ref.wav`, int32
+`[10, T]` (T about 21.5 per second of audio; row 0 indices in 0..<4096, rows 1-9
+in 0..<1024), computed the first time Audio8 renders the voice (it needs the
+model) and reused after. `ref_codes.json` is `{"audioSha256": "<SHA-256 of
+ref.wav>"}`. The codes are a cache of the section, not part of its identity: a
+reader uses them only when that hash matches the current `ref.wav` bytes and
+the codes pass validation (shape, a frame count within 2 of the section's
+length, indices inside their codebooks); otherwise it ignores them and encodes
+again. Codes arriving in an imported pack with no matching key are therefore
+ignored. Storing a new section deletes both files. For
 `qwen3-0.6b` the same facts live in its own `voice.json` (below): `ref.wav`
 is the section, `derivedFrom.audio` is `engines/qwen3-0.6b/ref.wav`,
 `startSeconds`/`endSeconds` its span, and the codes are computed FROM it.
@@ -174,7 +194,9 @@ derives output length from the prompt's frames-per-token ratio, so a short
 transcript against long audio inflates that ratio and the predicted duration
 runs away with it.
 
-A reader that finds a master inside an engine's limit uses `source/`. One
+A reader that finds a master inside an engine's limit uses `source/` (the one
+exception is `audio8`, below: it always stores a section, even for a short
+master, because its cached codes are keyed on the section's bytes). One
 that finds a master over the limit and no stored section prepares it once and
 stores it; it MUST NOT refuse the voice for its length and MUST NOT cut
 anything it does not store. A pack's `revision` should be raised when a

@@ -35,7 +35,7 @@ final class ReferenceSectionsPackTests: XCTestCase {
     func testSectionsAreChosenOnceStoredAndTravelByteForByte() async throws {
         _ = try lib.save(name: "Cruz", refWav: master(seconds: 70), refText: words)
         let written = await lib.prepareSections("cruz")
-        XCTAssertEqual(Set(written), ["lux-tts", "pocket-tts"])
+        XCTAssertEqual(Set(written), ["lux-tts", "pocket-tts", "audio8"])
 
         let lux = try files(lib, "lux-tts"), pocket = try files(lib, "pocket-tts")
         XCTAssertNotNil(lux["ref.wav"]); XCTAssertNotNil(pocket["ref.wav"])
@@ -71,10 +71,12 @@ final class ReferenceSectionsPackTests: XCTestCase {
         XCTAssertNotEqual(try files(lib, "lux-tts")["ref.wav"], before)
     }
 
-    func testAMasterThatFitsGetsNoSections() async throws {
+    func testAMasterThatFitsGetsOnlyAudio8SoItsCodesCanBeCachedBesideIt() async throws {
         _ = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
         let written = await lib.prepareSections("cruz")
-        XCTAssertEqual(written, [])
+        XCTAssertEqual(written, ["audio8"])
+        let again = await lib.prepareSections("cruz")
+        XCTAssertEqual(again, [])
     }
 
     /// A section is part of the pack: writing one is a new revision; keeping one is not.
@@ -87,5 +89,70 @@ final class ReferenceSectionsPackTests: XCTestCase {
         let again = await lib.prepareSections("cruz")
         XCTAssertEqual(again, [])
         XCTAssertEqual(try lib.meta("cruz").revision, before + 1)
+    }
+
+    private func audio8Text(_ l: VoiceLibrary) throws -> String? {
+        guard let url = try l.entry("cruz").engines["audio8"]?["voice.json"] else { return nil }
+        return try JSONDecoder().decode(LuxReferenceWindow.Rendition.self, from: Data(contentsOf: url)).text
+    }
+
+    /// A corrected transcript must reach Audio8: its section and cached codes were sliced from the old words.
+    func testACorrectedTranscriptReplacesTheAudio8SectionAndItsCodes() async throws {
+        _ = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
+        await lib.prepareSections("cruz")
+        XCTAssertEqual(try audio8Text(lib), words)
+        let refURL = try XCTUnwrap(try lib.entry("cruz").refURL)
+        let section = try await unwrapAudio8Section(refURL, words)
+        try ReferenceSections.audio8StoreCodes([Int32](repeating: 1, count: 10 * Int((section.seconds * 44_100 / 2_048).rounded())),
+                                               frames: Int((section.seconds * 44_100 / 2_048).rounded()), for: section)
+        XCTAssertNotNil(ReferenceSections.audio8CachedCodes(for: section))
+
+        let fixed = "alpha beta gamma delta. epsilon zeta eta theta, corrected."
+        _ = try lib.update("cruz", refText: fixed)
+        XCTAssertNil(try audio8Text(lib), "the section sliced from the old words is gone")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: section.codesURL.path), "and so are its codes")
+
+        // Whether by the next prepare or by the first render, the section carries the corrected words.
+        let rewritten = await lib.prepareSections("cruz")
+        XCTAssertTrue(rewritten.contains("audio8"))
+        XCTAssertEqual(try audio8Text(lib), fixed)
+        let fresh = try await unwrapAudio8Section(refURL, fixed)
+        XCTAssertEqual(fresh.text, fixed)
+    }
+
+    func testRewritingTheSameTranscriptKeepsTheSection() async throws {
+        _ = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
+        await lib.prepareSections("cruz")
+        _ = try lib.update("cruz", refText: words)
+        XCTAssertEqual(try audio8Text(lib), words)
+    }
+
+    /// The app's save path (I3): the background prepare an in-app save starts leaves engines/audio8 behind.
+    func testAnAppSavePreparesTheAudio8SectionInTheBackground() async throws {
+        let meta = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
+        let written = await lib.prepareSectionsInBackground(meta.slug).value
+        XCTAssertEqual(written, ["audio8"])
+        XCTAssertNotNil(try lib.entry("cruz").engines["audio8"]?["ref.wav"])
+        XCTAssertEqual(try audio8Text(lib), words)
+    }
+
+    @MainActor
+    func testTheEditorsTranscriptEditReachesAudio8() async throws {
+        _ = try lib.save(name: "Cruz", refWav: master(seconds: 8), refText: words)
+        await lib.prepareSections("cruz")
+        let store = StudioVoiceEditorStore(library: lib)
+        let voice = try XCTUnwrap(store.voices.first { $0.slug == "cruz" })
+        try store.updateTranscript(of: voice, "one two three four five six seven eight.")
+        // The background prepare re-stores it; wait for the section to carry the new words.
+        for _ in 0 ..< 100 {
+            if try audio8Text(lib) == "one two three four five six seven eight." { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(try audio8Text(lib), "one two three four five six seven eight.")
+    }
+
+    private func unwrapAudio8Section(_ ref: URL, _ text: String) async throws -> ReferenceSections.Audio8Section {
+        let section = await ReferenceSections.audio8Section(forReference: ref, refText: text)
+        return try XCTUnwrap(section)
     }
 }

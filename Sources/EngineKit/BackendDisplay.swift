@@ -16,6 +16,7 @@ extension BackendID {
         case .qwenCustom: "Qwen Custom"
         case .chatterboxTurbo: "Chatterbox Turbo"
         case .fishS2Pro: "Fish S2 Pro"
+        case .audio8: "Audio8"
         case .breezeTTS2: "Breeze"
         case .chatterbox: "Chatterbox"
         case .kokoro: "Kokoro"
@@ -37,11 +38,12 @@ extension BackendID {
     /// same `.qwen17B` init falls back to), then the lighter Qwen bakes, then
     /// the other cloners from best-sounding to lightest. Engines with a license
     /// gate come last so an automatic switch never lands on a license prompt
-    /// before a free alternative.
+    /// before a free alternative. `.audio8` is last so a new engine never outranks
+    /// one the user already relies on.
     public static let autoSwitchPreference: [BackendID] = [
         .qwen17B, .qwen06B, .qwen06BMobile, .qwen06BANE, .qwen17BANE,
         .chatterboxTurbo, .chatterbox, .luxTTS, .pocketTTS,
-        .kokoro, .qwenCustom, .breezeTTS2, .fishS2Pro, .supertonic,
+        .kokoro, .qwenCustom, .breezeTTS2, .fishS2Pro, .supertonic, .audio8,
     ]
 
     /// The engine to switch to automatically when the selected voice can't be

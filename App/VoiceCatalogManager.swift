@@ -135,9 +135,11 @@ final class VoiceCatalogManager {
                     let variantName = "\(voice.name) (\(emotion))"
                     try library.saveAt(slug: variantSlug, name: variantName, refWav: wavData, refText: refText,
                                        variantOf: baseSlug)
+                    library.prepareSectionsInBackground(variantSlug)
                 } else {
                     // Base clip — use saveAt to allow re-install overwriting
                     try library.saveAt(slug: baseSlug, name: voice.name, refWav: wavData, refText: refText)
+                    library.prepareSectionsInBackground(baseSlug)
                 }
             } catch {
                 installStates[voice.id] = .failed(error.localizedDescription)

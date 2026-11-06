@@ -281,6 +281,7 @@ struct VoiceEditorForm: View {
             } else {
                 let meta = try model.voices.save(name: name, refWav: refWav ?? Data(),
                                                  refText: refText)
+                model.voices.prepareSectionsInBackground(meta.slug)
                 model.voicesVersion += 1
                 onSaved(meta.slug)
             }

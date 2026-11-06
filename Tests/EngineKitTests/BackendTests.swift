@@ -6,7 +6,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.chatterbox.rawValue, "chatterbox")
         XCTAssertEqual(BackendID.chatterboxTurbo.rawValue, "chatterbox-turbo")
         XCTAssertEqual(BackendID.fishS2Pro.rawValue, "fish-s2-pro")
-        XCTAssertEqual(BackendID.allCases.count, 16)
+        XCTAssertEqual(BackendID.allCases.count, 17)
     }
 
     func testQwenBackendRawValues() {
@@ -14,7 +14,7 @@ final class BackendTests: XCTestCase {
         XCTAssertEqual(BackendID.qwen17B.rawValue, "qwen3-1.7b")
         XCTAssertEqual(BackendID.qwenDesign.rawValue, "qwen3-design")
         XCTAssertEqual(BackendID.qwenCustom.rawValue, "qwen3-custom")
-        XCTAssertEqual(BackendID.allCases.count, 16)
+        XCTAssertEqual(BackendID.allCases.count, 17)
     }
 
     func testQwenFamilyFlag() {
@@ -65,6 +65,37 @@ final class BackendTests: XCTestCase {
         XCTAssertTrue(spec.needsRefAudio)
         XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
         XCTAssertEqual(BackendID.chatterboxTurbo.emotionMechanism, .variantClipOnly)
+    }
+
+    func testAudio8Identity() {
+        XCTAssertEqual(BackendID.audio8.rawValue, "audio8")
+        XCTAssertEqual(BackendID.migrating(rawValue: "audio8"), .audio8)
+        XCTAssertFalse(BackendID.audio8.isQwen)
+        XCTAssertEqual(BackendID.audio8.speechFamily, .gpu)
+        XCTAssertEqual(BackendID.audio8.displayName, "Audio8")
+        XCTAssertTrue(BackendID.audio8.needsRefText)
+        XCTAssertLessThan(BackendID.allCases.firstIndex(of: .fishS2Pro)!,
+                          BackendID.allCases.firstIndex(of: .audio8)!)
+        XCTAssertEqual(BackendID.allCases[BackendID.allCases.firstIndex(of: .fishS2Pro)! + 1], .audio8)
+    }
+
+    func testAudio8Spec() {
+        let spec = BackendID.audio8.spec
+        XCTAssertEqual(spec.modelRepo, "tinytrashlabs/Audio8-TTS-0.6B-MLX")
+        XCTAssertEqual(spec.defaultSampleRate, 44100)
+        XCTAssertFalse(spec.honorsTags)
+        XCTAssertFalse(spec.needsLicenseAck)
+        XCTAssertFalse(spec.needsRefAudio)
+        // Measured peak 3.93 GB x 2 = 7.86 GB, rounded up to the next GB.
+        XCTAssertEqual(spec.minRAMBytes, 8_000_000_000)
+        XCTAssertEqual(BackendID.audio8.emotionMechanism, .variantClipOnly)
+        let c = BackendID.audio8.controls
+        XCTAssertEqual(c.voiceClone, .optional)
+        XCTAssertEqual(c.instruct, .none)
+        XCTAssertFalse(c.language)
+        XCTAssertEqual(c.knobs.temperature, 0.3...1.2)
+        XCTAssertEqual(c.knobs.speed, 0.9...1.25)
+        XCTAssertEqual(BackendID.audio8.maxSecondsPerPass, 40)
     }
 
     func testFishSpec() {
@@ -189,7 +220,7 @@ final class BackendTests: XCTestCase {
 
     func testKokoroRawValue() {
         XCTAssertEqual(BackendID.kokoro.rawValue, "kokoro")
-        XCTAssertEqual(BackendID.allCases.count, 16)
+        XCTAssertEqual(BackendID.allCases.count, 17)
     }
 
     func testKokoroSpec() {
@@ -452,9 +483,10 @@ final class BackendTests: XCTestCase {
     func testOnlyBreezeDesignsFromADirectionOrHasAPerPassCap() {
         XCTAssertTrue(BackendID.breezeTTS2.designsFromDirection)
         XCTAssertEqual(BackendID.breezeTTS2.maxSecondsPerPass, 60)
+        XCTAssertEqual(BackendID.audio8.maxSecondsPerPass, 40)
         for backend in BackendID.allCases where backend != .breezeTTS2 {
             XCTAssertFalse(backend.designsFromDirection, backend.rawValue)
-            XCTAssertNil(backend.maxSecondsPerPass, backend.rawValue)
+            if backend != .audio8 { XCTAssertNil(backend.maxSecondsPerPass, backend.rawValue) }
         }
     }
 

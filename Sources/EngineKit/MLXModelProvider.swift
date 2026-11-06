@@ -1,8 +1,11 @@
 import Foundation
+import GVoiceKit
 import MLX
 import MLXAudioCore
 import MLXAudioTTS
+import MLXLMCommon
 import MLXRandom
+import os
 
 extension BackendID {
     /// Breeze's own sampler defaults, for the app's Advanced sliders and their
@@ -15,6 +18,8 @@ extension BackendID {
         return (p.topP, p.topK, p.repetitionPenalty ?? 1, BreezeTTSModel.defaultCFGScale)
     }
 }
+
+private let audio8Log = Logger(subsystem: "fm.gloam.studio", category: "audio8")
 
 /// Production ModelProviding backed by mlx-audio-swift.
 /// Must only be used from the GloamEngine actor.
@@ -202,11 +207,18 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
     /// stop, which only runs on this path.
     static let qwenStreamingInterval: Double = 1.0
 
+    /// Audio8 (Fish-architecture) streams the same way: one ~1 s decoded chunk at a time, first audio after
+    /// the first chunk instead of the whole line.
+    static let audio8StreamingInterval: Double = 1.0
+
     /// Qwen Base (0.6B, mobile, 1.7B) streams: each `streamingInterval`-second codec chunk is yielded as
     /// mlx-audio-swift's `generateStream` produces it, so a client hears the first words after one chunk
     /// instead of after the whole line. The chunks are the same samples `synthesize` concatenates (raw: no
     /// silence trimming on either path). Every other model renders whole and arrives as one chunk.
     func synthesizeStream(_ request: ProviderRequest) -> AsyncThrowingStream<[Float], Error> {
+        if backend == .audio8, let fish = model as? FishSpeechModel {
+            return synthesizeAudio8Stream(request, model: fish)
+        }
         guard backend.isQwen, backend != .qwenCustom, let qwen = model as? Qwen3TTSModel else {
             return AsyncThrowingStream { continuation in
                 let task = Task {
@@ -252,10 +264,99 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
         }
     }
 
+    /// Audio8: `FishSpeechModel.generateStream` emits `.audio` chunks as frames are decoded, then `.info`.
+    /// Temperature and top-p map from the request like Qwen; top-k is not exposed for this engine.
+    private func synthesizeAudio8Stream(_ request: ProviderRequest, model fish: FishSpeechModel)
+        -> AsyncThrowingStream<[Float], Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                audio8ActiveGenerations.add(1)
+                defer { audio8ActiveGenerations.add(-1) }
+                do {
+                    let stream = try await self.audio8Events(request, model: fish)
+                    for try await event in stream {
+                        try Task.checkCancellation()
+                        guard case .audio(let chunk) = event, chunk.size > 1 else { continue }
+                        continuation.yield(chunk.asArray(Float.self))
+                    }
+                    Memory.clearCache()
+                    continuation.finish()
+                } catch let error as EngineError {
+                    Memory.clearCache()
+                    continuation.finish(throwing: error)
+                } catch is CancellationError {
+                    Memory.clearCache()
+                    continuation.finish()
+                } catch {
+                    Memory.clearCache()
+                    continuation.finish(throwing: EngineError.generationFailed(backend: self.backend, message: "\(error)"))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Generations currently running on the Audio8 stream path (test hook: 0 means the producer has ended).
+    let audio8ActiveGenerations = ActiveCounter()
+
+    /// The one place Audio8 generation is started, so streaming and one-shot cannot diverge.
+    private func audio8Events(_ request: ProviderRequest, model fish: FishSpeechModel) async throws
+        -> AsyncThrowingStream<AudioGeneration, Error>
+    {
+        let params = Self.audio8Parameters(request, base: fish.defaultGenerationParameters)
+        guard let path = request.refAudioPath else {
+            return fish.generateStream(
+                text: request.text, refCodes: nil, refText: nil,
+                generationParameters: params, streamingInterval: Self.audio8StreamingInterval)
+        }
+        let reference = try await audio8Reference(path: path, refText: request.refText, model: fish)
+        return fish.generateStream(
+            text: request.text, refCodes: reference.codes, refText: reference.text,
+            generationParameters: params, streamingInterval: Self.audio8StreamingInterval)
+    }
+
+    /// Times `FishSpeechModel.encodeReference` ran (test hook: a cached voice encodes once, ever).
+    let audio8EncodeCalls = ActiveCounter()
+
+    /// The codes and exact words Audio8 conditions on for the voice at `path`: its stored section
+    /// (`engines/audio8/`, made once; `ReferenceSections.audio8Section`) and the section's cached
+    /// `ref_codes.npy`, encoded and written on the first use only. A voice with no transcript fails loudly.
+    private func audio8Reference(path: String, refText: String?, model fish: FishSpeechModel) async throws
+        -> (codes: MLXArray, text: String)
+    {
+        guard let section = await ReferenceSections.audio8Section(
+            forReference: URL(fileURLWithPath: path), refText: refText ?? "")
+        else { throw EngineError.refTextRequired(backend) }
+        if let cached = ReferenceSections.audio8CachedCodes(for: section) {
+            return (MLXArray(cached.values, [10, cached.frames]), section.text)
+        }
+        // Hash the section before encoding it: if a save re-stores it meanwhile, the codes must not
+        // be stamped with the new audio's hash (a cache entry that would pass every check).
+        let audioHash = ReferenceSection.sha256Hex(ofFile: section.audioURL)
+        let (_, audio) = try loadAudioArray(from: section.audioURL, sampleRate: fish.sampleRate)
+        let codes = try fish.encodeReference(audio)
+        audio8EncodeCalls.add(1)
+        eval(codes)
+        let frames = codes.dim(1)
+        do { try ReferenceSections.audio8StoreCodes(codes.asArray(Int32.self), frames: frames, for: section, audioSha256: audioHash) }
+        catch { audio8Log.error("could not cache Audio8 reference codes (\(String(describing: error), privacy: .public)); they will be re-encoded") }
+        return (codes, section.text)
+    }
+
+    /// Audio8 exposes temperature, top-p and seed only; top-k and repetition penalty keep the model defaults.
+    static func audio8Parameters(_ request: ProviderRequest, base: GenerateParameters) -> GenerateParameters {
+        var params = base
+        if let temperature = request.temperature { params.temperature = temperature }
+        if let topP = request.topP { params.topP = topP }
+        if let seed = request.seed { params.seed = seed }
+        return params
+    }
+
     func synthesize(_ request: ProviderRequest) async throws -> [Float] {
         do {
             var refAudio: MLXArray?
-            if let path = request.refAudioPath {
+            if let path = request.refAudioPath, backend != .audio8 {
                 refAudio = try referenceAudio(for: path)
             }
             if let chatterbox = model as? ChatterboxModel {
@@ -317,6 +418,16 @@ final class MLXSpeechModel: SpeechModel, @unchecked Sendable {
                     streamingInterval: Self.qwenStreamingInterval)
                 for try await event in stream {
                     // The streaming path ends with a 1-sample placeholder.
+                    guard case .audio(let chunk) = event, chunk.size > 1 else { continue }
+                    streamed.append(contentsOf: chunk.asArray(Float.self))
+                }
+                Memory.clearCache()
+                return streamed
+            } else if backend == .audio8, let fish = model as? FishSpeechModel {
+                // Same chunks `synthesizeStream` hands the player, concatenated (as Qwen does above).
+                var streamed: [Float] = []
+                let stream = try await audio8Events(request, model: fish)
+                for try await event in stream {
                     guard case .audio(let chunk) = event, chunk.size > 1 else { continue }
                     streamed.append(contentsOf: chunk.asArray(Float.self))
                 }
@@ -523,4 +634,13 @@ struct Dia2StreamingSession: DialogueStreaming, @unchecked Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+}
+
+
+/// Tiny lock-guarded counter (test hook for "has the generating task ended").
+final class ActiveCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+    func add(_ d: Int) { lock.lock(); n += d; lock.unlock() }
 }

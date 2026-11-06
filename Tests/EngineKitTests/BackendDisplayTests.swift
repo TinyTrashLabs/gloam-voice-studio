@@ -22,6 +22,10 @@ final class BackendDisplayTests: XCTestCase {
         XCTAssertEqual(BackendID.kokoro.familyName, "Kokoro")
     }
 
+    func testAudio8NeverOutranksAnEngineAUserAlreadyHas() {
+        XCTAssertEqual(BackendID.autoSwitchPreference.last, .audio8)
+    }
+
     func testEveryStudioEngineHasAPreferenceRank() {
         for backend in BackendID.on(.studio) {
             XCTAssertTrue(BackendID.autoSwitchPreference.contains(backend),

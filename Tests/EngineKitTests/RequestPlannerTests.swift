@@ -37,6 +37,33 @@ final class RequestPlannerTests: XCTestCase {
         XCTAssertNil(plan.temperature)
     }
 
+    func testAudio8CloneWithoutTranscriptIsRejected() {
+        for blank in [nil, "", "  \n"] {
+            XCTAssertThrowsError(try RequestPlanner.plan(
+                backend: .audio8,
+                request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: blank))) { error in
+                XCTAssertEqual(error as? EngineError, .refTextRequired(.audio8))
+            }
+        }
+        // No reference at all is a stock voice, and a transcript with the reference plans fine.
+        XCTAssertNoThrow(try RequestPlanner.plan(backend: .audio8, request: SynthesisRequest(text: "hi")))
+        XCTAssertNoThrow(try RequestPlanner.plan(
+            backend: .audio8,
+            request: SynthesisRequest(text: "hi", refAudioPath: "/tmp/r.wav", refText: "words")))
+    }
+
+    func testAudio8LongTextIsChunked() throws {
+        let sentence = "The quick brown fox jumps over the lazy dog near the river bank. "
+        let text = String(String(repeating: sentence, count: 3000 / sentence.count + 1).prefix(3000))
+        let plan = try RequestPlanner.plan(backend: .audio8, request: SynthesisRequest(text: text))
+        let cap = try XCTUnwrap(BackendID.audio8.maxSecondsPerPass)
+        let passes = GloamEngine.passes(of: plan, backend: .audio8)
+        XCTAssertGreaterThan(passes.count, 1)
+        for pass in passes {
+            XCTAssertLessThan(LongTextChunker.estimatedSeconds(pass.text), cap)
+        }
+    }
+
     func testChatterboxWithoutRefThrows() {
         XCTAssertThrowsError(try RequestPlanner.plan(
             backend: .chatterbox, request: SynthesisRequest(text: "hi"))) { error in
