@@ -133,7 +133,22 @@ public struct VoiceLibrary: Sendable {
                      enginePace: [String: Double]? = nil,
                      gain: Double? = nil,
                      notes: String? = nil) throws -> VoiceMeta {
-        let slug = try Slug.slugify(name)
+        try save(slug: try Slug.slugify(name), name: name, refWav: refWav, refText: refText,
+                 provenance: provenance, engines: engines, pace: pace, enginePace: enginePace,
+                 gain: gain, notes: notes)
+    }
+
+    /// `save(name:)` at a given slug: a pack's own (`GVoice.import`), already
+    /// checked to be a slug, so its voice keeps its address when its display
+    /// name changes. Re-checked here, the filesystem write boundary.
+    public func save(slug: String, name: String, refWav: Data?, refText: String,
+                     provenance: JSONValue? = nil,
+                     engines: [String: [String: Data]] = [:],
+                     pace: Double? = nil,
+                     enginePace: [String: Double]? = nil,
+                     gain: Double? = nil,
+                     notes: String? = nil) throws -> VoiceMeta {
+        guard (try? Slug.slugify(slug)) == slug else { throw StudioError.invalidName(slug) }
         let voiceDir = directory.appendingPathComponent(slug)
         // A take at this address counts too: a top-level folder would win the
         // address and hide it.
