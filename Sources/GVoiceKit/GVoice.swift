@@ -345,6 +345,19 @@ public enum GVoice {
     static let maxEntries = 1000
     static let maxEntryBytes: UInt64 = 200_000_000  // 200 MB — comfortably above any real voice asset
 
+    /// A manifest's `slug` when it is already exactly a slug -- what
+    /// `Slug.slugify` would leave unchanged: lowercase a-z and 0-9 in runs
+    /// joined by single dashes. Untrusted input, so anything else (a path,
+    /// spaces, capitals, `..`) is ignored and the name decides.
+    static func packSlug(_ manifest: Manifest) -> String? {
+        guard let slug = manifest.slug, !slug.isEmpty, slug.count <= 128 else { return nil }
+        let runs = slug.split(separator: "-", omittingEmptySubsequences: false)
+        let ok = runs.allSatisfy { run in
+            !run.isEmpty && run.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber) }
+        }
+        return ok ? slug : nil
+    }
+
     /// Install a pack, returning the BASE voice's meta.
     ///
     /// Assets whose engine id this build does not recognise are stored anyway —
@@ -440,11 +453,25 @@ public enum GVoice {
         // Spelled out in full: a protocol requirement cannot carry default
         // arguments, so import states every field it means rather than
         // inheriting one store's idea of a default.
-        let baseMeta = try library.save(name: manifest.name, refWav: baseRef,
+        //
+        // The pack's own slug when it carries a well-formed one: the voice is
+        // installed where the pack says it lives, whatever its display name
+        // now is. A pack without one (or with one that isn't a slug) is named
+        // from its display name, as before.
+        let baseMeta: VoiceMeta
+        if let slug = packSlug(manifest) {
+            baseMeta = try library.save(slug: slug, name: manifest.name, refWav: baseRef,
                                         refText: sources["base"]?.text ?? "",
                                         provenance: manifest.provenance, engines: baseAssets,
                                         pace: manifest.pace, enginePace: manifest.enginePace,
                                         gain: manifest.gain, notes: manifest.notes)
+        } else {
+            baseMeta = try library.save(name: manifest.name, refWav: baseRef,
+                                        refText: sources["base"]?.text ?? "",
+                                        provenance: manifest.provenance, engines: baseAssets,
+                                        pace: manifest.pace, enginePace: manifest.enginePace,
+                                        gain: manifest.gain, notes: manifest.notes)
+        }
         if let persona = manifest.persona { try library.setPersona(baseMeta.slug, persona) }
         if let language = manifest.language ?? sources["base"]?.language {
             try library.setLanguage(baseMeta.slug, language)

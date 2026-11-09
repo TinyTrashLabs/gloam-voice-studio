@@ -38,6 +38,20 @@ public protocol GVoicePackStore {
               gain: Double?,
               notes: String?) throws -> VoiceMeta
 
+    /// Store a new voice at `slug` -- a pack's own, already checked to be a
+    /// slug -- with every field `save(name:)` takes. Import uses it for a
+    /// pack's base so the voice keeps the slug it was exported with: a display
+    /// name can change ("Billie Frost" -> "Billie") while the slug, the
+    /// voice's address everywhere else, stays. The default mints from `name`,
+    /// as before, for a store that doesn't implement it.
+    func save(slug: String, name: String, refWav: Data?, refText: String,
+              provenance: JSONValue?,
+              engines: [String: [String: Data]],
+              pace: Double?,
+              enginePace: [String: Double]?,
+              gain: Double?,
+              notes: String?) throws -> VoiceMeta
+
     /// Store a voice at a caller-chosen slug. Import needs this because a pack
     /// names its own variants and those names have to survive the trip.
     func saveAt(slug: String, name: String, refWav: Data?, refText: String,
@@ -70,6 +84,13 @@ public protocol GVoicePackStore {
 
 public extension GVoicePackStore {
     func locate(_ address: String) -> PackFolderLayout.Location? { nil }
+    func save(slug: String, name: String, refWav: Data?, refText: String,
+              provenance: JSONValue?, engines: [String: [String: Data]],
+              pace: Double?, enginePace: [String: Double]?, gain: Double?,
+              notes: String?) throws -> VoiceMeta {
+        try save(name: name, refWav: refWav, refText: refText, provenance: provenance, engines: engines,
+                 pace: pace, enginePace: enginePace, gain: gain, notes: notes)
+    }
     /// Store the pack's persona on an imported voice. A store with no persona does nothing.
     func setPersona(_ slug: String, _ persona: Persona) throws {}
     func setLanguage(_ slug: String, _ language: String) throws {}
