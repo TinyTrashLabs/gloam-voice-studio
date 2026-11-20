@@ -308,6 +308,9 @@ public final class RelPositionMultiheadAttentionWeights: Module {
     @ModuleInfo(key: "in_proj") var inProj: Linear
     @ModuleInfo(key: "linear_pos") var linearPos: Linear
 
+    /// Tests only: forces small query blocks (see `blockedWeights`).
+    var rowsPerBlockOverride: Int?
+
     public init(
         embedDim: Int,
         posDim: Int,
@@ -347,11 +350,17 @@ public final class RelPositionMultiheadAttentionWeights: Module {
         p = p.reshaped(seqLen, batchSize, numHeads, posHeadDim).transposed(2, 1, 0, 3)
         k = k.reshaped(seqLen, batchSize, numHeads, queryHeadDim).transposed(2, 1, 3, 0)
 
-        var attnScores = matmul(q, k)
-
         let seqLen2 = 2 * seqLen - 1
         var pos = linearPos(posEmb)
         pos = pos.reshaped(-1, seqLen2, numHeads, posHeadDim).transposed(2, 0, 3, 1)
+
+        if attnMask == nil {
+            return Self.blockedWeights(
+                q: q, k: k, p: p, pos: pos, seqLen: seqLen, keyPaddingMask: keyPaddingMask,
+                rowsPerBlock: rowsPerBlockOverride)
+        }
+
+        var attnScores = matmul(q, k)
         // (head, batch, time1, pos_head_dim) x (head, 1 or batch, pos_head_dim,
         // 2*time-1) -> (head, batch, time1, 2*time-1)
         var posScores = matmul(p, pos)
@@ -369,6 +378,64 @@ public final class RelPositionMultiheadAttentionWeights: Module {
         }
 
         return softmax(attnScores, axis: -1)
+    }
+
+    /// Elements per block-sized score tensor (4 M floats = 16 MB).
+    static let blockElements = 4 << 20
+
+    /// The same weights as the full path above, a block of query rows at a
+    /// time. Softmax is per row, so blocking rows is exact.
+    ///
+    /// Why: the full path materialises the relative-position scores at
+    /// (heads, batch, T, 2T-1), twice the size of the weights, and the
+    /// pad/reshape shift copies them twice more, so one layer briefly holds
+    /// about seven (heads, T, T) fp32 tensors. At T = 3078 frames (a 336-char
+    /// chunk over an 11 s reference) that is ~1 GB per layer, and the whole
+    /// acoustic model peaked 1.74 GB above its weights on an iPhone 15 Pro
+    /// (2026-11-19) -- the per-chunk jetsam risk on a phone. Here a block
+    /// needs only the band of relative positions its rows can see
+    /// (rows + T - 1 wide), and the shift is a strided view, not a copy, so
+    /// the layer holds the (heads, T, T) weights plus small blocks.
+    static func blockedWeights(
+        q: MLXArray, k: MLXArray, p: MLXArray, pos: MLXArray,
+        seqLen: Int, keyPaddingMask: MLXArray?, rowsPerBlock: Int? = nil
+    ) -> MLXArray {
+        let (heads, batch) = (q.dim(0), q.dim(1))
+        let rowsPerBlock = rowsPerBlock
+            ?? max(16, blockElements / max(1, heads * batch * 2 * seqLen))
+        let paddingMask = keyPaddingMask.map { expandedDimensions($0, axis: 1) }
+        // Even split, so no block is a single row: MLX multiplies a one-row
+        // operand with a different kernel (gemv) whose rounding differs from
+        // the full path's GEMM by ~1e-3 relative; blocks of 2+ rows match the
+        // full path bit for bit (LuxAttentionBlockedTests).
+        let blockCount = max(1, (seqLen + rowsPerBlock - 1) / rowsPerBlock)
+        var blocks: [MLXArray] = []
+        var start = 0
+        for b in 0 ..< blockCount {
+            let rows = seqLen / blockCount + (b < seqLen % blockCount ? 1 : 0)
+            let end = start + rows
+            var scores = matmul(q[0..., 0..., start ..< end], k)  // (H, B, rows, T)
+
+            // Row i, column j reads relative index (T-1) + j - i. Over this
+            // block that spans [T - end, T - end + width).
+            let lo = seqLen - end
+            let width = seqLen + rows - 1
+            let band = matmul(p[0..., 0..., start ..< end], pos[.ellipsis, lo ..< (lo + width)])
+            // band is a fresh contiguous (H, B, rows, width) product; within it
+            // row r, column j sits at (rows - 1 - r) + j, i.e. offset rows-1,
+            // row stride width-1.
+            let shifted = asStrided(
+                band, [heads, batch, rows, seqLen],
+                strides: [batch * rows * width, rows * width, width - 1, 1],
+                offset: rows - 1)
+            scores = scores + shifted
+            if let paddingMask {
+                scores = which(paddingMask, MLXArray(Float(-1000)), scores)
+            }
+            blocks.append(softmax(scores, axis: -1))
+            start = end
+        }
+        return blocks.count == 1 ? blocks[0] : concatenated(blocks, axis: 2)
     }
 }
 
