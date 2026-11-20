@@ -124,6 +124,19 @@ enum LuxMelFeatures {
 
 private let luxLog = Logger(subsystem: "fm.gloam.studio", category: "luxtts")
 
+/// phys_footprint in MB (what jetsam enforces), for the [luxmem] lines.
+private func luxFootprintMB() -> Int {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(
+        MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return kr == KERN_SUCCESS ? Int(info.phys_footprint / 1_000_000) : -1
+}
+
 // MARK: - LuxSpeechModel
 
 public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
@@ -285,6 +298,8 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             let prompt = try await encodePrompt(path: refPath, refText: request.refText)
             let textTokens = try tokenizer.textToTokenIDs(request.text)
             let promptTokens = try tokenizer.textToTokenIDs(prompt.effectiveRefText)
+            NSLog("[luxmem] after prompt + tokenize: active %d MB, cache %d MB, footprint %d MB",
+                  Memory.activeMemory / 1_000_000, Memory.cacheMemory / 1_000_000, luxFootprintMB())
 
             let promptFeatures = prompt.features.expandedDimensions(axis: 0)  // (1, T, 100)
 
@@ -301,6 +316,10 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
                 durationPadFrames: 16
             )
             eval(output.features)
+            let mb = { (b: Int) in b / 1_000_000 }
+            NSLog("[luxmem] after acoustic model: frames %d + prompt %d, mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
+                  output.features.dim(1), prompt.features.dim(0), mb(Memory.peakMemory), mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
+            Memory.peakMemory = 0
 
             #if DEBUG
             if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
@@ -333,9 +352,13 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             }
             samplesArray = MLX.clip(samplesArray, min: -1.0, max: 1.0)
             eval(samplesArray)
+            NSLog("[luxmem] after vocoder: mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
+                  mb(Memory.peakMemory), mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
 
             var samples = samplesArray.asArray(Float.self)
             Memory.clearCache()
+            NSLog("[luxmem] after clearCache: active %d MB, cache %d MB, footprint %d MB",
+                  mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
             if leadInTrimming {
                 samples = await LuxLeadInTrimmer.trimLeadIn(
                     samples: samples, sampleRate: sampleRate, expectedText: request.text)
