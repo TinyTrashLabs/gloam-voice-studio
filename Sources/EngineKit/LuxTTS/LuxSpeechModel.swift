@@ -124,6 +124,13 @@ enum LuxMelFeatures {
 
 private let luxLog = Logger(subsystem: "fm.gloam.studio", category: "luxtts")
 
+/// A [luxmem] line: Debug builds only, so a release build stays quiet.
+private func luxMemLog(_ format: String, _ args: CVarArg...) {
+    #if DEBUG
+    withVaList(args) { NSLogv(format, $0) }
+    #endif
+}
+
 /// phys_footprint in MB (what jetsam enforces), for the [luxmem] lines.
 private func luxFootprintMB() -> Int {
     var info = task_vm_info_data_t()
@@ -303,7 +310,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             let prompt = try await encodePrompt(path: refPath, refText: request.refText)
             let textTokens = try tokenizer.textToTokenIDs(request.text)
             let promptTokens = try tokenizer.textToTokenIDs(prompt.effectiveRefText)
-            NSLog("[luxmem] after prompt + tokenize: active %d MB, cache %d MB, footprint %d MB",
+            luxMemLog("[luxmem] after prompt + tokenize: active %d MB, cache %d MB, footprint %d MB",
                   Memory.activeMemory / 1_000_000, Memory.cacheMemory / 1_000_000, luxFootprintMB())
 
             let promptFeatures = prompt.features.expandedDimensions(axis: 0)  // (1, T, 100)
@@ -323,7 +330,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             )
             eval(output.features)
             let mb = { (b: Int) in b / 1_000_000 }
-            NSLog("[luxmem] after acoustic model: frames %d + prompt %d, mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
+            luxMemLog("[luxmem] after acoustic model: frames %d + prompt %d, mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
                   output.features.dim(1), prompt.features.dim(0), mb(Memory.peakMemory), mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
             Memory.peakMemory = 0
 
@@ -358,12 +365,12 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             }
             samplesArray = MLX.clip(samplesArray, min: -1.0, max: 1.0)
             eval(samplesArray)
-            NSLog("[luxmem] after vocoder: mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
+            luxMemLog("[luxmem] after vocoder: mlx peak %d MB, active %d MB, cache %d MB, footprint %d MB",
                   mb(Memory.peakMemory), mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
 
             var samples = samplesArray.asArray(Float.self)
             Memory.clearCache()
-            NSLog("[luxmem] after clearCache: active %d MB, cache %d MB, footprint %d MB",
+            luxMemLog("[luxmem] after clearCache: active %d MB, cache %d MB, footprint %d MB",
                   mb(Memory.activeMemory), mb(Memory.cacheMemory), luxFootprintMB())
             if leadInTrimming {
                 samples = await LuxLeadInTrimmer.trimLeadIn(
