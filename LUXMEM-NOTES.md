@@ -36,6 +36,72 @@ Weights: fp32 554 MB MLX active, fp16 311 MB. Non-MLX on phone: app ~93 MB,
 G2P lexicon +84 MB, playback +~120 MB once audio plays, graphics driver
 transient up to ~150 MB during the acoustic model (not seen on the Mac).
 
+## Round 2 (2026-11-20): News, CDC story, 6 min each, iPhone 15 Pro
+
+David listened: fp16 weights-only is fine; full fp16 (activations too) has an
+audible artifact ~9 s into billie-335-fp16-full.wav -> rejected. 14d1e193 adds
+`computeDType`; the app's `--lux-half` is now weights-only (fp16 weights,
+fp32 compute); `--lux-half-compute` is the rejected full fp16, experiments only.
+
+New probe (iOS App/MemoryProbe.swift `MemoryWatch`, Debug): samples
+phys_footprint split every 2 ms during each chunk -- graphics-tagged ledger
+(Metal) vs the rest, MLX active, Metal device allocated -- and logs the max.
+It lands within ~10 MB of the kernel's lifetime peak, so the peaks are seen.
+Parser: scratchpad tools/peaks.py <log>.
+
+| step | fp16 weights-only | fp32 |
+|---|---|---|
+| this morning's build (full fp16 was "half") | -- (full fp16: 1142) | 1496 |
+| s0 baseline, instrumented | 1226 | 1436 |
+| s1 + ASR recogniser dropped before each chunk (`--asr-unload`) | 1164 | -- |
+| s2 attention blocks (ef789784), ASR kept | partial: 904 after 5 chunks* | not run* |
+
+\* 08:35 and 09:02 runs stopped when the phone left the foreground/locked
+(David took the phone); s2 is incomplete and not comparable to a 6 min run.
+At 5 chunks s0 was ~1046 and s2 904; MLX peak at 1237 frames 503 MB.
+
+ASR unload: the recogniser load+decode adds ~130 MB of "other", but dropping
+it frees only ~40-80 MB (the rest stays as heap); check time per part 0.25 ->
+0.42 s (+0.18 s reload). Peak 1226 -> 1164. Creep is not the recogniser:
+with it dropped every chunk "other" still rose 114 -> ~290 (fp32 run: 166 ->
+355). malloc in-use/held is now logged before each chunk to split live data
+from heap fragmentation -- not yet measured on the phone.
+
+Mac only (bench, 336-char chunk, weights-only unless noted):
+- transient vs chunk length after ef789784: 2033 gen frames 286 MB, 1717
+  243 MB, 1355 (budget ~2400) 198 MB -> a 2400 budget would save ~90 MB at
+  the cost of ~37% less text per chunk (more seams). Not applied.
+- MLX cache limit 0/64/128/256 MB: max footprint 618-630 / 665-700 / 730-755
+  / 853-860 MB -> keep 0.
+- graphics ledger: 60-280 MB above MLX's own peak on the first render of a
+  process and stays at ~584 MB after it with MLX at ~250 (ad281e5f bench).
+- the vocoder transient is 178 MB (2033 frames), below the acoustic model's.
+- time: weights-only 2.1-2.2 s before, 2.3-2.5 s after ef789784 (~+10%),
+  fp32 similar; phone times not yet compared at equal thermal state.
+
+What the "~400 MB above every sampled point" is: nothing outside the model.
+(a) MLX's own transient inside the acoustic model (MLX peak 864 MB at 2022
+frames for weights-only vs 318 active: the [luxmem] lines only sample at stage
+boundaries, after it is gone); (b) the graphics ledger lags MLX: freed Metal
+buffers stay charged to the process for a while (graphics sits at the recent
+high-water mark while MLX active drops 300 MB; Metal's currentAllocatedSize
+tracks MLX active, not the ledger), and now and then overshoots MLX's own
+peak by 100-200 MB (the 1095 spike: graphics 748 vs MLX 574/577 peak).
+Non-graphics during a render is flat: ~120 MB before the ASR recogniser loads,
+~250 after, ~310 late in the run.
+
+Creep: graphics between chunks is constant (MLX active + ~31 MB); the creep
+is non-graphics memory (other 250 -> 315 MB over 6 min). Not attributed yet.
+
+Mac trace of the acoustic model (fp32, T = 3095): the peak was building the
+attention weights -- +482 MB for a 153 MB (H, T, T) tensor, because MLX ran
+all row blocks' scores/band/softmax side by side and then concatenated.
+ef789784: evaluate each block as built, keep blocks (no concat), evaluate
+after each layer stage. Mac transient: fp32 524 -> 290 MB, weights-only
+552 -> ~290 MB, same speed; features 0.15% RMS from the old path (rounding:
+one layer's block product differs < 7e-7). Recompute-per-use tried: -60 MB,
++45% time, dropped.
+
 ## Root causes
 1. RelPositionMultiheadAttentionWeights built (H, T, 2T-1) pos scores and a
    pad/reshape shift that copied them twice -> ~7 (H,T,T) fp32 tensors/layer.
