@@ -196,3 +196,24 @@ phone numbers stand (-62 MB peak, +0.18 s per part).
 
 Phone queue unchanged: full News runs of ef789784 (fp16w, then fp32) with the
 malloc numbers; then --asr-unload, then --lux-frame-budget 2400 if needed.
+
+## Phone back 2026-11-20 18:14 -- full News runs (phone, CDC story, 6 min, none killed)
+
+| run | build | lifetime peak | parts / kept flagged |
+|---|---|---|---|
+| s3_fp16w | ef789784, `--lux-half` | 1038 MB | 42 / 9 |
+| s3_fp16w_asr | + `--asr-unload` | 986 MB | 41 / 11 |
+| (for scale) s0_fp16w | before ef789784 | 1226 MB | 44 / 10 |
+| (for scale) s0_fp32 | before ef789784 | 1436 MB | 44 / 9 |
+Flags are mostly "ran long" on CDC text, same rate before and after.
+
+s3_fp16w peak came on the 3rd chunk (188 chars): graphics 784 MB while MLX
+active was 441 (MLX peak for the whole run 627 MB at 2124 frames) -- the
+graphics-ledger lag, not the model, set the peak; nothing later exceeded it.
+
+The creep, found: "other" stepped 256 -> 314 MB at 18:19:55 during the
+301-char part (the run's longest, 2124 frames) and malloc IN USE rose 220 ->
+276 MB (live heap, not fragmentation). Mac repro (testVocoderHeapAcrossLengths):
+the vocoder's vDSP DFT plans were cached per power-of-two length forever,
++30 MB at 2^19, +62 MB at 2^20. 4c780110 keeps them for one decode only:
+Mac malloc in use 22 -> 114 MB before, flat 5 MB after; decode ~+0.05 s.
