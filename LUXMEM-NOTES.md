@@ -131,3 +131,42 @@ one layer's block product differs < 7e-7). Recompute-per-use tried: -60 MB,
   `gloam-voice-studio:` back to `url:` + `revision: <pushed sha>`; remove
   the TEMP `path: ../gloam-voice-studio-luxmem` line.
 - Decide on the [luxmem] NSLog lines (957d6886): drop or demote.
+
+## Paused 2026-11-20 (~09:15)
+
+Nothing running on the phone (app terminated, News make queue emptied) or the
+Mac. Both trees clean. Library HEAD 9e09a89c (+ this note); iOS app 6302149,
+installed on the phone (attention fix + malloc logging + `--mlx-seed`).
+
+Where I am: ef789784 (attention built a block at a time, kept as blocks,
+per-stage evals) is measured on the Mac only; the phone has one partial News
+run of it (09:02, 5 chunks, stopped when David took the phone).
+
+All measurements so far (lifetime peak, News CDC story, 6 min unless noted):
+| run | build | half weights (`--lux-half`) | fp32 | where |
+|---|---|---|---|---|
+| verify (morning) | before round 2 | all-fp16: 1142 | 1496 | phone |
+| w1 | all-fp16 + MemoryWatch | all-fp16: 984 | -- | phone |
+| s0 | weights-only baseline | 1226 | 1436 | phone |
+| s1 | s0 + `--asr-unload` | 1164 | -- | phone |
+| s2 | + ef789784 | 904 after 5 chunks (partial) | -- | phone |
+Mac bench (transient above weights, 336-char chunk, 2033 gen frames):
+fp32 524 -> 290 MB; weights-only 552 -> ~290 MB; all-fp16 253 -> 147 MB;
+features 0.15% RMS from the old path; ~+10% time. Transient vs length
+(weights-only): 2033 frames 286, 1717 243, 1355 198 MB. MLX cache 0/64/128/256:
+max footprint 618-630/665-700/730-755/853-860 MB. Vocoder transient 178 MB.
+ASR check per part 0.25 s kept vs 0.42 s with unload (phone).
+
+Next, in order (phone):
+1. Full 6 min News runs with ef789784: `newsrun.sh s2_fp16w 360 --lux-half`,
+   then `newsrun.sh s2_fp32 360` (scratchpad fable/; parse with
+   tools/peaks.py). Read malloc in-use/held from "before chunk" for the creep.
+2. Billie A/B by ear: `billie.sh billie-after-fp16w --lux-half` on this build;
+   then check out 14d1e193 in this worktree, ship-device, `billie.sh
+   billie-before-fp16w --lux-half`, return to the branch head, ship again.
+   Same seed (7), so the two WAVs differ only by the fix.
+3. If half weights is still >1 GB: `--asr-unload` (phone -62 MB) and then
+   `--lux-frame-budget 2400` (Mac -90 MB, more seams), one at a time.
+4. Then decide what ships: make ASR unload / budget real (not Debug flags),
+   drop or demote the probes, and the repin of project.yml (see "Before pushing").
+Optional, not started: which fp16 activation causes the ~9 s artifact.
