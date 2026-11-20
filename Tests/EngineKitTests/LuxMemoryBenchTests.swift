@@ -31,10 +31,13 @@ final class LuxMemoryBenchTests: XCTestCase {
         eval(promptFeatures, noise)
 
         var reference: MLXArray? = nil
-        for dtype in [DType.float32, .float16, .bfloat16] {
+        // (weights, compute): float16 weights with float32 compute is the
+        // weights-only mode; (.float16, .float16) computes in half too.
+        let modes: [(DType, DType)] = [(.float32, .float32), (.float16, .float32), (.float16, .float16)]
+        for (wdtype, dtype) in modes {
             let model = try Self.loadModel(dir)
-            if dtype != .float32 {
-                model.update(parameters: model.parameters().mapValues { $0.asType(dtype) })
+            if wdtype != .float32 {
+                model.update(parameters: model.parameters().mapValues { $0.asType(wdtype) })
                 eval(model)
             }
             Memory.clearCache()
@@ -53,8 +56,8 @@ final class LuxMemoryBenchTests: XCTestCase {
             if let reference {
                 err = (MLX.sqrt(MLX.mean(MLX.square(f - reference))) / MLX.sqrt(MLX.mean(MLX.square(reference)))).item(Float.self)
             } else { reference = f }
-            print(String(format: "LUXHALF %@: weights %d MB, transient peak %d MB, %.2fs, rel RMS err vs fp32 %.5f",
-                         "\(dtype)", base / 1_000_000, (Memory.peakMemory - base) / 1_000_000,
+            print(String(format: "LUXHALF %@ weights / %@ compute: weights %d MB, transient peak %d MB, %.2fs, rel RMS err vs fp32 %.5f",
+                         "\(wdtype)", "\(dtype)", base / 1_000_000, (Memory.peakMemory - base) / 1_000_000,
                          Date().timeIntervalSince(started), err))
         }
     }

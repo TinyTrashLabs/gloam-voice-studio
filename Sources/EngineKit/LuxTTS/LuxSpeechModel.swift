@@ -178,15 +178,22 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
     /// vocoder stays float32.
     private let acousticDType: DType
 
+    /// The dtype the acoustic model computes in (`load(...computeDType:)`):
+    /// prompt features and noise enter in it, and every activation follows
+    /// them. Float32 with float16 weights is "weights-only" half precision.
+    private let computeDType: DType
+
     public init(
         model: ZipVoiceDistill, vocoder: LuxVocoder, tokenizer: LuxTokenizer,
-        leadInTrimming: Bool = true, acousticDType: DType = .float32
+        leadInTrimming: Bool = true, acousticDType: DType = .float32,
+        computeDType: DType = .float32
     ) {
         self.model = model
         self.vocoder = vocoder
         self.tokenizer = tokenizer
         self.leadInTrimming = leadInTrimming
         self.acousticDType = acousticDType
+        self.computeDType = computeDType
     }
 
     public var sampleRate: Int { LuxVocoder.outputSampleRate }
@@ -314,7 +321,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
                   Memory.activeMemory / 1_000_000, Memory.cacheMemory / 1_000_000, luxFootprintMB())
 
             let promptFeatures = prompt.features.expandedDimensions(axis: 0)  // (1, T, 100)
-                .asType(acousticDType)
+                .asType(computeDType)
 
             let output = model.sample(
                 tokens: [textTokens],
@@ -437,7 +444,7 @@ extension LuxSpeechModel {
     /// predictably, rather than inside a synthesize() call.
     public static func load(
         from directory: URL, phonemizer: any PhonemizerProviding, leadInTrimming: Bool,
-        acousticDType: DType = .float32
+        acousticDType: DType = .float32, computeDType: DType = .float32
     ) async throws -> LuxSpeechModel {
         if leadInTrimming {
             Task { await LuxLeadInTrimmer.requestAuthorizationIfNeeded() }
@@ -468,6 +475,10 @@ extension LuxSpeechModel {
         // resident on a phone; output features move ~0.8% RMS (fp16) against
         // fp32 on identical noise (LuxMemoryBenchTests). Whether that is
         // audible is a listening question, so the default stays float32.
+        // `computeDType` float32 (the default) keeps the activations in
+        // float32 -- each matmul promotes its half weight -- which is the
+        // weights-only mode David listened to and accepted (2026-11-20).
+        // Float16 compute too left an audible artifact in a 336-char line.
         if acousticDType != .float32 {
             modelWeights = [:]
             model.update(parameters: model.parameters().mapValues { $0.asType(acousticDType) })
@@ -483,7 +494,8 @@ extension LuxSpeechModel {
 
         return LuxSpeechModel(
             model: model, vocoder: vocoder, tokenizer: tokenizer,
-            leadInTrimming: leadInTrimming, acousticDType: acousticDType)
+            leadInTrimming: leadInTrimming, acousticDType: acousticDType,
+            computeDType: computeDType)
     }
 
     private static func weightURLs(in directory: URL) throws -> (model: URL, vocoder: URL) {
