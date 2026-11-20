@@ -151,4 +151,14 @@ final class LuxVocoderResampleTests: XCTestCase {
         let err = interior.map { abs(got[$0] - (wantHigh[$0] + wantLow[$0])) }.max() ?? .infinity
         XCTAssertLessThan(err, 1e-2)
     }
+
+    /// DFT plans are heap memory; none outlive the call that made them.
+    func testDFTPlansDoNotOutliveTheCall() {
+        let audio = MLXRandom.normal([1, 30_000])
+        _ = luxFFTResample(audio, from: 24_000, to: 48_000)
+        XCTAssertEqual(LuxRealDFT.cachedCount, 0)
+        let wide = luxFFTResample(audio, from: 24_000, to: 48_000)
+        _ = luxCrossoverMergeLinkwitzRiley(highPath: wide, lowPath: wide, cutoff: 8000)
+        XCTAssertEqual(LuxRealDFT.cachedCount, 0)
+    }
 }

@@ -106,6 +106,25 @@ final class LuxMemoryBenchTests: XCTestCase {
         }
     }
 
+    /// Heap (malloc in use) across vocoder decodes of many lengths: does
+    /// each new length leave something behind (JIT kernels, plans)?
+    func testVocoderHeapAcrossLengths() throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set LUXMEM_BENCH=1")
+        let dir = URL(fileURLWithPath: try XCTUnwrap(env["LUXTTS_WEIGHTS_DIR"]))
+        Memory.cacheLimit = 0
+        let vocoder = LuxVocoder()
+        try vocoder.loadTorchWeights(try loadArrays(url: dir.appendingPathComponent("lux_vocoder.safetensors")))
+        func heap() -> Int { var s = malloc_statistics_t(); malloc_zone_statistics(nil, &s); return s.size_in_use / 1_000_000 }
+        let lengths = (0 ..< 12).map { 900 + $0 * 113 } + [900, 1013, 1126]
+        for n in lengths {
+            let f = MLXRandom.normal([1, n, 100]) - 3
+            let wav = vocoder.decode(f, returnSmooth: false)
+            eval(wav)
+            print("LUXHEAP vocoder frames \(n): malloc in use \(heap()) MB, footprint \(FootprintWatch.sample().footprint) MB")
+        }
+    }
+
     func testAcousticModelPeak() throws {
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")

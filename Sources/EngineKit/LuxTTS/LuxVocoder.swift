@@ -374,13 +374,40 @@ private func nextFFTFriendlySize(_ n: Int) -> Int {
     return candidate
 }
 
-/// Real DFT plans (vDSP twiddle tables) cached per length: a plan for 2^21
-/// points takes tens of milliseconds to build and every chunk of a read
-/// wants the same few sizes.
-private enum LuxRealDFT {
+/// Real DFT plans (vDSP twiddle tables) cached per length, for the length of
+/// one decode (`LuxRealDFT.scoped`): a decode asks for the same few sizes
+/// several times. Not across decodes: the tables are heap memory -- +30 MB
+/// for the 2^19 sizes, +62 MB more at 2^20 (Mac, malloc in use) -- and kept
+/// forever they sat under every later render, the "creep" in a News run on
+/// the phone (heap +57 MB the first time a 301-char part was decoded).
+enum LuxRealDFT {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var forward: [Int: vDSP_DFT_Setup] = [:]
     nonisolated(unsafe) private static var inverse: [Int: vDSP_DFT_Setup] = [:]
+    nonisolated(unsafe) private static var depth = 0
+
+    /// Runs `body` with plans cached; when the outermost scope ends, they go.
+    static func scoped<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock(); depth += 1; lock.unlock()
+        defer {
+            lock.lock()
+            depth -= 1
+            if depth == 0 {
+                for s in forward.values { vDSP_DFT_DestroySetup(s) }
+                for s in inverse.values { vDSP_DFT_DestroySetup(s) }
+                forward = [:]
+                inverse = [:]
+            }
+            lock.unlock()
+        }
+        return try body()
+    }
+
+    /// Plans held right now (tests).
+    static var cachedCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return forward.count + inverse.count
+    }
 
     private static func setup(n: Int, direction: vDSP_DFT_Direction) -> vDSP_DFT_Setup {
         lock.lock()
@@ -500,13 +527,14 @@ func luxFFTResample(_ audio: MLXArray, from srcRate: Int, to dstRate: Int) -> ML
     let gain = Float(newN) / Float(n)
 
     let (rows, leading) = luxRows(audio)
-    let out = rows.map { row -> [Float] in
+    // Scoped: a caller outside a decode does not leave plans behind.
+    let out = LuxRealDFT.scoped { rows.map { row -> [Float] in
         var padded = row
         padded.append(contentsOf: repeatElement(0, count: paddedN - row.count))
         let spec = LuxRealDFT.rfft(padded, n: paddedN)
         let resampled = LuxRealDFT.irfft(re: spec.re, im: spec.im, n: paddedNewN)
         return resampled[0 ..< newN].map { $0 * gain }
-    }
+    } }
     return luxArray(rows: out, leading: leading)
 }
 
@@ -551,7 +579,7 @@ func luxCrossoverMergeLinkwitzRiley(
     let (highRows, leading) = luxRows(highPath)
     let (lowRows, _) = luxRows(lowPath)
     precondition(highRows.count == lowRows.count, "crossover paths must share a batch shape")
-    let out = zip(highRows, lowRows).map { high, low -> [Float] in
+    let out = LuxRealDFT.scoped { zip(highRows, lowRows).map { high, low -> [Float] in
         var paddedHigh = high
         paddedHigh.append(contentsOf: repeatElement(0, count: paddedN - high.count))
         var paddedLow = low
@@ -567,7 +595,7 @@ func luxCrossoverMergeLinkwitzRiley(
         }
         let merged = LuxRealDFT.irfft(re: re, im: im, n: paddedN)
         return paddedN == n ? merged : Array(merged[0 ..< n])
-    }
+    } }
     return luxArray(rows: out, leading: leading)
 }
 
@@ -651,6 +679,10 @@ public final class LuxVocoder: Module {
     ///   LuxTTS API). `false` → the sharper dual-path output: 48 kHz head above
     ///   `crossoverCutoff`, resampled 24 kHz head below, crossover-merged.
     public func decode(_ features: MLXArray, returnSmooth: Bool = false) -> MLXArray {
+        LuxRealDFT.scoped { decodeStages(features, returnSmooth: returnSmooth) }
+    }
+
+    private func decodeStages(_ features: MLXArray, returnSmooth: Bool) -> MLXArray {
         // MLX.eval (lazy-graph materialisation, not code evaluation) after
         // each stage, as in the acoustic model: one graph for the whole
         // decode held ~310 MB of intermediates for a 336-char chunk, staged
