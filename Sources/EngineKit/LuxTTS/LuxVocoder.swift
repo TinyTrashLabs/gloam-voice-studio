@@ -651,7 +651,12 @@ public final class LuxVocoder: Module {
     ///   LuxTTS API). `false` → the sharper dual-path output: 48 kHz head above
     ///   `crossoverCutoff`, resampled 24 kHz head below, crossover-merged.
     public func decode(_ features: MLXArray, returnSmooth: Bool = false) -> MLXArray {
+        // MLX.eval (lazy-graph materialisation, not code evaluation) after
+        // each stage, as in the acoustic model: one graph for the whole
+        // decode held ~310 MB of intermediates for a 336-char chunk, staged
+        // ~185 MB (Mac, LuxMemoryBenchTests.testVocoderPeak). Same values.
         let feats = backbone(features)  // (B, T, dim)
+        eval(feats)
 
         // The ±1 clips follow the MLX reference; the torch ground truth does
         // not clip anywhere in decode. They only bite if a path overshoots
@@ -665,7 +670,9 @@ public final class LuxVocoder: Module {
         }
 
         let upsampled = upsampler(feats)  // (B, ~2T, dim)
+        eval(upsampled)
         var audio48 = head48k(upsampled)  // (B, L48) @ 48 kHz
+        eval(audio48)
         audio48 = clip(audio48, min: -1.0, max: 1.0)
 
         let minLen = min(audio48.dim(-1), audio24Up.dim(-1))

@@ -74,6 +74,30 @@ final class LuxMemoryBenchTests: XCTestCase {
         return model
     }
 
+    /// The dual-path 48 kHz vocoder on a 336-char chunk's features.
+    func testVocoderPeak() throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")
+        let dir = URL(fileURLWithPath: try XCTUnwrap(env["LUXTTS_WEIGHTS_DIR"]))
+        Memory.cacheLimit = 0
+        let vocoder = LuxVocoder()
+        try vocoder.loadTorchWeights(try loadArrays(url: dir.appendingPathComponent("lux_vocoder.safetensors")))
+        MLXRandom.seed(2)
+        let features = MLXRandom.normal([1, 2033, 100]) - 3
+        eval(features)  // MLX.eval: materialise
+        for run in 0 ..< 2 {
+            Memory.clearCache()
+            let base = Memory.activeMemory
+            Memory.peakMemory = 0
+            let started = Date()
+            let wav = vocoder.decode(features, returnSmooth: false)
+            eval(wav)
+            print(String(format: "LUXVOC run %d: weights+features %d MB, transient peak %d MB, %.2fs, samples %d",
+                         run, base / 1_000_000, (Memory.peakMemory - base) / 1_000_000,
+                         Date().timeIntervalSince(started), wav.dim(-1)))
+        }
+    }
+
     func testAcousticModelPeak() throws {
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")
