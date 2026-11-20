@@ -67,4 +67,33 @@ final class LuxAttentionBlockedTests: XCTestCase {
         let sums = blocked.sum(axis: -1)
         XCTAssertLessThan(MLX.abs(sums - 1).max().item(Float.self), 1e-5)
     }
+
+    /// Applying the weights a row block at a time (the layer's path) gives
+    /// the whole-tensor product: rows of a matmul are independent, only the
+    /// GEMM tiling (rounding) can differ.
+    func testRowBlocksApplyLikeTheWholeWeights() {
+        MLXRandom.seed(7)
+        let attn = RelPositionMultiheadAttentionWeights(
+            embedDim: 64, posDim: 48, numHeads: 4, queryHeadDim: 32, posHeadDim: 4)
+        let (seqLen, batch) = (Int(ProcessInfo.processInfo.environment["LUXBLOCKS_T"] ?? "") ?? 300, 1)
+        let x = MLXRandom.normal([seqLen, batch, 64]) * 2
+        let posEmb = CompactRelPositionalEncoding(48)(x)
+        attn.rowsPerBlockOverride = seqLen == 300 ? 37 : nil
+        let scores = attn.scores(x, posEmb: posEmb)
+        let v = MLXRandom.normal([4, batch, seqLen, 12])
+        let whole = matmul(scores.weights(), v)
+        let blocks = scores.evaluatedBlocks()
+        if seqLen == 300 { XCTAssertEqual(blocks.blocks.count, 9) }
+        let blocked = blocks.apply(v)
+        // NonlinAttention's use: head 0 against its own one-head values.
+        let v1 = MLXRandom.normal([1, batch, seqLen, 36])
+        let head0 = blocks.apply(v1, heads: 0 ..< 1)
+        let whole0 = matmul(scores.weights()[0 ..< 1], v1)
+        eval(whole, blocked, head0, whole0)
+        let rel = (MLX.abs(blocked - whole).max() / MLX.abs(whole).max()).item(Float.self)
+        XCTAssertLessThan(rel, 1e-6, "max |blocked - whole| / max |whole| = \(rel)")
+        let rel0 = (MLX.abs(head0 - whole0).max() / MLX.abs(whole0).max()).item(Float.self)
+        XCTAssertLessThan(rel0, 1e-6)
+        print("LUXBLOCKS rel diff \(rel), head0 \(rel0)")
+    }
 }

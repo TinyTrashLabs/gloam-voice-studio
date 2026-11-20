@@ -308,7 +308,7 @@ public final class RelPositionMultiheadAttentionWeights: Module {
     @ModuleInfo(key: "in_proj") var inProj: Linear
     @ModuleInfo(key: "linear_pos") var linearPos: Linear
 
-    /// Tests only: forces small query blocks (see `blockedWeights`).
+    /// Tests only: forces small query blocks (see `RelPositionAttention`).
     var rowsPerBlockOverride: Int?
 
     public init(
@@ -338,6 +338,18 @@ public final class RelPositionMultiheadAttentionWeights: Module {
         keyPaddingMask: MLXArray? = nil,
         attnMask: MLXArray? = nil
     ) -> MLXArray {
+        scores(x, posEmb: posEmb, keyPaddingMask: keyPaddingMask, attnMask: attnMask).weights()
+    }
+
+    /// The layer's attention, not yet materialised: `RelPositionAttention`
+    /// applies it to values a block of query rows at a time, so the
+    /// (heads, batch, T, T) weights never exist whole.
+    public func scores(
+        _ x: MLXArray,
+        posEmb: MLXArray,
+        keyPaddingMask: MLXArray? = nil,
+        attnMask: MLXArray? = nil
+    ) -> RelPositionAttention {
         let proj = inProj(x)
         let (seqLen, batchSize) = (proj.dim(0), proj.dim(1))
         let queryDim = queryHeadDim * numHeads
@@ -355,7 +367,7 @@ public final class RelPositionMultiheadAttentionWeights: Module {
         pos = pos.reshaped(-1, seqLen2, numHeads, posHeadDim).transposed(2, 0, 3, 1)
 
         if attnMask == nil {
-            return Self.blockedWeights(
+            return RelPositionAttention(
                 q: q, k: k, p: p, pos: pos, seqLen: seqLen, keyPaddingMask: keyPaddingMask,
                 rowsPerBlock: rowsPerBlockOverride)
         }
@@ -377,65 +389,139 @@ public final class RelPositionMultiheadAttentionWeights: Module {
                 MLXArray(Float(-1000)).asType(attnScores.dtype), attnScores)
         }
 
-        return softmax(attnScores, axis: -1, precise: true)
+        return RelPositionAttention(full: softmax(attnScores, axis: -1, precise: true))
+    }
+}
+
+/// One layer's relative-position attention weights, kept as their inputs
+/// (q, k, p, pos) until built a block of query rows at a time
+/// (`evaluatedBlocks`, or `weights()` whole). Softmax is per row, so blocking
+/// rows is exact.
+///
+/// Why blocks: the full path materialises the relative-position scores at
+/// (heads, batch, T, 2T-1), twice the size of the weights, and the pad/reshape
+/// shift copies them twice more, so one layer briefly holds about seven
+/// (heads, T, T) fp32 tensors. At T = 3078 frames (a 336-char chunk over an
+/// 11 s reference) that is ~1 GB per layer, and the whole acoustic model
+/// peaked 1.74 GB above its weights on an iPhone 15 Pro (2026-11-19). A block
+/// needs only the band of relative positions its rows can see (rows + T - 1
+/// wide), and the shift is a strided view, not a copy.
+///
+/// Why the blocks stay blocks: a Zipformer layer uses its weights three times
+/// (NonlinAttention on head 0, then both SelfAttentions), so they live across
+/// the layer -- 153 MB in float32 at T = 3095. Concatenated, they briefly
+/// existed twice. (Recomputing each block for each use instead was tried:
+/// 60 MB less at ~45% more time on the Mac bench, dropped.)
+public struct RelPositionAttention {
+    let q: MLXArray?, k: MLXArray?, p: MLXArray?, pos: MLXArray?
+    let seqLen: Int
+    let paddingMask: MLXArray?
+    let rowsPerBlock: Int?
+    /// The masked (`attnMask`) path's weights, computed whole as before.
+    let full: MLXArray?
+
+    init(q: MLXArray, k: MLXArray, p: MLXArray, pos: MLXArray, seqLen: Int,
+         keyPaddingMask: MLXArray?, rowsPerBlock: Int?) {
+        (self.q, self.k, self.p, self.pos) = (q, k, p, pos)
+        self.seqLen = seqLen
+        self.paddingMask = keyPaddingMask.map { expandedDimensions($0, axis: 1) }
+        self.rowsPerBlock = rowsPerBlock
+        self.full = nil
+    }
+
+    init(full: MLXArray) {
+        (q, k, p, pos) = (nil, nil, nil, nil)
+        seqLen = full.dim(-1)
+        paddingMask = nil
+        rowsPerBlock = nil
+        self.full = full
     }
 
     /// Elements per block-sized score tensor (4 M floats = 16 MB).
     static let blockElements = 4 << 20
 
-    /// The same weights as the full path above, a block of query rows at a
-    /// time. Softmax is per row, so blocking rows is exact.
-    ///
-    /// Why: the full path materialises the relative-position scores at
-    /// (heads, batch, T, 2T-1), twice the size of the weights, and the
-    /// pad/reshape shift copies them twice more, so one layer briefly holds
-    /// about seven (heads, T, T) fp32 tensors. At T = 3078 frames (a 336-char
-    /// chunk over an 11 s reference) that is ~1 GB per layer, and the whole
-    /// acoustic model peaked 1.74 GB above its weights on an iPhone 15 Pro
-    /// (2026-11-19) -- the per-chunk jetsam risk on a phone. Here a block
-    /// needs only the band of relative positions its rows can see
-    /// (rows + T - 1 wide), and the shift is a strided view, not a copy, so
-    /// the layer holds the (heads, T, T) weights plus small blocks.
-    static func blockedWeights(
-        q: MLXArray, k: MLXArray, p: MLXArray, pos: MLXArray,
-        seqLen: Int, keyPaddingMask: MLXArray?, rowsPerBlock: Int? = nil
-    ) -> MLXArray {
-        let (heads, batch) = (q.dim(0), q.dim(1))
+    var numHeads: Int { full?.dim(0) ?? q!.dim(0) }
+
+    /// Query-row ranges of the blocks for `heads` heads. Even split, so no
+    /// block is a single row: MLX multiplies a one-row operand with a
+    /// different kernel (gemv) whose rounding differs from the full path's
+    /// GEMM by ~1e-3 relative; blocks of 2+ rows match the full path bit for
+    /// bit (LuxAttentionBlockedTests).
+    private func blocks(heads: Int, batch: Int) -> [Range<Int>] {
         let rowsPerBlock = rowsPerBlock
-            ?? max(16, blockElements / max(1, heads * batch * 2 * seqLen))
-        let paddingMask = keyPaddingMask.map { expandedDimensions($0, axis: 1) }
-        // Even split, so no block is a single row: MLX multiplies a one-row
-        // operand with a different kernel (gemv) whose rounding differs from
-        // the full path's GEMM by ~1e-3 relative; blocks of 2+ rows match the
-        // full path bit for bit (LuxAttentionBlockedTests).
+            ?? max(16, Self.blockElements / max(1, heads * batch * 2 * seqLen))
         let blockCount = max(1, (seqLen + rowsPerBlock - 1) / rowsPerBlock)
-        var blocks: [MLXArray] = []
+        var out: [Range<Int>] = []
         var start = 0
         for b in 0 ..< blockCount {
             let rows = seqLen / blockCount + (b < seqLen % blockCount ? 1 : 0)
-            let end = start + rows
-            var scores = matmul(q[0..., 0..., start ..< end], k)  // (H, B, rows, T)
-
-            // Row i, column j reads relative index (T-1) + j - i. Over this
-            // block that spans [T - end, T - end + width).
-            let lo = seqLen - end
-            let width = seqLen + rows - 1
-            let band = matmul(p[0..., 0..., start ..< end], pos[.ellipsis, lo ..< (lo + width)])
-            // band is a fresh contiguous (H, B, rows, width) product; within it
-            // row r, column j sits at (rows - 1 - r) + j, i.e. offset rows-1,
-            // row stride width-1.
-            let shifted = asStrided(
-                band, [heads, batch, rows, seqLen],
-                strides: [batch * rows * width, rows * width, width - 1, 1],
-                offset: rows - 1)
-            scores = scores + shifted
-            if let paddingMask {
-                scores = which(paddingMask, MLXArray(Float(-1000)).asType(scores.dtype), scores)
-            }
-            blocks.append(softmax(scores, axis: -1, precise: true))
-            start = end
+            out.append(start ..< start + rows)
+            start += rows
         }
-        return blocks.count == 1 ? blocks[0] : concatenated(blocks, axis: 2)
+        return out
+    }
+
+    /// Softmaxed weights of query rows `rows`, heads `heads`: (h, B, rows, T).
+    private func weights(rows range: Range<Int>, heads: Range<Int>) -> MLXArray {
+        let (q, k, p, pos) = (self.q![heads], self.k![heads], self.p![heads], self.pos![heads])
+        let (h, batch) = (q.dim(0), q.dim(1))
+        let (start, end, rows) = (range.lowerBound, range.upperBound, range.count)
+        var scores = matmul(q[0..., 0..., start ..< end], k)  // (h, B, rows, T)
+
+        // Row i, column j reads relative index (T-1) + j - i. Over this
+        // block that spans [T - end, T - end + width).
+        let lo = seqLen - end
+        let width = seqLen + rows - 1
+        let band = matmul(p[0..., 0..., start ..< end], pos[.ellipsis, lo ..< (lo + width)])
+        // band is a fresh contiguous (h, B, rows, width) product; within it
+        // row r, column j sits at (rows - 1 - r) + j, i.e. offset rows-1,
+        // row stride width-1.
+        let shifted = asStrided(
+            band, [h, batch, rows, seqLen],
+            strides: [batch * rows * width, rows * width, width - 1, 1],
+            offset: rows - 1)
+        scores = scores + shifted
+        if let paddingMask {
+            scores = which(paddingMask, MLXArray(Float(-1000)).asType(scores.dtype), scores)
+        }
+        return softmax(scores, axis: -1, precise: true)
+    }
+
+    /// The whole (heads, batch, T, T) weights (tests, and the masked path).
+    public func weights() -> MLXArray {
+        if let full { return full }
+        let all = 0 ..< numHeads
+        let parts = blocks(heads: numHeads, batch: q!.dim(1)).map { weights(rows: $0, heads: all) }
+        return parts.count == 1 ? parts[0] : concatenated(parts, axis: 2)
+    }
+
+    /// The weights as row blocks, each evaluated before the next is built:
+    /// left as one lazy graph, MLX runs every block's score, band and
+    /// softmax side by side, about three times the weights' own size at
+    /// once (Mac bench, T = 3095, float32: +482 MB building a 153 MB tensor).
+    public func evaluatedBlocks() -> AttentionBlocks {
+        if let full { return AttentionBlocks(blocks: [full]) }
+        let all = 0 ..< numHeads
+        return AttentionBlocks(blocks: blocks(heads: numHeads, batch: q!.dim(1)).map {
+            let w = weights(rows: $0, heads: all)
+            eval(w)  // MLX.eval: materialise this block before building the next
+            return w
+        })
+    }
+}
+
+/// A layer's attention weights as evaluated row blocks
+/// (`RelPositionAttention.evaluatedBlocks`), applied block by block so the
+/// whole (heads, batch, T, T) tensor is never concatenated (a second copy).
+public struct AttentionBlocks {
+    let blocks: [MLXArray]
+
+    var numHeads: Int { blocks[0].dim(0) }
+
+    /// `matmul(weights[heads], v)` for v of shape (h, B, T, d): (h, B, T, d).
+    public func apply(_ v: MLXArray, heads: Range<Int>? = nil) -> MLXArray {
+        let parts = blocks.map { block in matmul(heads.map { block[$0] } ?? block, v) }
+        return parts.count == 1 ? parts[0] : concatenated(parts, axis: 2)
     }
 }
 
@@ -456,12 +542,21 @@ public final class SelfAttention: Module {
     }
 
     public func callAsFunction(_ x: MLXArray, attnWeights: MLXArray) -> MLXArray {
-        let (seqLen, batchSize) = (x.dim(0), x.dim(1))
-        let numHeads = attnWeights.dim(0)
+        callAsFunction(x, numHeads: attnWeights.dim(0)) { matmul(attnWeights, $0) }
+    }
 
+    /// The same, with weights held as row blocks.
+    public func callAsFunction(_ x: MLXArray, attention: AttentionBlocks) -> MLXArray {
+        callAsFunction(x, numHeads: attention.numHeads) { attention.apply($0) }
+    }
+
+    private func callAsFunction(
+        _ x: MLXArray, numHeads: Int, attend: (MLXArray) -> MLXArray
+    ) -> MLXArray {
+        let (seqLen, batchSize) = (x.dim(0), x.dim(1))
         var v = inProj(x)
         v = v.reshaped(seqLen, batchSize, numHeads, -1).transposed(2, 1, 0, 3)
-        v = matmul(attnWeights, v)
+        v = attend(v)
         v = v.transposed(2, 1, 0, 3).reshaped(seqLen, batchSize, -1)
         return outProj(v)
     }
@@ -509,6 +604,17 @@ public final class NonlinAttention: Module {
     }
 
     public func callAsFunction(_ x: MLXArray, attnWeights: MLXArray) -> MLXArray {
+        callAsFunction(x, numHeads: attnWeights.dim(0)) { matmul(attnWeights, $0) }
+    }
+
+    /// The same with head 0 of `attention`'s row blocks.
+    public func callAsFunction(_ x: MLXArray, attention: AttentionBlocks) -> MLXArray {
+        callAsFunction(x, numHeads: 1) { attention.apply($0, heads: 0 ..< 1) }
+    }
+
+    private func callAsFunction(
+        _ x: MLXArray, numHeads: Int, attend: (MLXArray) -> MLXArray
+    ) -> MLXArray {
         let proj = inProj(x)
         let (seqLen, batchSize) = (proj.dim(0), proj.dim(1))
 
@@ -518,9 +624,8 @@ public final class NonlinAttention: Module {
         var v = parts[1] * s
         let y = parts[2]
 
-        let numHeads = attnWeights.dim(0)
         v = v.reshaped(seqLen, batchSize, numHeads, -1).transposed(2, 1, 0, 3)
-        v = matmul(attnWeights, v)
+        v = attend(v)
         v = v.transposed(2, 1, 0, 3).reshaped(seqLen, batchSize, -1)
 
         v = v * y

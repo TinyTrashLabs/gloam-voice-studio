@@ -52,6 +52,11 @@ final class LuxMemoryBenchTests: XCTestCase {
             print("LUXHALF dtype out \(out.features.dtype)")
             let f = out.features.asType(.float32)
             eval(f)
+            // LUXMEM_DUMP=<dir>: the features per mode, to diff two builds' arithmetic.
+            if let dir = env["LUXMEM_DUMP"] {
+                let data = f.asArray(Float.self).withUnsafeBufferPointer { Data(buffer: $0) }
+                try data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(wdtype)-\(dtype).f32"))
+            }
             var err = Float(0)
             if let reference {
                 err = (MLX.sqrt(MLX.mean(MLX.square(f - reference))) / MLX.sqrt(MLX.mean(MLX.square(reference)))).item(Float.self)
@@ -117,6 +122,10 @@ final class LuxMemoryBenchTests: XCTestCase {
         }
         try model.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
         weights = [:]
+        // LUXMEM_HALF_WEIGHTS=1: float16 weights, float32 compute (weights-only).
+        if env["LUXMEM_HALF_WEIGHTS"] == "1" {
+            model.update(parameters: model.parameters().mapValues { $0.asType(.float16) })
+        }
         eval(model)  // MLX.eval: materialise the weights
         Memory.clearCache()
         if let mb = Int(env["LUXMEM_CACHE_MB"] ?? "") { Memory.cacheLimit = mb * 1_000_000 }

@@ -167,40 +167,45 @@ final class Zipformer2EncoderLayer: Module {
         let srcOrig = src
         var src = src
 
-        let attnWeights = selfAttnWeights(
+        // MLX.eval (lazy-graph materialisation, not code evaluation) at
+        // checkpoints: each block of the attention weights as it is built,
+        // after each stage of the layer, and the layer's output. Left lazy,
+        // MLX's scheduler runs independent work side by side and keeps its
+        // intermediates alive together: with one graph per ODE step the
+        // 336-char chunk in LuxMemoryBenchTests peaked 1518 MB above the
+        // weights; with only the weights and the output evaluated, 524 MB
+        // (float32), +482 MB of it building the 153 MB (heads, T, T)
+        // weights; with these, 330 MB, at the same speed (Mac, T = 3095).
+        // Inference-only, like this whole port.
+        let attention = selfAttnWeights.scores(
             src, posEmb: posEmb, keyPaddingMask: srcKeyPaddingMask, attnMask: attnMask)
-        // MLX.eval (lazy-graph materialisation, not code evaluation) at two
-        // checkpoints per layer: these weights, and the layer's output below.
-        // Left to one graph per ODE step, MLX's scheduler keeps intermediates
-        // of many layers alive at once: the 336-char chunk in
-        // LuxMemoryBenchTests peaked 1518 MB above the weights with no
-        // checkpoint, 844 MB with the layer one, 520 MB with both (Mac, 512 MB
-        // cache limit; ~7% slower). Inference-only, like this whole port.
-        eval(attnWeights)
+            .evaluatedBlocks()
 
         if let timeEmb { src = src + timeEmb }
         src = src + feedForward1(src)
+        eval(src)
 
         // Torch uses attn_weights[0:1] (head 0 only) for NonlinAttention.
-        let selectedAttnWeights = attnWeights[0 ..< 1]
-        src = src + nonlinAttention(src, attnWeights: selectedAttnWeights)
-
-        src = src + selfAttn1(src, attnWeights: attnWeights)
+        src = src + nonlinAttention(src, attention: attention)
+        src = src + selfAttn1(src, attention: attention)
 
         if useConv, let convModule1 {
             if let timeEmb { src = src + timeEmb }
             src = src + convModule1(src, srcKeyPaddingMask: srcKeyPaddingMask)
         }
+        eval(src)
 
         src = src + feedForward2(src)
         src = bypassMid(srcOrig, src)
+        eval(src)
 
-        src = src + selfAttn2(src, attnWeights: attnWeights)
+        src = src + selfAttn2(src, attention: attention)
 
         if useConv, let convModule2 {
             if let timeEmb { src = src + timeEmb }
             src = src + convModule2(src, srcKeyPaddingMask: srcKeyPaddingMask)
         }
+        eval(src)
 
         src = src + feedForward3(src)
         src = norm(src)
