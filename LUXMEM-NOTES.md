@@ -217,3 +217,26 @@ The creep, found: "other" stepped 256 -> 314 MB at 18:19:55 during the
 the vocoder's vDSP DFT plans were cached per power-of-two length forever,
 +30 MB at 2^19, +62 MB at 2^20. 4c780110 keeps them for one decode only:
 Mac malloc in use 22 -> 114 MB before, flat 5 MB after; decode ~+0.05 s.
+
+With 4c780110 (DFT plans per decode) too, app rebuilt (phone):
+| run | flags | lifetime peak | parts / kept flagged | notes |
+|---|---|---|---|---|
+| s4_fp16w | `--lux-half` | 905 after 14 chunks | -- | app sent to background 18:30, discarded |
+| s4_fp32 | -- | 1192 MB | 42 / 9 | 6 min, not killed; thermal 1-2 most of it |
+| s4b_fp16w | `--lux-half` | 960 MB | 34 / 9 | 5.5 min, then app sent to background |
+Creep gone: malloc in use flat after the recogniser loads (fp16w 171-176 MB,
+fp32 182-183 MB from minute 1 to the end; was 220 -> 276 with the step).
+Half-weights peak again set by the graphics ledger: 950 at a 78-char chunk
+with MLX active 437 (graphics 719); run's MLX peak 606 MB at 2044 frames.
+
+s4b crashed AFTER the measured window: backgrounded at 18:46:31 mid-chunk
+(thermal 2, ~8 s chunks), gpu-gate drain timed out at 2.5 s with the unit
+still running, then "[METAL] Command buffer execution failed: Insufficient
+Permission (to submit GPU work from background)" -> uncaught
+std::runtime_error -> SIGABRT. A chunk that outlives the drain submits its
+next eval from the background; ef789784's extra eval checkpoints mean more
+submissions per chunk (not shown to be the cause; the drain/abort path is the
+known background-GPU issue).
+
+Not yet run: fp16w + --asr-unload on the 4c780110 build (s3 had 986 without
+it); --lux-frame-budget 2400 not needed for the 1 GB target so far.
