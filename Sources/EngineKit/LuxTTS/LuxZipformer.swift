@@ -169,6 +169,14 @@ final class Zipformer2EncoderLayer: Module {
 
         let attnWeights = selfAttnWeights(
             src, posEmb: posEmb, keyPaddingMask: srcKeyPaddingMask, attnMask: attnMask)
+        // MLX.eval (lazy-graph materialisation, not code evaluation) at two
+        // checkpoints per layer: these weights, and the layer's output below.
+        // Left to one graph per ODE step, MLX's scheduler keeps intermediates
+        // of many layers alive at once: the 336-char chunk in
+        // LuxMemoryBenchTests peaked 1518 MB above the weights with no
+        // checkpoint, 844 MB with the layer one, 520 MB with both (Mac, 512 MB
+        // cache limit; ~7% slower). Inference-only, like this whole port.
+        eval(attnWeights)
 
         if let timeEmb { src = src + timeEmb }
         src = src + feedForward1(src)
@@ -197,6 +205,7 @@ final class Zipformer2EncoderLayer: Module {
         src = src + feedForward3(src)
         src = norm(src)
         src = bypass(srcOrig, src)
+        eval(src)
         return src
     }
 }
