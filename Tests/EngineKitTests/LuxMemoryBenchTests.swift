@@ -13,6 +13,66 @@ import XCTest
 ///
 /// Opt-in: TEST_RUNNER_LUXMEM_BENCH=1, weights from TEST_RUNNER_LUXTTS_WEIGHTS_DIR.
 final class LuxMemoryBenchTests: XCTestCase {
+    /// fp32 vs a half-precision copy of the model on the same noise: memory,
+    /// time, and how far the output features move. Opt-in like the above.
+    func testHalfPrecisionCost() throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")
+        let dir = URL(fileURLWithPath: try XCTUnwrap(env["LUXTTS_WEIGHTS_DIR"]))
+        Memory.cacheLimit = 0
+        let promptFrames = 1062, promptTokenCount = 188, genFrames = 2016
+        let textTokenCount = Int((Double(genFrames) * Double(promptTokenCount) / Double(promptFrames)).rounded())
+        let tokens = (0 ..< textTokenCount).map { 1 + $0 % 300 }
+        let promptTokens = (0 ..< promptTokenCount).map { 1 + ($0 * 7) % 300 }
+        MLXRandom.seed(11)
+        let promptFeatures = MLXRandom.normal([1, promptFrames, 100]) * 0.3
+        let total = 3095  // what .predict sizes this input to (2033 + 1062)
+        let noise = MLXRandom.normal([1, total, 100])
+        eval(promptFeatures, noise)
+
+        var reference: MLXArray? = nil
+        for dtype in [DType.float32, .float16, .bfloat16] {
+            let model = try Self.loadModel(dir)
+            if dtype != .float32 {
+                model.update(parameters: model.parameters().mapValues { $0.asType(dtype) })
+                eval(model)
+            }
+            Memory.clearCache()
+            let base = Memory.activeMemory
+            Memory.peakMemory = 0
+            let started = Date()
+            let out = model.sample(
+                tokens: [tokens], promptTokens: [promptTokens],
+                promptFeatures: promptFeatures.asType(dtype), promptFeaturesLens: [promptFrames],
+                duration: .predict, numSteps: 4, guidanceScale: 3.0, tShift: 0.5,
+                speed: 1.0, durationPadFrames: 16, noise: noise.asType(dtype))
+            let f = out.features.asType(.float32)
+            eval(f)
+            var err = Float(0)
+            if let reference {
+                err = (MLX.sqrt(MLX.mean(MLX.square(f - reference))) / MLX.sqrt(MLX.mean(MLX.square(reference)))).item(Float.self)
+            } else { reference = f }
+            print(String(format: "LUXHALF %@: weights %d MB, transient peak %d MB, %.2fs, rel RMS err vs fp32 %.5f",
+                         "\(dtype)", base / 1_000_000, (Memory.peakMemory - base) / 1_000_000,
+                         Date().timeIntervalSince(started), err))
+        }
+    }
+
+    static func loadModel(_ dir: URL) throws -> ZipVoiceDistill {
+        let model = ZipVoiceDistill(config: LuxTTSConfig())
+        var weights = try loadArrays(url: dir.appendingPathComponent("lux_model.safetensors"))
+        for key in Array(weights.keys) {
+            let renamed = key
+                .replacingOccurrences(of: ".time_embed.0.", with: ".time_embed.linear1.")
+                .replacingOccurrences(of: ".time_embed.2.", with: ".time_embed.linear2.")
+                .replacingOccurrences(of: ".time_emb.1.", with: ".time_emb.linear.")
+            if renamed != key { weights[renamed] = weights.removeValue(forKey: key) }
+        }
+        try model.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
+        eval(model)  // MLX.eval: materialise the weights
+        return model
+    }
+
     func testAcousticModelPeak() throws {
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")

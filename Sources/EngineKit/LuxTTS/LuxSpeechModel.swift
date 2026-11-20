@@ -167,14 +167,19 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
     /// authorisation). Off for clients that do not own that permission.
     private let leadInTrimming: Bool
 
+    /// The acoustic model's weight dtype (`load(...acousticDType:)`); the
+    /// vocoder stays float32.
+    private let acousticDType: DType
+
     public init(
         model: ZipVoiceDistill, vocoder: LuxVocoder, tokenizer: LuxTokenizer,
-        leadInTrimming: Bool = true
+        leadInTrimming: Bool = true, acousticDType: DType = .float32
     ) {
         self.model = model
         self.vocoder = vocoder
         self.tokenizer = tokenizer
         self.leadInTrimming = leadInTrimming
+        self.acousticDType = acousticDType
     }
 
     public var sampleRate: Int { LuxVocoder.outputSampleRate }
@@ -302,6 +307,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
                   Memory.activeMemory / 1_000_000, Memory.cacheMemory / 1_000_000, luxFootprintMB())
 
             let promptFeatures = prompt.features.expandedDimensions(axis: 0)  // (1, T, 100)
+                .asType(acousticDType)
 
             let output = model.sample(
                 tokens: [textTokens],
@@ -339,7 +345,7 @@ public final class LuxSpeechModel: SpeechModel, @unchecked Sendable {
             // Undo feat_scale before the vocoder, mirroring the reference
             // `pred_features / 0.1` in modeling_utils.generate.
             let wav = vocoder.decode(
-                output.features / LuxMelFeatures.featScale,
+                output.features.asType(.float32) / LuxMelFeatures.featScale,
                 returnSmooth: request.returnSmooth ?? true)
             var samplesArray = wav.squeezed()
 
@@ -423,7 +429,8 @@ extension LuxSpeechModel {
     /// best-effort and works without it — so the system prompt appears once,
     /// predictably, rather than inside a synthesize() call.
     public static func load(
-        from directory: URL, phonemizer: any PhonemizerProviding, leadInTrimming: Bool
+        from directory: URL, phonemizer: any PhonemizerProviding, leadInTrimming: Bool,
+        acousticDType: DType = .float32
     ) async throws -> LuxSpeechModel {
         if leadInTrimming {
             Task { await LuxLeadInTrimmer.requestAuthorizationIfNeeded() }
@@ -450,6 +457,14 @@ extension LuxSpeechModel {
             }
         }
         try model.update(parameters: ModuleParameters.unflattened(modelWeights), verify: [.all])
+        // Opt-in half precision for the acoustic model only: ~220 MB less
+        // resident on a phone; output features move ~0.8% RMS (fp16) against
+        // fp32 on identical noise (LuxMemoryBenchTests). Whether that is
+        // audible is a listening question, so the default stays float32.
+        if acousticDType != .float32 {
+            modelWeights = [:]
+            model.update(parameters: model.parameters().mapValues { $0.asType(acousticDType) })
+        }
         eval(model)
 
         let vocoder = LuxVocoder()
@@ -461,7 +476,7 @@ extension LuxSpeechModel {
 
         return LuxSpeechModel(
             model: model, vocoder: vocoder, tokenizer: tokenizer,
-            leadInTrimming: leadInTrimming)
+            leadInTrimming: leadInTrimming, acousticDType: acousticDType)
     }
 
     private static func weightURLs(in directory: URL) throws -> (model: URL, vocoder: URL) {

@@ -396,7 +396,9 @@ public final class ZipVoiceDistill: Module, LuxFlowMatchingModel {
             speechCondition
         )
 
-        let x0 = noise ?? MLXRandom.normal([batchSize, numFrames, featDim])
+        var x0 = noise ?? MLXRandom.normal([batchSize, numFrames, featDim])
+        // A half-precision model (LuxSpeechModel's acousticDType) samples in it.
+        if noise == nil, promptFeatures.dtype != .float32 { x0 = x0.asType(promptFeatures.dtype) }
 
         #if DEBUG
         if ProcessInfo.processInfo.environment["LUXTTS_DUMP_DEBUG"] != nil {
