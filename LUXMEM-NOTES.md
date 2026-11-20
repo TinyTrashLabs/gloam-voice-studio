@@ -170,3 +170,29 @@ Next, in order (phone):
 4. Then decide what ships: make ASR unload / budget real (not Debug flags),
    drop or demote the probes, and the repin of project.yml (see "Before pushing").
 Optional, not started: which fp16 activation causes the ~9 s artifact.
+
+## Resumed 2026-11-20 13:00 (Mac only; phone "unavailable" in devicectl)
+
+`xcodebuild test` now hangs before launching the test runner (build fine,
+no xctest process; sanity test hangs too). Workaround: `xcodebuild
+build-for-testing ...` then `xcrun xctest -XCTest EngineKitTests.<Class>[/test]
+.build-dd/Build/Products/Debug/EngineKitTests.xctest` with the env vars
+WITHOUT the TEST_RUNNER_ prefix (scratchpad tools/billie_mac.sh).
+
+By-ear A/B of ef789784 (Mac, misaki G2P, seed 7, 336-char Billie line,
+21.0 s; 5147d891 LuxBillieRenderTests). Scratchpad fable/:
+- billie-mac-before-fp16w.wav / billie-mac-after-fp16w.wav (half weights)
+- billie-mac-before-fp32.wav / billie-mac-after-fp32.wav
+Same seed + same build is bit-identical, so before/after differ only by the
+fix. Waveform difference/signal: fp16w 4%, fp32 29% (phase drift; not a
+perceptual measure) -- for scale, fp32 vs fp16w before the fix is 52%, a
+difference David already accepted. Needs David's ears.
+
+Frame budget 3200 vs 2400 (Mac, transient above weights / max footprint):
+fp32 283 -> 192 MB / 849 -> 762; fp16w 286 -> 198 / 614 -> 530. About -90 MB
+either way; per generated frame ~8% slower, and ~50% more chunks (seams).
+ASR unload can't be measured on the Mac (the recogniser is in the iOS app):
+phone numbers stand (-62 MB peak, +0.18 s per part).
+
+Phone queue unchanged: full News runs of ef789784 (fp16w, then fp32) with the
+malloc numbers; then --asr-unload, then --lux-frame-budget 2400 if needed.
