@@ -46,6 +46,7 @@ final class LuxMemoryBenchTests: XCTestCase {
                 promptFeatures: promptFeatures.asType(dtype), promptFeaturesLens: [promptFrames],
                 duration: .predict, numSteps: 4, guidanceScale: 3.0, tShift: 0.5,
                 speed: 1.0, durationPadFrames: 16, noise: noise.asType(dtype))
+            print("LUXHALF dtype out \(out.features.dtype)")
             let f = out.features.asType(.float32)
             eval(f)
             var err = Float(0)

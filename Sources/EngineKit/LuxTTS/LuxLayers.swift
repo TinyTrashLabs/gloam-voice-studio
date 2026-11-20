@@ -20,13 +20,13 @@ import MLXNN
 /// Ports torch `swoosh_l` / `SwooshLForward` (scaling.py):
 /// `log(1 + exp(x - 4)) - 0.08*x - 0.035`.
 public func swooshL(_ x: MLXArray) -> MLXArray {
-    logAddExp(MLXArray(Float(0)), x - 4.0) - 0.08 * x - 0.035
+    logAddExp(MLXArray(Float(0)).asType(x.dtype), x - 4.0) - 0.08 * x - 0.035
 }
 
 /// Ports torch `swoosh_r` / `SwooshRForward` (scaling.py):
 /// `log(1 + exp(x - 1)) - 0.08*x - 0.313261687`.
 public func swooshR(_ x: MLXArray) -> MLXArray {
-    logAddExp(MLXArray(Float(0)), x - 1.0) - 0.08 * x - 0.313261687
+    logAddExp(MLXArray(Float(0)).asType(x.dtype), x - 1.0) - 0.08 * x - 0.313261687
 }
 
 /// Ports torch `SwooshL` (scaling.py).
@@ -369,15 +369,15 @@ public final class RelPositionMultiheadAttentionWeights: Module {
 
         // torch uses masked_fill(-1000): large enough that exp underflows to 0
         if let attnMask {
-            attnScores = which(attnMask, MLXArray(Float(-1000)), attnScores)
+            attnScores = which(attnMask, MLXArray(Float(-1000)).asType(attnScores.dtype), attnScores)
         }
         if let keyPaddingMask {
             attnScores = which(
                 expandedDimensions(keyPaddingMask, axis: 1),
-                MLXArray(Float(-1000)), attnScores)
+                MLXArray(Float(-1000)).asType(attnScores.dtype), attnScores)
         }
 
-        return softmax(attnScores, axis: -1)
+        return softmax(attnScores, axis: -1, precise: true)
     }
 
     /// Elements per block-sized score tensor (4 M floats = 16 MB).
@@ -430,9 +430,9 @@ public final class RelPositionMultiheadAttentionWeights: Module {
                 offset: rows - 1)
             scores = scores + shifted
             if let paddingMask {
-                scores = which(paddingMask, MLXArray(Float(-1000)), scores)
+                scores = which(paddingMask, MLXArray(Float(-1000)).asType(scores.dtype), scores)
             }
-            blocks.append(softmax(scores, axis: -1))
+            blocks.append(softmax(scores, axis: -1, precise: true))
             start = end
         }
         return blocks.count == 1 ? blocks[0] : concatenated(blocks, axis: 2)
@@ -573,7 +573,7 @@ public final class ConvolutionModule: Module {
         v = v.transposed(1, 0, 2)
         if let srcKeyPaddingMask {
             v = which(
-                expandedDimensions(srcKeyPaddingMask, axis: -1), MLXArray(Float(0)), v)
+                expandedDimensions(srcKeyPaddingMask, axis: -1), MLXArray(Float(0)).asType(v.dtype), v)
         }
         v = depthwiseConv(v)
         v = v.transposed(1, 0, 2)

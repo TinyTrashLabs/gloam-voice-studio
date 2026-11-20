@@ -252,7 +252,9 @@ final class Zipformer2Encoder: ZipformerEncoderBlock {
         attnMask: MLXArray? = nil,
         srcKeyPaddingMask: MLXArray? = nil
     ) -> MLXArray {
-        let posEmb = encoderPos(src)
+        // Built in float32; follows the activations so a half-precision
+        // model is not promoted back to float32 here.
+        let posEmb = encoderPos(src).asType(src.dtype)
 
         var projectedTimeEmb: MLXArray? = nil
         if let projection = self.timeEmb {
@@ -445,7 +447,9 @@ final class TTSZipformer: Module {
             guard let timeEmbed else {
                 fatalError("TTSZipformer received t but was built without time embedding")
             }
-            timeEmb = timeEmbed(emb)
+            // The sinusoid is built in float32; a half-precision model would
+            // otherwise promote every layer's activations back to float32.
+            timeEmb = timeEmbed(emb.asType(x.dtype))
         }
 
         for encoder in encoders {
