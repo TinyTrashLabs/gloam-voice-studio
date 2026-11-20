@@ -145,6 +145,7 @@ final class LuxMemoryBenchTests: XCTestCase {
             Memory.clearCache()
             let base = Memory.activeMemory
             Memory.peakMemory = 0
+            let watch = FootprintWatch()
             let started = Date()
             let out = model.sample(
                 tokens: [tokens], promptTokens: [promptTokens],
@@ -163,11 +164,58 @@ final class LuxMemoryBenchTests: XCTestCase {
                 let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                 for line in text.split(separator: "\n").prefix(25) { print("FOOTPRINT \(line)") }
             }
+            let w = watch.stop()
+            print(String(
+                format: "LUXMEM run %d: footprint at start %d MB, max %d MB (graphics %d at max; max graphics %d), MLX active+peak %d MB",
+                run, w.start, w.maxFootprint, w.graphicsAtMax, w.maxGraphics, Memory.peakMemory / 1_000_000))
             print(String(
                 format: "LUXMEM run %d: frames %d + prompt %d, weights %d MB, transient peak %d MB, cache after %d MB, %.2fs",
                 run, out.features.dim(1), promptFrames, base / 1_000_000,
                 (Memory.peakMemory - base) / 1_000_000, Memory.cacheMemory / 1_000_000,
                 Date().timeIntervalSince(started)))
         }
+    }
+}
+
+/// phys_footprint and its graphics-tagged part, sampled every 2 ms on a
+/// background queue (MB): what the kernel charges, against MLX's counters.
+final class FootprintWatch: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "luxmem.watch", qos: .userInteractive)
+    private let timer: DispatchSourceTimer
+    private let lock = NSLock()
+    private(set) var start = 0
+    private var maxFootprint = 0, graphicsAtMax = 0, maxGraphics = 0
+
+    static func sample() -> (footprint: Int, graphics: Int) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        _ = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return (Int(info.phys_footprint / 1_000_000), Int(info.ledger_tag_graphics_footprint / 1_000_000))
+    }
+
+    init() {
+        start = Self.sample().footprint
+        timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let s = Self.sample()
+            self.lock.lock()
+            if s.footprint > self.maxFootprint { self.maxFootprint = s.footprint; self.graphicsAtMax = s.graphics }
+            self.maxGraphics = max(self.maxGraphics, s.graphics)
+            self.lock.unlock()
+        }
+        timer.resume()
+    }
+
+    func stop() -> (start: Int, maxFootprint: Int, graphicsAtMax: Int, maxGraphics: Int) {
+        timer.cancel()
+        queue.sync {}
+        lock.lock(); defer { lock.unlock() }
+        return (start, maxFootprint, graphicsAtMax, maxGraphics)
     }
 }
