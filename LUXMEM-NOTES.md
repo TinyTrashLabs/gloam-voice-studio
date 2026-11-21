@@ -258,3 +258,21 @@ Mac batch harness (uncommitted; app text files copied into
 Tests/EngineKitTests/BatchApp with stubs, EngineKitTests temporarily depends
 on GloamVoiceEditing): scratchpad tools/batch/ (run_batch.sh, asr_server.py,
 analyze.py). Results: scratchpad fable/batch/.
+
+### Batch error-rate test (Mac, 4c780110, 7 voices x 12 texts x 3 seeds, 900 parts per... see below)
+```
+clips complete for all three versions: 252
+fp32     WER pooled 0.115  mean 0.142  worst 0.778  clips flagged 45/252 {'wordsMissing': 45, 'extraSpeech': 41}
+fp16w    WER pooled 0.115  mean 0.145  worst 0.941  clips flagged 45/252 {'wordsMissing': 44, 'extraSpeech': 41}  clearly worse than fp32: 8
+fp16all  WER pooled 0.115  mean 0.145  worst 0.833  clips flagged 45/252 {'wordsMissing': 44, 'extraSpeech': 41}  clearly worse than fp32: 12
+fp16w vs fp32 paired WER diff: mean +0.0030, better 24, same 205, worse 23
+fp16all vs fp32 paired WER diff: mean +0.0036, better 22, same 197, worse 33
+```
+Harness moved out of the tree: scratchpad tools/batch/harness/ (copy BatchApp
+into Tests/EngineKitTests/ and apply Package.swift.diff to rerun). Results,
+WAVs (845 MB), analysis.txt, listen/ (15 MP3 pairs + index.json) in
+scratchpad fable/batch/.
+
+Graphics settle after a render (Mac, d92cf7b7): 544-562 -> live + ~50 MB
+within 20-40 ms. A between-chunk wait cannot help; the overshoot is inside
+the render. Phone "before chunk" lines agree (graphics = MLX + ~31 MB).
