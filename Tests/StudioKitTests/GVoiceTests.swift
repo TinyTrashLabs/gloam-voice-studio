@@ -301,6 +301,44 @@ final class GVoiceTests: XCTestCase {
         }
     }
 
+    // MARK: the pack's slug
+
+    private func renamedPack(slug: String?, name: String) throws -> Data {
+        let slugField = slug.map { #","slug":"\#($0)""# } ?? ""
+        return try GVoice.makeArchive(entries: [
+            ("manifest.json", Data(#"""
+            {"gvoice":2,"name":"\#(name)"\#(slugField),"variants":["base","excited"],
+             "source":{"base":{"audio":"source/base.wav","text":"hi"},
+                       "excited":{"audio":"source/excited.wav","text":"hi!"}}}
+            """#.utf8)),
+            ("source/base.wav", Data([1, 2])),
+            ("source/excited.wav", Data([3, 4])),
+        ])
+    }
+
+    /// A display name can change while the voice keeps its address: the
+    /// included "Billie Frost" became "Billie" and must still install at
+    /// billie-frost (the slug the apps look for), takes and all.
+    func testImportKeepsThePacksSlugWhenTheNameChanged() throws {
+        let meta = try GVoice.import(try renamedPack(slug: "billie-frost", name: "Billie"), into: lib)
+        XCTAssertEqual(meta.slug, "billie-frost")
+        XCTAssertEqual(meta.name, "Billie")
+        XCTAssertNoThrow(try lib.get("billie-frost"))
+        XCTAssertNoThrow(try lib.get("billie-frost-excited"))
+        XCTAssertThrowsError(try lib.get("billie"))
+    }
+
+    /// No slug, or one that isn't a slug (it comes from a zip someone sent
+    /// us): named from the display name, as before.
+    func testImportIgnoresAMissingOrMalformedSlug() throws {
+        XCTAssertEqual(try GVoice.import(try renamedPack(slug: nil, name: "Ada Lane"), into: lib).slug, "ada-lane")
+        for bad in ["../escape", "Billie", "a--b", "-a", "a b"] {
+            let other = VoiceLibrary(directory: dir.appendingPathComponent(UUID().uuidString))
+            XCTAssertEqual(try GVoice.import(try renamedPack(slug: bad, name: "Ada Lane"), into: other).slug,
+                           "ada-lane", bad)
+        }
+    }
+
     /// Manifest paths come from a zip someone sent us.
     func testImportRejectsPathTraversal() throws {
         let pack = try GVoice.makeArchive(entries: [
