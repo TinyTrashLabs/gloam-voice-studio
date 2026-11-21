@@ -140,8 +140,10 @@ let package = Package(
         // implementation. Without it there is no way to A/B the two on one
         // machine, and every quality question about the iOS port has to be
         // argued from measurements instead of listened to.
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git",
-                 .upToNextMinor(from: "1.20.0")),
+        // TinyTrashLabs mirror: microsoft's repo and download.onnxruntime.ai
+        // stopped serving in 2026-11 (see the mirror's TTL-MIRROR.md).
+        .package(url: "https://github.com/TinyTrashLabs/onnxruntime-swift-package-manager.git",
+                 exact: "1.20.1"),
     ],
     targets: [
         // Header-only: vendors sherpa-onnx's c-api.h for the C struct layouts.
