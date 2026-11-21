@@ -240,3 +240,21 @@ known background-GPU issue).
 
 Not yet run: fp16w + --asr-unload on the 4c780110 build (s3 had 986 without
 it); --lux-frame-budget 2400 not needed for the 1 GB target so far.
+
+## 2026-11-20 evening (phone + Mac)
+
+Phone, News CDC 6 min, build 4c780110: `--lux-half --asr-unload` 1072 MB
+(42 parts / 9 kept flagged, thermal 0 throughout, no backgrounding). Without
+the flag (s4b, thermal 2) 960 MB. The flag works (other 148-217 MB, malloc
+61-71 MB vs 171-176) but the peak is the graphics ledger again (859 MB with
+MLX active 497) and that varies by more than the flag saves.
+
+The fp16-all "9 s" glitch (billie-335-fp16-full.wav, phone, old build): see
+the evening report; spectrograms in scratchpad fable/glitch/. First glitch
+detector (clicks/jumps/dropouts/buzz, thresholds fixed beforehand) found 0
+events in it -> not used; batch runs ASR + RenderCheck only, WAVs kept.
+
+Mac batch harness (uncommitted; app text files copied into
+Tests/EngineKitTests/BatchApp with stubs, EngineKitTests temporarily depends
+on GloamVoiceEditing): scratchpad tools/batch/ (run_batch.sh, asr_server.py,
+analyze.py). Results: scratchpad fable/batch/.
