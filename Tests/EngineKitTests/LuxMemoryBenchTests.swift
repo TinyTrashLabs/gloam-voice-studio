@@ -125,6 +125,41 @@ final class LuxMemoryBenchTests: XCTestCase {
         }
     }
 
+    /// After a sample and clearCache: how long the graphics ledger takes to
+    /// come back down to MLX's live memory (20 ms polls, up to 1 s).
+    func testGraphicsSettleAfterRender() throws {
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set LUXMEM_BENCH=1")
+        let dir = URL(fileURLWithPath: try XCTUnwrap(env["LUXTTS_WEIGHTS_DIR"]))
+        let model = try Self.loadModel(dir)
+        model.update(parameters: model.parameters().mapValues { $0.asType(.float16) })
+        eval(model)
+        Memory.cacheLimit = 0
+        Memory.clearCache()
+        let tokens = (0 ..< 360).map { 1 + $0 % 300 }
+        let promptTokens = (0 ..< 188).map { 1 + ($0 * 7) % 300 }
+        let promptFeatures = MLXRandom.normal([1, 1062, 100]) * 0.3
+        eval(promptFeatures)
+        for run in 0 ..< 3 {
+            let before = FootprintWatch.sample()
+            let out = model.sample(tokens: [tokens], promptTokens: [promptTokens], promptFeatures: promptFeatures,
+                                   promptFeaturesLens: [1062], duration: .predict, numSteps: 4, guidanceScale: 3.0,
+                                   tShift: 0.5, speed: 1.0, durationPadFrames: 16)
+            eval(out.features)
+            Memory.clearCache()
+            let t0 = Date()
+            var trace: [String] = []
+            var settled: Double? = nil
+            while Date().timeIntervalSince(t0) < 1.0 {
+                let s = FootprintWatch.sample()
+                trace.append("\(s.graphics)")
+                if settled == nil, s.graphics <= before.graphics + 20 { settled = Date().timeIntervalSince(t0) }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            print("LUXSETTLE run \(run): graphics before \(before.graphics) MB, mlx active \(Memory.activeMemory / 1_000_000) MB, settled \(settled.map { String(format: "%.2f s", $0) } ?? "no (1 s)"); 20 ms trace: \(trace.prefix(50).joined(separator: " "))")
+        }
+    }
+
     func testAcousticModelPeak() throws {
         let env = ProcessInfo.processInfo.environment
         try XCTSkipUnless(env["LUXMEM_BENCH"] == "1", "set TEST_RUNNER_LUXMEM_BENCH=1")
